@@ -336,10 +336,42 @@ async function refreshPromotionCandidates() {
 }
 
 // ---------------------------------------------------------------------
+// Phase 1 — Digital Twin Live Line Status
+// ---------------------------------------------------------------------
+
+async function refreshDigitalTwinLines() {
+  const el = document.getElementById("digitalTwinLines");
+  if (!el) return;
+  try {
+    const lines = await api("/digital-twin/lines");
+    if (!lines || lines.length === 0) {
+      el.innerHTML = '<div class="empty">No line status data available.</div>';
+      return;
+    }
+    el.innerHTML = lines.map((l) => {
+      const stClass = l.status === "OPERATIONAL" ? "status-operational" : (l.status === "DEGRADED" ? "status-degraded" : "status-stopped");
+      const speed = l.currentSpeedUnitsPerHr ? `${l.currentSpeedUnitsPerHr} u/hr` : "Idle";
+      return `
+        <div class="dt-line-card">
+          <div class="dt-line-info">
+            <div class="dt-line-id">${l.lineId}</div>
+            <div class="dt-line-sku">Active: ${l.activeProductSku} · ${speed}</div>
+          </div>
+          <span class="badge ${stClass}">${l.status}</span>
+        </div>
+      `;
+    }).join("");
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------
 
 function refreshAll() {
+  refreshDigitalTwinLines();
   refreshApprovals();
   refreshIncidents();
   refreshKpis();
@@ -347,6 +379,7 @@ function refreshAll() {
   refreshRisk();
   refreshPromotionCandidates();
 }
+
 
 document.addEventListener("DOMContentLoaded", () => {
   const tokenInput = document.getElementById("tokenInput");

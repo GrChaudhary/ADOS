@@ -45,9 +45,66 @@ class DigitalTwinStore:
         self._initialize_seed_lines()
 
     def _initialize_seed_lines(self) -> None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        line1 = FactoryLineState(
+            line_id="Line 1",
+            plant_name="Nova Motors - Detroit Plant",
+            status="OPERATIONAL",
+            active_product_sku="PROD-400",
+            current_speed_units_per_hr=150,
+            parameters={
+                "conveyor_speed_m_s": MachineParameter(
+                    name="Conveyor Speed",
+                    current_value=1.2,
+                    target_nominal=1.2,
+                    min_limit=0.5,
+                    max_limit=2.0,
+                    unit="m/s"
+                )
+            },
+            telemetry={
+                "line_utilization_pct": 94.5,
+                "ambient_humidity_pct": 45.0,
+                "last_reading_time": now_iso
+            }
+        )
+
+        line2 = FactoryLineState(
+            line_id="Line 2",
+            plant_name="Nova Motors - Detroit Plant",
+            status="OPERATIONAL",
+            active_product_sku="PROD-100",
+            current_speed_units_per_hr=120,
+            parameters={
+                "spindle_speed_rpm": MachineParameter(
+                    name="Spindle Speed",
+                    current_value=3500.0,
+                    target_nominal=3500.0,
+                    min_limit=3000.0,
+                    max_limit=4000.0,
+                    unit="RPM"
+                ),
+                "coolant_flow_l_min": MachineParameter(
+                    name="Coolant Flow Rate",
+                    current_value=12.5,
+                    target_nominal=12.5,
+                    min_limit=10.0,
+                    max_limit=15.0,
+                    unit="L/min"
+                )
+            },
+            telemetry={
+                "vibration_rms_mm_s": 1.2,
+                "spindle_temp_c": 42.0,
+                "ambient_humidity_pct": 48.0,
+                "last_reading_time": now_iso
+            }
+        )
+
         line3 = FactoryLineState(
             line_id="Line 3",
-            plant_name="Detroit Assembly Plant #1",
+            plant_name="Nova Motors - Detroit Plant",
             status="DEGRADED",
             active_product_sku="PROD-500",
             current_speed_units_per_hr=105,
@@ -81,13 +138,34 @@ class DigitalTwinStore:
                 "vibration_rms_mm_s": 4.8,
                 "spindle_temp_c": 58.2,
                 "ambient_humidity_pct": 82.0,
-                "last_reading_time": datetime.now(timezone.utc).isoformat()
+                "last_reading_time": now_iso
             }
         )
+
+        warehouse = FactoryLineState(
+            line_id="Warehouse",
+            plant_name="Nova Motors - Detroit Plant",
+            status="OPERATIONAL",
+            active_product_sku="STAGING",
+            current_speed_units_per_hr=0,
+            parameters={},
+            telemetry={
+                "staging_capacity_pct": 68.0,
+                "ambient_temp_c": 21.5,
+                "last_reading_time": now_iso
+            }
+        )
+
+        self._lines[line1.line_id] = line1
+        self._lines[line2.line_id] = line2
         self._lines[line3.line_id] = line3
+        self._lines[warehouse.line_id] = warehouse
 
     def get_line_state(self, line_id: str) -> Optional[FactoryLineState]:
         return self._lines.get(line_id)
+
+    def get_all_line_states(self) -> List[FactoryLineState]:
+        return list(self._lines.values())
 
     def update_parameter(self, line_id: str, parameter_name: str, new_value: float) -> Optional[MachineParameter]:
         line = self._lines.get(line_id)

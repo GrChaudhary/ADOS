@@ -23,13 +23,18 @@ def test_enterprise_asset_model_structure():
 
     factory = plant.factories[0]
     assert factory.factory_id == "FAC-P1"
-    assert len(factory.lines) > 0
+    assert len(factory.lines) == 4
 
-    line = factory.lines[0]
-    assert line.line_id == "Line 3"
-    assert len(line.machines) > 0
+    line_ids = [l.line_id for l in factory.lines]
+    assert "Line 1" in line_ids
+    assert "Line 2" in line_ids
+    assert "Line 3" in line_ids
+    assert "Warehouse" in line_ids
 
-    machine = line.machines[0]
+    line3 = next(l for l in factory.lines if l.line_id == "Line 3")
+    assert len(line3.machines) > 0
+
+    machine = line3.machines[0]
     assert machine.machine_id == "CNC-SPINDLE-03"
     assert len(machine.plcs) > 0
 
@@ -39,6 +44,13 @@ def test_enterprise_asset_model_structure():
 
     sensor = plc.sensors[0]
     assert sensor.sensor_id == "SNS-VIB-45"
+
+    assert "PROD-100" in eam.products
+    prod = eam.products["PROD-100"]
+    assert prod.sku == "PROD-100"
+    assert prod.line_id == "Line 2"
+    assert prod.components[0].part_number == "MH-100"
+
 
 
 def test_asset_lineage_resolution():

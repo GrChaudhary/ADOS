@@ -124,21 +124,41 @@ class EnterpriseAssetModel:
 
     def _seed_ground_truth(self) -> None:
         """Seeds ground truth operational asset model for ADOS manufacturing plants."""
-        # Sensors
+        # Line 1 (Assembly & Cooling)
+        plc_robot1 = PLC(plcId="PLC-ROBOT-01", name="Robot Arm Controller PLC", ipAddress="192.168.10.11", machineId="ROBOT-ARM-01", sensors=[])
+        m_robot1 = Machine(machineId="ROBOT-ARM-01", name="Robot Arm Assembly Station", machineType="ROBOTIC_ARM", line_id="Line 1", plcs=[plc_robot1])
+        
+        plc_assy1 = PLC(plcId="PLC-ASSY-01", name="Assembly Conveyor Controller PLC", ipAddress="192.168.10.12", machineId="ASSY-LINE-01", sensors=[])
+        m_assy1 = Machine(machineId="ASSY-LINE-01", name="Assembly Line Conveyor", machineType="CONVEYOR", line_id="Line 1", plcs=[plc_assy1])
+
+        line1 = Line(lineId="Line 1", name="Line 1 Assembly & Cooling", factory_id="FAC-P1", machines=[m_robot1, m_assy1])
+
+        # Line 2 (Machining & Fitting - Hero Incident Line)
+        sns_vib_101 = Sensor(sensorId="SNS-VIB-101", name="CNC 101 Vibration Sensor", sensorType="vibration", unit="mm/s", plcId="PLC-CNC-101", currentValue=1.2)
+        plc_cnc_101 = PLC(plcId="PLC-CNC-101", name="CNC 101 Controller PLC", ipAddress="192.168.10.21", machineId="CNC-101", sensors=[sns_vib_101])
+        m_cnc_101 = Machine(machineId="CNC-101", name="Precision CNC Machining Center 101", machineType="CNC_MILL", line_id="Line 2", plcs=[plc_cnc_101])
+
+        plc_insp_01 = PLC(plcId="PLC-INSP-01", name="Inspection Cell Controller PLC", ipAddress="192.168.10.22", machineId="INSP-CELL-01", sensors=[])
+        m_insp_01 = Machine(machineId="INSP-CELL-01", name="Automated Optical Inspection Station 1", machineType="INSPECTION", line_id="Line 2", plcs=[plc_insp_01])
+
+        line2 = Line(lineId="Line 2", name="Line 2 Machining & Fitting", factory_id="FAC-P1", machines=[m_cnc_101, m_insp_01])
+
+        # Line 3 (High-Precision Housing Assembly)
         sns_vib = Sensor(sensorId="SNS-VIB-45", name="Spindle Bearing Vibration Sensor", sensorType="vibration", unit="mm/s", plcId="PLC-CNC-03", currentValue=4.8)
         sns_disp = Sensor(sensorId="SNS-DISP-01", name="Z-Axis Tool Offset Displacement Sensor", sensorType="displacement", unit="mm", plcId="PLC-CNC-03", currentValue=0.035)
-
-        # PLCs
         plc_cnc = PLC(plcId="PLC-CNC-03", name="Line 3 CNC Spindle Controller PLC", ipAddress="192.168.10.3", machineId="CNC-SPINDLE-03", sensors=[sns_vib, sns_disp])
-
-        # Machines
         cnc_machine = Machine(machineId="CNC-SPINDLE-03", name="Precision CNC Spindle Station 3", machineType="CNC_MILL", line_id="Line 3", plcs=[plc_cnc])
 
-        # Lines
         line3 = Line(lineId="Line 3", name="Line 3 High-Precision Housing Assembly", factory_id="FAC-P1", machines=[cnc_machine])
 
+        # Warehouse (Inventory Staging)
+        plc_wh = PLC(plcId="PLC-WH-01", name="Warehouse Staging Controller PLC", ipAddress="192.168.10.99", machineId="STAGING-BAY-01", sensors=[])
+        m_wh = Machine(machineId="STAGING-BAY-01", name="Warehouse Staging Bay 1", machineType="STAGING", line_id="Warehouse", plcs=[plc_wh])
+
+        warehouse = Line(lineId="Warehouse", name="Warehouse Inventory Staging", factory_id="FAC-P1", machines=[m_wh])
+
         # Factories
-        factory1 = Factory(factoryId="FAC-P1", name="Plant 1 Main Assembly Facility", plant_id="PLANT-NA-01", lines=[line3])
+        factory1 = Factory(factoryId="FAC-P1", name="Plant 1 Main Assembly Facility", plant_id="PLANT-NA-01", lines=[line1, line2, line3, warehouse])
 
         # Plants
         plant_na = Plant(plantId="PLANT-NA-01", name="North America Operations Division", region="North America", factories=[factory1])
@@ -146,8 +166,8 @@ class EnterpriseAssetModel:
         self.plants[plant_na.plant_id] = plant_na
 
         # Components & Products
-        comp_housing = Component(partNumber="P-1002", name="Outer Housing Part", specId="SP-1002", approvedSupplierIds=["S-201", "S-202"])
-        prod_housing = AssetProduct(sku="PROD-500", name="Precision Assembly PROD-500", lineId="Line 3", components=[comp_housing])
+        comp_housing = Component(partNumber="MH-100", name="Motor Housing Part", specId="SP-100", approvedSupplierIds=["SUP-201", "SUP-202"])
+        prod_housing = AssetProduct(sku="PROD-100", name="Motor Housing", lineId="Line 2", components=[comp_housing])
 
         self.products[prod_housing.sku] = prod_housing
 

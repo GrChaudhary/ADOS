@@ -17,6 +17,16 @@
     </div>
   </header>
 
+  <div class="digital-twin-bar">
+    <div class="digital-twin-panel">
+      <div class="digital-twin-header">
+        <h2>Digital Twin — Live Line Status</h2>
+        <span class="muted">Plant: Nova Motors - Detroit Plant (FAC-P1)</span>
+      </div>
+      <div id="digitalTwinLines" class="digital-twin-grid"><div class="empty">Loading digital twin lines…</div></div>
+    </div>
+  </div>
+
   <main>
     <div>
       <!-- Approval surface: docs/011-ui-ux.md's primary human-in-the-loop flow -->
@@ -31,9 +41,9 @@
           <label>Plant ID</label>
           <input type="text" name="plant_id" value="FAC-P1" required />
           <label>Line ID</label>
-          <input type="text" name="line_id" value="Line 3" required />
+          <input type="text" name="line_id" value="Line 2" required />
           <label>Part Number</label>
-          <input type="text" name="part_number" value="P-1002" required />
+          <input type="text" name="part_number" value="MH-100" required />
           <label>Measured bore diameter (mm)</label>
           <input type="number" step="0.001" name="measured_value" value="45.085" required />
           <label>Safety impact (0-1)</label>
