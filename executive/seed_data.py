@@ -31,7 +31,10 @@ HERO_INCIDENTS: List[IncidentRecord] = [
             )
         ],
         confidence=0.94,
-        alternatives=[{"option": "Replace Tooling", "cost": 14000.0, "reason": "Excessive downtime"}],
+        alternatives=[
+            {"option_id": "OPT-1-PARAMETER-ADJUST", "name": "CNC-101 Parameter Compensation", "estimated_cost_usd": 350.0, "downtime_minutes": 12.0, "quality_risk_score": 0.08, "overall_score": 0.92, "recommendation": "TOP_PICK"},
+            {"option_id": "OPT-2-REPLACE-TOOLING", "name": "Replace Tooling", "estimated_cost_usd": 14000.0, "downtime_minutes": 180.0, "quality_risk_score": 0.02, "overall_score": 0.55, "recommendation": "FEASIBLE"},
+        ],
         policy_tier=PolicyTier.AUTONOMOUS,
         approved_by=None,
         recommendation_accepted=None,  # Null for Tier 0
@@ -61,7 +64,10 @@ HERO_INCIDENTS: List[IncidentRecord] = [
             )
         ],
         confidence=0.91,
-        alternatives=[{"option": "Wait for Supplier Resupply", "cost": 8500.0, "reason": "2-day lead time"}],
+        alternatives=[
+            {"option_id": "OPT-2-PART-SUBSTITUTION", "name": "Substitute MH-100B (SteelCore stock)", "estimated_cost_usd": 2250.0, "downtime_minutes": 35.0, "quality_risk_score": 0.05, "overall_score": 0.90, "recommendation": "TOP_PICK"},
+            {"option_id": "OPT-3-WAIT-FOR-RESUPPLY", "name": "Wait for PrecisionCast Resupply", "estimated_cost_usd": 8500.0, "downtime_minutes": 2880.0, "quality_risk_score": 0.02, "overall_score": 0.52, "recommendation": "FEASIBLE"},
+        ],
         policy_tier=PolicyTier.APPROVAL_REQUIRED,
         approved_by="usr_mfg_mgr_detroit",
         recommendation_accepted=True,  # Approved as recommended
@@ -91,7 +97,10 @@ HERO_INCIDENTS: List[IncidentRecord] = [
             )
         ],
         confidence=0.65,
-        alternatives=[{"option": "HVAC Recalibration", "cost": 1500.0, "reason": "Requires maintenance technician"}],
+        alternatives=[
+            {"option_id": "OPT-1-HVAC-RECAL", "name": "HVAC Recalibration", "estimated_cost_usd": 1500.0, "downtime_minutes": 60.0, "quality_risk_score": 0.03, "overall_score": 0.81, "recommendation": "TOP_PICK"},
+            {"option_id": "OPT-2-MANUAL-MONITORING", "name": "Manual Environmental Monitoring", "estimated_cost_usd": 200.0, "downtime_minutes": 180.0, "quality_risk_score": 0.15, "overall_score": 0.55, "recommendation": "FEASIBLE"},
+        ],
         policy_tier=PolicyTier.APPROVAL_REQUIRED,
         approved_by="usr_mfg_mgr_detroit",
         recommendation_accepted=False,  # Operator rejected automated parameter override and did manual check
@@ -121,7 +130,10 @@ HERO_INCIDENTS: List[IncidentRecord] = [
             )
         ],
         confidence=0.96,
-        alternatives=[{"option": "Immediate Line Stop without Re-route", "cost": 45000.0, "reason": "Misses customer delivery deadline"}],
+        alternatives=[
+            {"option_id": "OPT-1-REPLACE-AND-REROUTE", "name": "Immediate Bearing Replacement & Reroute", "estimated_cost_usd": 12500.0, "downtime_minutes": 105.0, "quality_risk_score": 0.04, "overall_score": 0.88, "recommendation": "TOP_PICK"},
+            {"option_id": "OPT-2-LINE-STOP", "name": "Immediate Line Stop without Re-route", "estimated_cost_usd": 45000.0, "downtime_minutes": 240.0, "quality_risk_score": 0.01, "overall_score": 0.40, "recommendation": "FEASIBLE"},
+        ],
         policy_tier=PolicyTier.EXECUTIVE_APPROVAL,
         approved_by="exec_vp_operations",
         recommendation_accepted=True,
@@ -151,7 +163,10 @@ HERO_INCIDENTS: List[IncidentRecord] = [
             )
         ],
         confidence=0.95,
-        alternatives=[],
+        alternatives=[
+            {"option_id": "OPT-1-PARAMETER-ADJUST", "name": "CNC-101 Parameter Compensation", "estimated_cost_usd": 300.0, "downtime_minutes": 10.0, "quality_risk_score": 0.06, "overall_score": 0.95, "recommendation": "TOP_PICK"},
+            {"option_id": "OPT-2-PART-SUBSTITUTION", "name": "Substitute MH-100B", "estimated_cost_usd": 900.0, "downtime_minutes": 38.0, "quality_risk_score": 0.04, "overall_score": 0.76, "recommendation": "FEASIBLE"},
+        ],
         policy_tier=PolicyTier.AUTONOMOUS,
         approved_by=None,
         recommendation_accepted=None,  # Tier 0

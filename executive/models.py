@@ -106,3 +106,34 @@ class ExecutiveIntelligenceOverview(BaseModel):
 
     enterprise: EnterpriseIntelligenceSummary
     operational: OperationalIntelligenceSummary
+
+
+class IncidentOption(BaseModel):
+    """One ranked recovery option in an incident's Option A/B/C comparison —
+    see docs/handoff.md Phase 3. Sourced from IncidentRecord.alternatives,
+    which orchestrate/orchestrator.py populates from the Impact Simulation
+    Agent's ranked_options (agents/impact_simulation_agent.py)."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    letter: str = Field(..., description="Display label: A, B, C, ...")
+    option_id: str = Field(..., alias="optionId")
+    name: str
+    estimated_cost_usd: float = Field(..., alias="estimatedCostUsd")
+    downtime_minutes: float = Field(..., alias="downtimeMinutes")
+    quality_risk_score: float = Field(..., alias="qualityRiskScore")
+    overall_score: float = Field(..., alias="overallScore")
+    recommendation: str = Field(..., description="TOP_PICK | FEASIBLE | REJECTED")
+    savings_usd: float = Field(
+        ..., alias="savingsUsd",
+        description="Cost avoided relative to the most expensive recorded alternative for this incident"
+    )
+    star_rating: int = Field(..., alias="starRating", description="1-5, derived from overall_score")
+    is_recommended: bool = Field(..., alias="isRecommended")
+
+
+class IncidentComparison(BaseModel):
+    """Full Option A/B/C comparison for one incident."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    incident_id: str = Field(..., alias="incidentId")
+    options: List[IncidentOption] = Field(default_factory=list)

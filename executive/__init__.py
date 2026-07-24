@@ -4,11 +4,13 @@ ADOS Executive Intelligence & Strategic Reasoning (L6) package.
 
 from .models import (
     KPISummary, StrategicRecommendation, RiskSignal, CopilotResponse,
-    EnterpriseIntelligenceSummary, OperationalIntelligenceSummary, ExecutiveIntelligenceOverview
+    EnterpriseIntelligenceSummary, OperationalIntelligenceSummary, ExecutiveIntelligenceOverview,
+    IncidentOption, IncidentComparison
 )
 from .seed_data import INCIDENT_RECORDS_SEED
 from .kpi_engine import KPIEngine
 from .recommendation_engine import RecommendationEngine
+from .recommendation_comparison import RecommendationComparisonEngine
 from .edi import EnterpriseDecisionIntelligence
 from .predictive_risk import PredictiveRiskAnalytics
 from .copilot import NLExecutiveCopilot
@@ -18,9 +20,11 @@ from .operational_intelligence import OperationalIntelligenceEngine, Intelligenc
 __all__ = [
     "KPISummary", "StrategicRecommendation", "RiskSignal", "CopilotResponse",
     "EnterpriseIntelligenceSummary", "OperationalIntelligenceSummary", "ExecutiveIntelligenceOverview",
+    "IncidentOption", "IncidentComparison",
     "INCIDENT_RECORDS_SEED",
     "KPIEngine",
     "RecommendationEngine",
+    "RecommendationComparisonEngine",
     "EnterpriseDecisionIntelligence",
     "PredictiveRiskAnalytics",
     "NLExecutiveCopilot",

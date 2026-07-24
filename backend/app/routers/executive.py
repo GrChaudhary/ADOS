@@ -7,16 +7,18 @@ executive/ defaults to when unwired. docs/008-executive-intelligence.md.
 
 from typing import List
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from executive import (
     CopilotResponse,
     EnterpriseDecisionIntelligence,
+    IncidentComparison,
     KPIEngine,
     KPISummary,
     NLExecutiveCopilot,
     PredictiveRiskAnalytics,
+    RecommendationComparisonEngine,
     RecommendationEngine,
     RiskSignal,
     StrategicRecommendation,
@@ -62,6 +64,15 @@ async def get_recommendations(request: Request):
         causal_graph=request.app.state.orchestrator.causal_graph,
     )
     return engine.generate_strategic_recommendations()
+
+
+@router.get("/incidents/{incident_id}/options", response_model=IncidentComparison)
+async def get_incident_options(incident_id: str, request: Request):
+    engine = RecommendationComparisonEngine(records=_records(request))
+    comparison = engine.compare_options(incident_id)
+    if comparison is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Incident {incident_id} not found")
+    return comparison
 
 
 @router.get("/risk")

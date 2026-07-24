@@ -235,6 +235,7 @@ class DecisionOrchestrator:
                             capability_invoked=capability,
                             estimated_cost_usd=top_opt["estimated_cost_usd"],
                             estimated_downtime_min=top_opt["downtime_minutes"],
+                            alternatives=out5.result["ranked_options"],
                         )
                     recommendation_accepted = True
 
@@ -265,6 +266,7 @@ class DecisionOrchestrator:
                         capability_status=response.status,
                         estimated_cost_usd=top_opt["estimated_cost_usd"],
                         estimated_downtime_min=top_opt["downtime_minutes"],
+                        alternatives=out5.result["ranked_options"],
                     )
 
                 await self._runner.run_stage(
@@ -295,6 +297,7 @@ class DecisionOrchestrator:
                     estimated_downtime_min=top_opt["downtime_minutes"],
                     actual_cost_usd=top_opt["estimated_cost_usd"],
                     actual_downtime_min=top_opt["downtime_minutes"],
+                    alternatives=out5.result["ranked_options"],
                 )
             finally:
                 self._preemption.release(line_id, context.incident_id)
