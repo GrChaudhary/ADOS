@@ -54,7 +54,7 @@ def test_memory_get_record_by_id(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["incidentId"] == target_id
-    assert data["plantId"] == "FAC-P1-L3"
+    assert data["plantId"] == "FAC-P1-L2"
 
 
 def test_memory_get_record_not_found(client):

@@ -33,8 +33,8 @@ class MarketplaceConnector(Connector):
         return True
 
     async def execute(self, call: CapabilityCall) -> CapabilityResponse:
-        part_number = call.input.get("part_number", "P-1002")
-        supplier_id = call.input.get("supplier_id", "S-202")
+        part_number = call.input.get("part_number", "MH-100")
+        supplier_id = call.input.get("supplier_id", "SUP-202")
         quantity = call.input.get("quantity", 50)
 
         if call.capability == Capability.QUERY_EXTERNAL_STOCK:
@@ -42,10 +42,10 @@ class MarketplaceConnector(Connector):
                 "part_number": part_number,
                 "available_stock": 450,
                 "suppliers_in_stock": [
-                    {"supplier_id": "S-202", "name": "Apex Precision Components Inc.", "qty": 300, "unit_price_usd": 42.50, "lead_time_days": 2},
-                    {"supplier_id": "S-203", "name": "Vanguard Forge Ltd.", "qty": 150, "unit_price_usd": 44.00, "lead_time_days": 1}
+                    {"supplier_id": "SUP-202", "name": "SteelCore Manufacturing", "qty": 300, "unit_price_usd": 42.50, "lead_time_days": 2},
+                    {"supplier_id": "MKT-VF-01", "name": "Vanguard Forge Ltd.", "qty": 150, "unit_price_usd": 44.00, "lead_time_days": 1}
                 ],
-                "recommended_supplier": "S-202"
+                "recommended_supplier": "SUP-202"
             }
         elif call.capability == Capability.CREATE_EXTERNAL_PO:
             output = {
@@ -61,7 +61,7 @@ class MarketplaceConnector(Connector):
             output = {
                 "quote_id": f"FRT-EXT-{call.incident_id[:8].upper()}",
                 "carrier": "DHL Supply Chain Express",
-                "origin": "Supplier Facility S-202",
+                "origin": "Supplier Facility SUP-202",
                 "destination": call.input.get("plant_id", "FAC-P1-L3"),
                 "shipping_mode": "EXPEDITED_AIR_FREIGHT",
                 "estimated_cost_usd": 450.00,

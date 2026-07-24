@@ -59,7 +59,7 @@ class NLExecutiveCopilot:
             )
 
         # Intent 2: Supplier Performance / Resilience
-        elif any(term in query_lower for term in ["supplier", "vendor", "s-201", "resilience"]):
+        elif any(term in query_lower for term in ["supplier", "vendor", "sup-201", "resilience"]):
             kpis = self.kpi_engine.compute_kpis()
             supp_data = kpis.supplier_resilience
             lines = ["Supplier Resilience Breakdown:"]

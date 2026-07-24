@@ -50,7 +50,7 @@ def run_demo():
     # STAGE 2: Understanding (CAD & Spec Comparison Agent)
     print("\n--- 2. Understanding Stage: CAD & Spec Comparison Agent ---")
     cad_agent = CADSpecAgent(knowledge_graph=kg)
-    stage2_in = StageInput(stage_name="Reasoning", payload={"part_number": "P-1002", "measured_value": out1.result['measured_value']})
+    stage2_in = StageInput(stage_name="Reasoning", payload={"part_number": "MH-100", "measured_value": out1.result['measured_value']})
     out2, env2 = cad_agent.run(context, stage2_in)
     print(f"Confidence: {out2.confidence}")
     print(f"Result: IsViolation={out2.result['is_violation']}, Nominal={out2.result['nominal']}mm, Limits={out2.result['tolerance_range']}")
@@ -68,7 +68,7 @@ def run_demo():
     # STAGE 4A: Candidate Generation (Substitution Agent)
     print("\n--- 4A. Candidate Generation Stage: Substitution Agent ---")
     sub_agent = SubstitutionAgent(knowledge_graph=kg)
-    stage4a_in = StageInput(stage_name="CandidateGeneration", payload={"part_number": "P-1002"})
+    stage4a_in = StageInput(stage_name="CandidateGeneration", payload={"part_number": "MH-100"})
     out4a, env4a = sub_agent.run(context, stage4a_in)
     print(f"Confidence: {out4a.confidence}")
     if out4a.result["has_approved_substitute"]:

@@ -22,27 +22,66 @@ class CausalGraph:
             self._load_seed_priors()
 
     def _load_seed_priors(self) -> None:
-        """Seed priors per docs/003-causal-graph.md illustration."""
+        """Seed priors per docs/003-causal-graph.md illustration.
+
+        Nova Motors demo dataset (Blueprints/ADOS_Demo_Product_Experience_Blueprint.md):
+        8 incident categories, hero incident is Motor Housing tolerance drift
+        on Line 2 / CNC-101 (FAC-P1-L2)."""
         c1 = ConditionNode(
             condition_id="COND-TOL-DRIFT",
-            name="Tolerance drift on Line 3 CNC Spindle",
+            name="Tolerance drift on Line 2 CNC-101",
             condition_type="PROCESS_PARAMETER",
             description="Tooling wear causing spindle runout outside +/-0.03mm nominal",
-            plant_id="FAC-P1-L3"
+            plant_id="FAC-P1-L2"
         )
         c2 = ConditionNode(
             condition_id="COND-SUPPLIER-BATCH",
             name="Supplier batch change (Lot #B-9021)",
             condition_type="SUPPLIER",
-            description="Raw material hardness shift in recent supplier shipment",
-            plant_id="FAC-P1-L3"
+            description="Raw material hardness shift in recent PrecisionCast shipment",
+            plant_id="FAC-P1-L2"
         )
         c3 = ConditionNode(
             condition_id="COND-HUMIDITY-SPIKE",
             name="Ambient humidity spike (>85%)",
             condition_type="ENVIRONMENT",
             description="Plant floor environmental sensor reading high humidity",
+            plant_id="FAC-P1-L2"
+        )
+        c4 = ConditionNode(
+            condition_id="COND-TOOL-WEAR",
+            name="CNC-101 tool wear beyond service interval",
+            condition_type="EQUIPMENT",
+            description="Cutting tool wear exceeding recommended replacement threshold",
+            plant_id="FAC-P1-L2"
+        )
+        c5 = ConditionNode(
+            condition_id="COND-CALIBRATION-DRIFT",
+            name="Inspection Cell calibration drift",
+            condition_type="EQUIPMENT",
+            description="Coordinate measuring machine calibration outside acceptable drift window",
             plant_id="FAC-P1-L3"
+        )
+        c6 = ConditionNode(
+            condition_id="COND-MACHINE-VIBRATION",
+            name="Robot Arm excess vibration",
+            condition_type="EQUIPMENT",
+            description="Abnormal vibration signature on Line 1 Robot Arm joint actuator",
+            plant_id="FAC-P1-L1"
+        )
+        c7 = ConditionNode(
+            condition_id="COND-MATERIAL-MISMATCH",
+            name="Rotor core material certification mismatch",
+            condition_type="SUPPLIER",
+            description="Incoming silicon steel lot fails material certification cross-check",
+            plant_id="FAC-P1-L3"
+        )
+        c8 = ConditionNode(
+            condition_id="COND-SHIPPING-DELAY",
+            name="Inbound shipment delay",
+            condition_type="SUPPLIER",
+            description="Carrier-reported delay on inbound supplier shipment to Warehouse",
+            plant_id="FAC-P1-WH"
         )
 
         o1 = OutcomeNode(
@@ -50,11 +89,16 @@ class CausalGraph:
             defect_type="dimensional fault",
             description="Part bore diameter outside specification limits"
         )
+        o2 = OutcomeNode(
+            outcome_id="OUT-SUPPLY-DISRUPTION",
+            defect_type="supply disruption",
+            description="Production input unavailable or delayed at the point of need"
+        )
 
-        self.add_condition(c1)
-        self.add_condition(c2)
-        self.add_condition(c3)
+        for c in (c1, c2, c3, c4, c5, c6, c7, c8):
+            self.add_condition(c)
         self.add_outcome(o1)
+        self.add_outcome(o2)
 
         # Seed edges with priors
         self.add_causal_edge(CausalEdge(
@@ -81,6 +125,51 @@ class CausalGraph:
             weight=0.18,
             evidence_count=2,
             evidence_paths=["PLC Environmental Sensor -> Room Humidity Log"],
+            last_updated=datetime.now(timezone.utc).isoformat()
+        ))
+
+        self.add_causal_edge(CausalEdge(
+            condition_id=c4.condition_id,
+            outcome_id=o1.outcome_id,
+            weight=0.63,
+            evidence_count=9,
+            evidence_paths=["CNC Tool Life Counter -> Wear Threshold Exceeded"],
+            last_updated=datetime.now(timezone.utc).isoformat()
+        ))
+
+        self.add_causal_edge(CausalEdge(
+            condition_id=c5.condition_id,
+            outcome_id=o1.outcome_id,
+            weight=0.34,
+            evidence_count=4,
+            evidence_paths=["CMM Calibration Log -> Drift Outside Window"],
+            last_updated=datetime.now(timezone.utc).isoformat()
+        ))
+
+        self.add_causal_edge(CausalEdge(
+            condition_id=c6.condition_id,
+            outcome_id=o1.outcome_id,
+            weight=0.29,
+            evidence_count=3,
+            evidence_paths=["Robot Arm Accelerometer -> Vibration Signature Anomaly"],
+            last_updated=datetime.now(timezone.utc).isoformat()
+        ))
+
+        self.add_causal_edge(CausalEdge(
+            condition_id=c7.condition_id,
+            outcome_id=o1.outcome_id,
+            weight=0.47,
+            evidence_count=5,
+            evidence_paths=["Incoming QA -> Material Certification Cross-Check Failure"],
+            last_updated=datetime.now(timezone.utc).isoformat()
+        ))
+
+        self.add_causal_edge(CausalEdge(
+            condition_id=c8.condition_id,
+            outcome_id=o2.outcome_id,
+            weight=0.55,
+            evidence_count=7,
+            evidence_paths=["Carrier EDI 214 -> Delay Notification"],
             last_updated=datetime.now(timezone.utc).isoformat()
         ))
 

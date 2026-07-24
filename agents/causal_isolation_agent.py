@@ -33,8 +33,8 @@ class CausalIsolationAgent(BaseAgent):
         ranked_causes = self.causal_graph.rankCandidateCauses(defect_type, evidence=telemetry)
 
         # Query 2: Knowledge Graph for affected products & specifications
-        affected_products = self.knowledge_graph.findAffectedProducts(defect_spec="SP-1002")
-        spec = self.knowledge_graph.getSpecification(part_number="P-1002")
+        affected_products = self.knowledge_graph.findAffectedProducts(defect_spec="SP-100")
+        spec = self.knowledge_graph.getSpecification(part_number="MH-100")
 
         primary_cause = ranked_causes[0] if ranked_causes else None
 

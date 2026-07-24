@@ -51,7 +51,8 @@ def test_decision_memory_index_search(memory_index):
 def test_learning_engine_recalibration(learning_engine):
     summary = learning_engine.replay_audit_trail(learning_rate=0.08)
 
-    assert summary.records_processed == 5
+    # 5 hero incidents + 95 deterministically generated historical incidents
+    assert summary.records_processed == 100
     assert summary.edges_updated > 0
     assert len(summary.weight_adjustments) > 0
     assert summary.weight_adjustments[0]["new_weight"] > summary.weight_adjustments[0]["previous_weight"]

@@ -16,7 +16,7 @@ class SubstitutionAgent(BaseAgent):
         self.knowledge_graph = knowledge_graph or KnowledgeGraph()
 
     def process(self, context: IncidentContext, stage_input: StageInput) -> StageOutput:
-        source_part_number = stage_input.payload.get("part_number", "P-1002")
+        source_part_number = stage_input.payload.get("part_number", "MH-100")
 
         # Query Knowledge Graph for approved substitutes
         substitute_parts = self.knowledge_graph.findApprovedSubstitutes(source_part_number)

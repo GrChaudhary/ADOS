@@ -54,7 +54,7 @@ async def run_demo():
         orchestrator.run_incident(
             plant_id="FAC-P1-L3",
             line_id="Line 3",
-            part_number="P-1002",
+            part_number="MH-100",
             vision_data={"measured_bore_diameter_mm": 45.085},
             priority=priority,
         )

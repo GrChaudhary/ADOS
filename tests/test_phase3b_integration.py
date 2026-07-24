@@ -49,12 +49,14 @@ def copilot():
 def test_kpi_engine_metrics_derivation(kpi_eng):
     kpis = kpi_eng.compute_kpis()
 
-    assert kpis.total_incidents == 5
-    assert kpis.resolved_incidents == 5
+    # 5 hand-authored hero incidents + 95 deterministically generated
+    # historical incidents (executive/incident_generator.py, seed=42).
+    assert kpis.total_incidents == 100
+    assert kpis.resolved_incidents == 100
     assert kpis.mttr_avg_minutes > 0
     assert kpis.revenue_protected_usd > 0
-    assert kpis.autonomy_index == 0.40  # 2 Tier 0 out of 5 total = 40%
-    assert kpis.recommendation_acceptance_rate == 0.6667  # 2 accepted out of 3 non-null Tier 1/2 records (2/3)
+    assert kpis.autonomy_index == 0.59
+    assert kpis.recommendation_acceptance_rate == 0.9024
 
 
 def test_kpi_engine_what_if_simulation(kpi_eng):
@@ -120,7 +122,7 @@ def test_copilot_kpi_query(copilot):
 
 
 def test_copilot_supplier_query(copilot):
-    resp = copilot.ask("Show me supplier resilience metrics for S-201")
+    resp = copilot.ask("Show me supplier resilience metrics for SUP-201")
 
     assert resp.confidence >= 0.90
     assert "Supplier Resilience" in resp.answer

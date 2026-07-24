@@ -16,7 +16,7 @@ class CADSpecAgent(BaseAgent):
         self.knowledge_graph = knowledge_graph or KnowledgeGraph()
 
     def process(self, context: IncidentContext, stage_input: StageInput) -> StageOutput:
-        part_number = stage_input.payload.get("part_number", "P-1002")
+        part_number = stage_input.payload.get("part_number", "MH-100")
         measured_value = stage_input.payload.get("measured_value", 45.08)
 
         spec = self.knowledge_graph.getSpecification(part_number)

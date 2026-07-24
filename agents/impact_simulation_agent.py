@@ -20,7 +20,7 @@ class ImpactSimulationAgent(BaseAgent):
         evaluated_options: List[Dict[str, Any]] = [
             {
                 "option_id": "OPT-1-PARAMETER-ADJUST",
-                "name": "Line 3 CNC Parameter Compensation",
+                "name": "Line 2 CNC-101 Parameter Compensation",
                 "estimated_cost_usd": 350.0,
                 "downtime_minutes": 12,
                 "quality_risk_score": 0.08,
@@ -29,7 +29,7 @@ class ImpactSimulationAgent(BaseAgent):
             },
             {
                 "option_id": "OPT-2-PART-SUBSTITUTION",
-                "name": "Substitute Component Part P-1002B",
+                "name": "Substitute Component Part MH-100B",
                 "estimated_cost_usd": 2250.0,
                 "downtime_minutes": 45,
                 "quality_risk_score": 0.05,

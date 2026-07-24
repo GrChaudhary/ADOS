@@ -62,9 +62,9 @@ class PredictiveRiskAnalytics:
         signals = [
             self.evaluate_line_risk("FAC-P1-L3", "Line 3"),
             RiskSignal(
-                signal_id="RISK-FAC-P1-L4",
-                plant_id="FAC-P1-L4",
-                line_id="Line 4",
+                signal_id="RISK-FAC-P1-L1",
+                plant_id="FAC-P1-L1",
+                line_id="Line 1",
                 risk_score=0.48,
                 risk_level="NORMAL",
                 primary_risk_driver="Ambient Humidity Fluctuations",
@@ -72,12 +72,12 @@ class PredictiveRiskAnalytics:
                 recommended_mitigation="Monitor room HVAC humidity sensor stability."
             ),
             RiskSignal(
-                signal_id="RISK-FAC-P2-L1",
-                plant_id="FAC-P2-L1",
-                line_id="Line 1",
+                signal_id="RISK-FAC-P1-L2",
+                plant_id="FAC-P1-L2",
+                line_id="Line 2",
                 risk_score=0.62,
                 risk_level="ELEVATED",
-                primary_risk_driver="Supplier S-202 Material Hardness Variance",
+                primary_risk_driver="Supplier SUP-201 (PrecisionCast) Material Hardness Variance",
                 causal_condition_id="COND-SUPPLIER-BATCH",
                 recommended_mitigation="Enforce 100% incoming lot hardness testing at receiving dock."
             )
