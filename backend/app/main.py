@@ -9,7 +9,7 @@ from orchestrate import DecisionOrchestrator
 
 from .config import settings
 from .eventbus import get_event_bus
-from .routers import capabilities, digital_twin, events, executive, health, incidents, learning, memory
+from .routers import capabilities, digital_twin, events, events_stream, executive, health, incidents, learning, memory
 
 _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
@@ -38,6 +38,7 @@ app.include_router(executive.router)
 app.include_router(memory.router)
 app.include_router(learning.router)
 app.include_router(digital_twin.router)
+app.include_router(events_stream.router)
 
 if _FRONTEND_DIR.exists():
     # docs/011-ui-ux.md's approval surface + executive dashboard — plain

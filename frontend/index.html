@@ -68,7 +68,18 @@
         </form>
         <div id="copilotAnswer" class="copilot-answer"></div>
       </section>
+
+      <section class="panel">
+        <div class="row" style="margin-bottom:10px;">
+          <h2 style="margin:0;">Live Agent Timeline</h2>
+          <span id="sseStreamStatus" class="badge live-pulse">Connecting…</span>
+        </div>
+        <div id="agentTimeline" class="timeline-container">
+          <div class="empty">Waiting for live agent events…</div>
+        </div>
+      </section>
     </div>
+
 
     <div>
       <!-- Executive dashboard: docs/008-executive-intelligence.md's outputs -->

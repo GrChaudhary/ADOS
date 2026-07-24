@@ -367,6 +367,95 @@ async function refreshDigitalTwinLines() {
 }
 
 // ---------------------------------------------------------------------
+// Phase 2 — SSE Live Agent Timeline
+// ---------------------------------------------------------------------
+
+let eventSource = null;
+
+function initEventStream() {
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+
+  const token = getToken();
+  const statusEl = document.getElementById("sseStreamStatus");
+  const timelineEl = document.getElementById("agentTimeline");
+  if (!token || !statusEl || !timelineEl) return;
+
+  statusEl.textContent = "Connecting…";
+  statusEl.className = "badge live-pulse";
+
+  eventSource = new EventSource(`/events/stream?token=${encodeURIComponent(token)}`);
+
+  eventSource.onopen = () => {
+    statusEl.textContent = "LIVE";
+    statusEl.className = "badge resolved";
+  };
+
+  eventSource.onerror = () => {
+    statusEl.textContent = "Disconnected";
+    statusEl.className = "badge failed";
+  };
+
+  eventSource.onmessage = (e) => {
+    try {
+      const envelope = JSON.parse(e.data);
+      appendTimelineEvent(envelope);
+    } catch (err) {
+      console.error("Failed to parse SSE event:", err);
+    }
+  };
+}
+
+function appendTimelineEvent(envelope) {
+  const container = document.getElementById("agentTimeline");
+  if (!container) return;
+
+  const eventType = envelope.eventType;
+  const payload = envelope.payload || {};
+  const stageName = payload.stage_name || payload.stageName || "Pipeline Stage";
+
+  let titleText = "";
+  let badgeHtml = "";
+  let detailText = "";
+
+  if (eventType === "StageRequested") {
+    titleText = `${stageName} (Stage Requested)`;
+    badgeHtml = '<span class="badge stage-running">Running</span>';
+    detailText = `Incident: ${envelope.incident_id}`;
+  } else if (eventType === "AgentCompleted") {
+    const agentId = payload.agent_id || payload.agentId || "Specialist Agent";
+    const execMs = payload.execution_time_ms ?? payload.executionTimeMs ?? 0;
+    const conf = payload.confidence !== undefined ? (payload.confidence * 100).toFixed(0) + "% confidence" : "";
+    titleText = `${stageName} ✓`;
+    badgeHtml = '<span class="badge stage-completed">Completed</span>';
+    detailText = `Agent: ${agentId} · ${execMs}ms · ${conf} · Incident: ${envelope.incident_id}`;
+  } else {
+    titleText = `${eventType}`;
+    badgeHtml = '<span class="badge">Event</span>';
+    detailText = `Incident: ${envelope.incident_id}`;
+  }
+
+  const emptyEl = container.querySelector(".empty");
+  if (emptyEl) {
+    container.innerHTML = "";
+  }
+
+  const row = document.createElement("div");
+  row.className = "timeline-item";
+  row.innerHTML = `
+    <div class="timeline-header">
+      <span class="timeline-stage">${titleText}</span>
+      ${badgeHtml}
+    </div>
+    <div class="timeline-detail">${detailText}</div>
+  `;
+
+  container.insertBefore(row, container.firstChild);
+}
+
+// ---------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------
 
@@ -387,6 +476,7 @@ document.addEventListener("DOMContentLoaded", () => {
   tokenInput.addEventListener("change", () => {
     setToken(tokenInput.value);
     refreshAll();
+    initEventStream();
   });
 
   document.getElementById("startIncidentForm").addEventListener("submit", startIncident);
@@ -396,5 +486,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("runRagDemoBtn").addEventListener("click", runRagDemo);
 
   refreshAll();
+  initEventStream();
   setInterval(refreshAll, 4000);
 });
+
