@@ -37,6 +37,7 @@ from contracts import (
     Capability,
     CapabilityCall,
     CausalChainEntry,
+    EventEnvelope,
     GovernanceInfo,
     IncidentRecord,
     IncidentState,
@@ -240,17 +241,43 @@ class DecisionOrchestrator:
                     recommendation_accepted = True
 
                 sm.transition(IncidentState.EXECUTING)
+                execution_steps = out6.result["execution_steps"]
+                target_line_id = out6.result["target_line_id"]
+
+                await self._bus.publish(EventEnvelope(
+                    event_type="CapabilityInvocationStarted",
+                    incident_id=context.incident_id,
+                    produced_by="orchestrate/decision-orchestrator",
+                    payload={
+                        "capability": capability.value,
+                        "executionSteps": execution_steps,
+                        "targetLineId": target_line_id,
+                    },
+                ))
+
                 call = CapabilityCall(
                     capability=capability,
                     incident_id=context.incident_id,
                     requested_by="orchestrate/decision-orchestrator",
                     input={
-                        "execution_steps": out6.result["execution_steps"],
-                        "target_line_id": out6.result["target_line_id"],
+                        "execution_steps": execution_steps,
+                        "target_line_id": target_line_id,
                     },
                     governance=GovernanceInfo(policy_tier=tier, approved_by=approved_by),
                 )
                 response = await self._hub.invoke(call)
+
+                await self._bus.publish(EventEnvelope(
+                    event_type="CapabilityInvocationCompleted",
+                    incident_id=context.incident_id,
+                    produced_by="orchestrate/decision-orchestrator",
+                    payload={
+                        "capability": capability.value,
+                        "status": response.status.value,
+                        "executionSteps": execution_steps,
+                        "targetLineId": target_line_id,
+                    },
+                ))
 
                 if response.status != CallStatus.SUCCEEDED:
                     sm.transition(IncidentState.FAILED)

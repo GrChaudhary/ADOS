@@ -11,7 +11,8 @@ from contracts import EventEnvelope
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 
 def test_events_stream_unauthorized_missing_token(client):

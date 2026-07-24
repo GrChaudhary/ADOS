@@ -34,23 +34,30 @@ async def stream_events(
                 return
 
             stream_iter = request.app.state.event_bus.stream().__aiter__()
-            while True:
-                if await request.is_disconnected():
-                    break
-                try:
-                    envelope = await asyncio.wait_for(stream_iter.__anext__(), timeout=0.5)
-                except asyncio.TimeoutError:
-                    continue
-                except StopAsyncIteration:
-                    break
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        envelope = await asyncio.wait_for(stream_iter.__anext__(), timeout=0.5)
+                    except asyncio.TimeoutError:
+                        continue
+                    except StopAsyncIteration:
+                        break
 
-                if incident_id is not None and envelope.incident_id != incident_id:
-                    continue
+                    if incident_id is not None and envelope.incident_id != incident_id:
+                        continue
 
-                yield f"data: {envelope.model_dump_json(by_alias=True)}\n\n"
-                count += 1
-                if max_events is not None and count >= max_events:
-                    break
+                    yield f"data: {envelope.model_dump_json(by_alias=True)}\n\n"
+                    count += 1
+                    if max_events is not None and count >= max_events:
+                        break
+            finally:
+                # Deregister this connection's subscriber queue from the bus
+                # immediately on disconnect/return — without this, InMemoryEventBus
+                # keeps publishing to it forever, relying on GC finalization of
+                # the abandoned async generator to ever unsubscribe (unreliable).
+                await stream_iter.aclose()
         except asyncio.CancelledError:
             pass
 

@@ -423,18 +423,18 @@ function appendTimelineEvent(envelope) {
   if (eventType === "StageRequested") {
     titleText = `${stageName} (Stage Requested)`;
     badgeHtml = '<span class="badge stage-running">Running</span>';
-    detailText = `Incident: ${envelope.incident_id}`;
+    detailText = `Incident: ${envelope.incidentId}`;
   } else if (eventType === "AgentCompleted") {
     const agentId = payload.agent_id || payload.agentId || "Specialist Agent";
     const execMs = payload.execution_time_ms ?? payload.executionTimeMs ?? 0;
     const conf = payload.confidence !== undefined ? (payload.confidence * 100).toFixed(0) + "% confidence" : "";
     titleText = `${stageName} ✓`;
     badgeHtml = '<span class="badge stage-completed">Completed</span>';
-    detailText = `Agent: ${agentId} · ${execMs}ms · ${conf} · Incident: ${envelope.incident_id}`;
+    detailText = `Agent: ${agentId} · ${execMs}ms · ${conf} · Incident: ${envelope.incidentId}`;
   } else {
     titleText = `${eventType}`;
     badgeHtml = '<span class="badge">Event</span>';
-    detailText = `Incident: ${envelope.incident_id}`;
+    detailText = `Incident: ${envelope.incidentId}`;
   }
 
   const emptyEl = container.querySelector(".empty");
