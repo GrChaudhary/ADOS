@@ -11,7 +11,8 @@ from knowledge import DigitalTwinStore
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 
 def test_digital_twin_store_all_lines():

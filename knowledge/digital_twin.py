@@ -106,7 +106,7 @@ class DigitalTwinStore:
             line_id="Line 3",
             plant_name="Nova Motors - Detroit Plant",
             status="DEGRADED",
-            active_product_sku="PROD-500",
+            active_product_sku="PROD-200",
             current_speed_units_per_hr=105,
             parameters={
                 "spindle_speed_rpm": MachineParameter(

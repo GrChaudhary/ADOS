@@ -5,26 +5,22 @@ Provides REST endpoints for inspecting live line states and telemetry across pla
 
 from typing import List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
-from knowledge import DigitalTwinStore, FactoryLineState
+from knowledge import FactoryLineState
 
 from ..auth import require_service_auth
 
 router = APIRouter(prefix="/digital-twin", tags=["Digital Twin"], dependencies=[Depends(require_service_auth)])
 
-# Singleton store for Digital Twin REST endpoints
-_DIGITAL_TWIN_STORE = DigitalTwinStore()
-
-
-def get_digital_twin_store() -> DigitalTwinStore:
-    return _DIGITAL_TWIN_STORE
-
 
 @router.get("/lines", response_model=List[FactoryLineState])
-async def get_digital_twin_lines():
+async def get_digital_twin_lines(request: Request):
     """
-    Returns live digital twin states for all production lines in the enterprise asset model.
+    Returns live digital twin states for all production lines, read from the
+    same DigitalTwinStore instance the orchestrator mutates while resolving
+    incidents (app.state.orchestrator.digital_twin) — not a separate copy —
+    so this reflects real-time status/parameter/reservation changes.
     """
-    store = get_digital_twin_store()
+    store = request.app.state.orchestrator.digital_twin
     return store.get_all_line_states()
