@@ -402,10 +402,62 @@ function initEventStream() {
     try {
       const envelope = JSON.parse(e.data);
       appendTimelineEvent(envelope);
+      if (envelope.eventType === "CapabilityInvocationStarted" || envelope.eventType === "CapabilityInvocationCompleted") {
+        updateExecutionChecklist(envelope);
+      }
     } catch (err) {
       console.error("Failed to parse SSE event:", err);
     }
   };
+}
+
+// ---------------------------------------------------------------------
+// Phase 4 — Approval Execution Checklist
+// ---------------------------------------------------------------------
+
+function updateExecutionChecklist(envelope) {
+  const container = document.getElementById("executionChecklist");
+  if (!container) return;
+
+  const payload = envelope.payload || {};
+  const incidentId = envelope.incidentId;
+  const steps = payload.executionSteps || [];
+  const capability = payload.capability || "Capability";
+
+  const emptyEl = container.querySelector(".empty");
+  if (emptyEl) container.innerHTML = "";
+
+  let card = container.querySelector(`[data-incident-id="${incidentId}"]`);
+  if (!card) {
+    card = document.createElement("div");
+    card.className = "checklist-card";
+    card.dataset.incidentId = incidentId;
+    container.insertBefore(card, container.firstChild);
+  }
+
+  if (envelope.eventType === "CapabilityInvocationStarted") {
+    const itemsHtml = steps.map((s) => `<div class="checklist-item"><span class="checklist-icon pending">&#9679;</span><span>${s}</span></div>`).join("");
+    card.innerHTML = `
+      <div class="timeline-header">
+        <span class="timeline-stage">${capability}</span>
+        <span class="badge stage-running">In Progress</span>
+      </div>
+      ${itemsHtml}
+    `;
+  } else {
+    const succeeded = payload.status === "succeeded";
+    const icon = succeeded ? "&#10003;" : "&#10007;";
+    const iconClass = succeeded ? "done" : "failed-icon";
+    const badgeHtml = succeeded ? '<span class="badge stage-completed">Completed</span>' : '<span class="badge failed">Failed</span>';
+    const itemsHtml = steps.map((s) => `<div class="checklist-item"><span class="checklist-icon ${iconClass}">${icon}</span><span>${s}</span></div>`).join("");
+    card.innerHTML = `
+      <div class="timeline-header">
+        <span class="timeline-stage">${capability}</span>
+        ${badgeHtml}
+      </div>
+      ${itemsHtml}
+    `;
+  }
 }
 
 function appendTimelineEvent(envelope) {

@@ -7,6 +7,18 @@ from typing import Optional
 from agents.sdk import BaseAgent, IncidentContext, StageInput, StageOutput, EvidenceItem, AlternativeOption
 from knowledge import DigitalTwinStore
 
+_PRODUCTION_LINES = ["Line 1", "Line 2", "Line 3"]
+
+
+def _alternate_line(target_line: str) -> str:
+    """Picks a real, different production line to name as the rejected
+    re-route alternative (never a nonexistent line like the old hardcoded
+    "Line 4")."""
+    if target_line in _PRODUCTION_LINES:
+        idx = _PRODUCTION_LINES.index(target_line)
+        return _PRODUCTION_LINES[(idx + 1) % len(_PRODUCTION_LINES)]
+    return _PRODUCTION_LINES[0]
+
 
 class ReroutingAgent(BaseAgent):
     """Generates execution plan for soft reservations and line re-routing."""
@@ -32,9 +44,9 @@ class ReroutingAgent(BaseAgent):
             "target_line_id": target_line,
             "capacity_reserved": reserved,
             "execution_steps": [
-                "1. Send CNC parameter adjustment (tool_offset_z_mm = -0.035mm) to Line 3 PLC",
+                f"1. Send CNC parameter adjustment (tool_offset_z_mm = -0.035mm) to {target_line} PLC",
                 "2. Perform 5-part sample verification sweep",
-                "3. Resume full-rate production on Line 3"
+                f"3. Resume full-rate production on {target_line}"
             ]
         }
 
@@ -47,12 +59,13 @@ class ReroutingAgent(BaseAgent):
             )
         ]
 
+        alt_line = _alternate_line(target_line)
         alternatives = [
             AlternativeOption(
-                option_id="OPT-REROUTE-LINE-4",
-                description="Re-route production batch to Detroit Plant Line 4",
+                option_id=f"OPT-REROUTE-{alt_line.replace(' ', '-').upper()}",
+                description=f"Re-route production batch to Nova Motors Detroit Plant {alt_line}",
                 status="REJECTED",
-                reason="Changeover setup time on Line 4 requires 3.5 hours"
+                reason=f"Changeover setup time on {alt_line} requires 3.5 hours"
             )
         ]
 

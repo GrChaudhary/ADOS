@@ -138,10 +138,60 @@ async def test_orchestrator_resolves_with_tier1_approval():
     assert record.recommendation_accepted is True
     assert record.capability_invoked == Capability.SCHEDULE_MAINTENANCE
     assert len(record.causal_chain) > 0
+    assert len(record.alternatives) >= 1
 
     events = await bus.recent(incident_id=record.incident_id)
     assert "StageRequested" in [e.event_type for e in events]
     assert "AgentCompleted" in [e.event_type for e in events]
+    assert "CapabilityInvocationStarted" in [e.event_type for e in events]
+    assert "CapabilityInvocationCompleted" in [e.event_type for e in events]
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_publishes_execution_checklist_events():
+    """Phase 4: the execution/capability-invoke stage publishes start+completed
+    events on the same bus Phase 2's SSE route streams — no separate plumbing
+    needed for a live approval-execution checklist."""
+    bus = InMemoryEventBus()
+    hub = default_hub()
+    orchestrator = DecisionOrchestrator(event_bus=bus, integration_hub=hub)
+    priority = PriorityInputs(
+        safety_impact=0.9, customer_impact=0.6, line_down_cost_per_hour_usd=12_000,
+        production_priority=0.7, is_systemic=False,
+    )
+
+    async def auto_approve():
+        for _ in range(200):
+            pending = orchestrator.approvals.list_pending()
+            if pending:
+                orchestrator.approvals.approve(pending[0].incident_id, approved_by="ops-lead-checklist")
+                return
+            await asyncio.sleep(0.01)
+
+    run_task = asyncio.create_task(
+        orchestrator.run_incident(
+            plant_id="FAC-P1", line_id="Line-Checklist-1", part_number="P-1002",
+            vision_data={"measured_bore_diameter_mm": 45.085}, priority=priority,
+        )
+    )
+    approver_task = asyncio.create_task(auto_approve())
+    record = await asyncio.wait_for(run_task, timeout=5)
+    await approver_task
+
+    events = await bus.recent(incident_id=record.incident_id)
+    started = next(e for e in events if e.event_type == "CapabilityInvocationStarted")
+    completed = next(e for e in events if e.event_type == "CapabilityInvocationCompleted")
+
+    assert started.payload["capability"] == record.capability_invoked.value
+    assert isinstance(started.payload["executionSteps"], list)
+    assert len(started.payload["executionSteps"]) > 0
+
+    assert completed.payload["capability"] == record.capability_invoked.value
+    assert completed.payload["status"] == "succeeded"
+    assert completed.payload["executionSteps"] == started.payload["executionSteps"]
+
+    # Started must precede Completed in publish order.
+    assert events.index(started) < events.index(completed)
 
     stored = orchestrator.audit_trail.get(record.incident_id)
     assert stored is not None and stored.incident_id == record.incident_id

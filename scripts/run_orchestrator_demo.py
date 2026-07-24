@@ -74,6 +74,14 @@ async def run_demo():
     print(f"[INCIDENT] Cost: ${record.actual_cost_usd} | Downtime: {record.actual_downtime_min} min")
 
     events = await bus.recent(incident_id=record.incident_id)
+
+    completed = next((e for e in events if e.event_type == "CapabilityInvocationCompleted"), None)
+    if completed:
+        print(f"\n[EXECUTION CHECKLIST] {completed.payload['capability']} — {completed.payload['status'].upper()}")
+        for step in completed.payload["executionSteps"]:
+            mark = "[x]" if completed.payload["status"] == "succeeded" else "[ ]"
+            print(f"   {mark} {step}")
+
     print(f"\n[EVENT BUS] {len(events)} events published for this incident:")
     for e in events:
         print(f"   {e.event_type:<16} produced_by={e.produced_by}")
