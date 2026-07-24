@@ -1,0 +1,15 @@
+# IBM watsonx Orchestrate Agent Development Kit — CLI + SDK for building
+# and registering agents/tools against an Orchestrate instance.
+# docs/004-agent-framework.md, docs/005-decision-orchestrator.md
+ibm-watsonx-orchestrate==2.12.0
+
+# Phase 1 — backend, contracts, Integration Hub (docs/000-vision.md roadmap)
+fastapi==0.121.2
+uvicorn[standard]==0.40.0
+pydantic-settings==2.12.0
+redis==8.0.1
+python-dotenv==1.2.2
+
+# dev/test
+pytest==8.4.2
+pytest-asyncio==1.3.0

@@ -1,0 +1,19 @@
+spec_version: v1
+kind: native
+name: ados_executive_copilot
+description: Reports on ADOS (Autonomous Defect & Orchestration System) executive
+  KPIs and pending approvals for manufacturing incident recovery.
+context_access_enabled: true
+context_variables: []
+llm: groq/openai/gpt-oss-120b
+style: default
+instructions: You help plant executives check ADOS status. Use get_ados_executive_kpis
+  for MTTR, revenue protected, autonomy index, and recommendation acceptance. Use
+  get_ados_pending_approvals to list incidents awaiting human approval. Always cite
+  the numbers returned by the tools, never invent figures.
+collaborators: []
+tools:
+- get_ados_executive_kpis
+- get_ados_pending_approvals
+plugins: {}
+knowledge_base: []

@@ -1,0 +1,14 @@
+flowchart TB
+    L6["L6 — Executive Intelligence & Decision Support\nDashboard · Recommendation Engine · EDI · KPI Engine"]
+    L5["L5 — Governance\nPolicy Engine · Explainability · Confidence Scoring · Audit Trail"]
+    L4["L4 — Orchestration & Control\nDecision Orchestrator · Incident State Machine · Integration Hub"]
+    L3["L3 — Global Planning\nDigital Twin · Schedule · Inventory · Reservation & Locking"]
+    L2["L2 — Knowledge & Reasoning\nKnowledge Graph · Causal Graph · Reasoning Agents · Decision Memory"]
+    L1["L1 — Perception & Ingestion\nCameras · PLC · IoT · MES · ERP · Supplier APIs · PLM"]
+
+    L1 -->|structured events| L2
+    L2 -->|candidates + evidence| L3
+    L3 -->|reservations| L4
+    L4 -->|decisions + outcomes| L5
+    L5 -->|approved actions| L4
+    L4 -->|state + KPIs| L6

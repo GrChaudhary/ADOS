@@ -1,0 +1,5 @@
+flowchart LR
+    Observe --> Understand --> Reason --> Generate["Generate Options"] --> Simulate
+    Simulate --> Reserve["Reserve Resources"] --> Recommend --> Approve --> Execute
+    Execute --> Measure["Measure Outcome"] --> Learn
+    Learn -.->|updated causal weights| Reason

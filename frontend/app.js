@@ -1,0 +1,367 @@
+// ADOS approval surface + executive dashboard — plain JS, no build step.
+// Talks to the backend on the same origin (see backend/app/main.py mounting
+// this directory as static files), auth via a bearer token kept in
+// localStorage (docs/009-security.md's MVP shared-secret auth, same token
+// as SERVICE_AUTH_TOKEN).
+
+const TOKEN_KEY = "ados_service_token";
+
+function getToken() {
+  return localStorage.getItem(TOKEN_KEY) || "";
+}
+
+function setToken(value) {
+  localStorage.setItem(TOKEN_KEY, value);
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      "Authorization": `Bearer ${getToken()}`,
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`${response.status} ${path}: ${text}`);
+  }
+  return response.status === 204 ? null : response.json();
+}
+
+function tierBadge(tier) {
+  const n = typeof tier === "number" ? tier : parseInt(tier, 10);
+  const labels = ["Tier 0", "Tier 1", "Tier 2"];
+  return `<span class="badge tier${n}">${labels[n] ?? tier}</span>`;
+}
+
+function stateBadge(state) {
+  const cls = { Resolved: "resolved", Failed: "failed", Preempted: "preempted" }[state] || "";
+  return `<span class="badge ${cls}">${state}</span>`;
+}
+
+// ---------------------------------------------------------------------
+// Start Incident
+// ---------------------------------------------------------------------
+
+async function startIncident(event) {
+  event.preventDefault();
+  const form = event.target;
+  const body = {
+    plant_id: form.plant_id.value,
+    line_id: form.line_id.value,
+    part_number: form.part_number.value,
+    vision_data: { measured_bore_diameter_mm: parseFloat(form.measured_value.value) },
+    priority: {
+      safety_impact: parseFloat(form.safety_impact.value),
+      customer_impact: parseFloat(form.customer_impact.value),
+      line_down_cost_per_hour_usd: parseFloat(form.line_down_cost.value),
+      production_priority: parseFloat(form.production_priority.value),
+      is_systemic: form.is_systemic.checked,
+    },
+  };
+  const statusEl = document.getElementById("startIncidentStatus");
+  try {
+    const result = await api("/incidents", { method: "POST", body: JSON.stringify(body) });
+    statusEl.textContent = `Started ${result.incident_id}`;
+    statusEl.className = "muted";
+    refreshAll();
+  } catch (e) {
+    statusEl.textContent = e.message;
+    statusEl.className = "muted";
+  }
+}
+
+// ---------------------------------------------------------------------
+// Pending Approvals
+// ---------------------------------------------------------------------
+
+async function decide(incidentId, action) {
+  const approvedBy = prompt("Your name/ID:", "ops-lead");
+  if (!approvedBy) return;
+  await api(`/incidents/${incidentId}/${action}`, {
+    method: "POST",
+    body: JSON.stringify({ approved_by: approvedBy }),
+  });
+  refreshAll();
+}
+
+async function refreshApprovals() {
+  const el = document.getElementById("approvalsList");
+  try {
+    const pending = await api("/approvals");
+    if (pending.length === 0) {
+      el.innerHTML = '<div class="empty">No incidents awaiting approval.</div>';
+      return;
+    }
+    el.innerHTML = pending.map((p) => `
+      <div class="card">
+        <div class="row">
+          <strong>${p.capability}</strong>
+          ${tierBadge(p.policyTier)}
+        </div>
+        <div class="muted">${p.summary}</div>
+        <div class="muted">confidence ${p.confidence} · incident ${p.incidentId}</div>
+        <div>
+          <button class="small" onclick="decide('${p.incidentId}','approve')">Approve</button>
+          <button class="small danger" onclick="decide('${p.incidentId}','reject')">Reject</button>
+          <button class="small secondary" onclick="decide('${p.incidentId}','escalate')">Escalate</button>
+        </div>
+      </div>
+    `).join("");
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Recent Incidents (audit trail)
+// ---------------------------------------------------------------------
+
+async function refreshIncidents() {
+  const el = document.getElementById("incidentsList");
+  try {
+    const records = await api("/incidents?limit=20");
+    if (records.length === 0) {
+      el.innerHTML = '<div class="empty">No resolved incidents yet.</div>';
+      return;
+    }
+    el.innerHTML = records.slice().reverse().map((r) => `
+      <div class="card">
+        <div class="row">
+          <strong>${r.lineId}</strong>
+          ${stateBadge(r.finalState)}
+        </div>
+        <div class="muted">${r.capabilityInvoked || "—"} · ${r.capabilityStatus || ""}</div>
+        <div class="muted">cost $${r.actualCostUsd ?? "—"} · downtime ${r.actualDowntimeMin ?? "—"}min</div>
+        <div class="muted">${(r.causalChain || []).map((c) => c.description).join(", ") || "no causal chain"}</div>
+      </div>
+    `).join("");
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Executive KPIs
+// ---------------------------------------------------------------------
+
+async function refreshKpis() {
+  const el = document.getElementById("kpiGrid");
+  try {
+    const k = await api("/executive/kpis");
+    el.innerHTML = `
+      <div class="kpi-tile"><div class="value">${k.mttrAvgMinutes}m</div><div class="label">MTTR avg</div></div>
+      <div class="kpi-tile"><div class="value">$${k.revenueProtectedUsd}</div><div class="label">Revenue protected</div></div>
+      <div class="kpi-tile"><div class="value">${(k.autonomyIndex * 100).toFixed(0)}%</div><div class="label">Autonomy index</div></div>
+      <div class="kpi-tile"><div class="value">${(k.recommendationAcceptanceRate * 100).toFixed(0)}%</div><div class="label">Rec. acceptance</div></div>
+      <div class="kpi-tile"><div class="value">${k.totalIncidents}</div><div class="label">Total incidents</div></div>
+      <div class="kpi-tile"><div class="value">${k.resolvedIncidents}/${k.failedIncidents}</div><div class="label">Resolved/Failed</div></div>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+async function refreshRecommendations() {
+  const el = document.getElementById("recommendationsList");
+  try {
+    const recs = await api("/executive/recommendations");
+    if (recs.length === 0) {
+      el.innerHTML = '<div class="empty">No strategic recommendations yet.</div>';
+      return;
+    }
+    el.innerHTML = recs.map((r) => `
+      <div class="card">
+        <div class="row"><strong>${r.title || r.recommendationId || "Recommendation"}</strong> <span class="badge">${r.impact_level || ""}</span></div>
+        <div class="muted">${r.summary || ""}</div>
+      </div>
+    `).join("");
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+async function refreshRisk() {
+  const el = document.getElementById("riskList");
+  try {
+    const signals = await api("/executive/risk");
+    if (signals.length === 0) {
+      el.innerHTML = '<div class="empty">No active risk signals.</div>';
+      return;
+    }
+    el.innerHTML = signals.map((r) => `
+      <div class="card">
+        <div class="row"><strong>${r.lineId || r.plantId}</strong> <span class="badge">${(r.risk_score ?? 0).toFixed(2)}</span></div>
+        <div class="muted">${r.risk_level || ""} — ${r.primaryRiskDriver || ""}</div>
+      </div>
+    `).join("");
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+async function askCopilot(event) {
+  event.preventDefault();
+  const query = document.getElementById("copilotQuery").value;
+  const answerEl = document.getElementById("copilotAnswer");
+  answerEl.textContent = "Thinking...";
+  try {
+    const response = await api("/executive/copilot/ask", { method: "POST", body: JSON.stringify({ query }) });
+    const citations = (response.dataCitations || [])
+      .map((c) => `${c.source}: ${c.metric ?? ""} ${c.value ?? ""}`)
+      .join(" · ");
+    answerEl.innerHTML = `
+      <div class="copilot-answer">${response.answer}</div>
+      <div class="citations">confidence ${response.confidence} · ${citations}</div>
+    `;
+  } catch (e) {
+    answerEl.textContent = e.message;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Phase 4 — Decision Memory Search
+// ---------------------------------------------------------------------
+
+async function searchDecisionMemory(event) {
+  event.preventDefault();
+  const el = document.getElementById("memorySearchResults");
+  el.innerHTML = '<div class="empty">Searching…</div>';
+  try {
+    const body = {
+      defectType: document.getElementById("memoryDefectType").value || undefined,
+      plantId: document.getElementById("memoryPlantId").value || undefined,
+      limit: 5,
+    };
+    const res = await api("/memory/search", { method: "POST", body: JSON.stringify(body) });
+    if (res.totalMatches === 0) {
+      el.innerHTML = '<div class="empty">No matching precedents found.</div>';
+      return;
+    }
+    el.innerHTML = `<div class="muted" style="margin-bottom:8px;">${res.totalMatches} historical match(es)</div>` +
+      res.records.map((r, i) => `
+        <div class="card">
+          <div class="row">
+            <strong>${r.incidentId}</strong>
+            ${stateBadge(r.finalState)}
+          </div>
+          <div class="muted">relevance ${res.relevanceScores[i]} · MTTR ${r.actualDowntimeMin ?? "—"}min · ${r.lineId || ""}</div>
+          <div class="muted">${(r.causalChain || []).map((c) => c.description).join(", ") || "no causal chain"}</div>
+        </div>
+      `).join("");
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Phase 4B — Causal Graph Recalibration (Learning Engine)
+// ---------------------------------------------------------------------
+
+async function runRecalibration() {
+  const el = document.getElementById("recalibrationResult");
+  el.innerHTML = '<div class="empty">Replaying audit trail…</div>';
+  try {
+    const res = await api("/learning/recalibration");
+    const rows = res.weightAdjustments.map((adj) => {
+      const deltaClass = adj.delta >= 0 ? "delta-up" : "delta-down";
+      const sign = adj.delta >= 0 ? "+" : "";
+      return `
+        <div class="entry">
+          <span>${adj.condition_id} <span class="muted">(${adj.incident_id})</span></span>
+          <span>${adj.previous_weight} &rarr; ${adj.new_weight} <span class="${deltaClass}">(${sign}${adj.delta})</span></span>
+        </div>
+      `;
+    }).join("");
+    el.innerHTML = `
+      <div class="muted" style="margin-bottom:8px;">${res.recordsProcessed} record(s) replayed · ${res.edgesUpdated} edge(s) recalibrated</div>
+      <div class="weight-log">${rows}</div>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Phase 4B — Memory-Augmented Agent RAG Demo
+// ---------------------------------------------------------------------
+
+async function runRagDemo() {
+  const el = document.getElementById("ragDemoResult");
+  el.innerHTML = '<div class="empty">Running agent reasoning…</div>';
+  try {
+    const out = await api("/learning/memory-rag-demo", { method: "POST", body: JSON.stringify({}) });
+    const evidenceRows = out.evidence.map((ev) => `
+      <div class="entry"><span class="source">[${ev.sourceType}]</span>${ev.description}</div>
+    `).join("");
+    el.innerHTML = `
+      <div class="card">
+        <div class="row"><strong>${out.result.primary_root_cause}</strong></div>
+        <div class="muted">confidence ${out.confidence} (memory-boosted)</div>
+      </div>
+      <div class="evidence-list">${evidenceRows}</div>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Phase 4B — Autonomy Tier 0 Promotion Candidates
+// ---------------------------------------------------------------------
+
+async function refreshPromotionCandidates() {
+  const el = document.getElementById("promotionCandidates");
+  try {
+    const candidates = await api("/learning/promotion-candidates");
+    if (candidates.length === 0) {
+      el.innerHTML = '<div class="empty">No decision categories evaluated yet.</div>';
+      return;
+    }
+    el.innerHTML = candidates.map((c) => `
+      <div class="card">
+        <div class="row">
+          <strong>${c.decisionClassName}</strong>
+          <span class="badge ${c.isEligible ? "eligible" : "pending-data"}">${c.isEligible ? "Eligible for Tier 0" : "Needs more data"}</span>
+        </div>
+        <div class="muted">${c.sampleVolume} incident(s) · ${(c.operatorAcceptanceRate * 100).toFixed(0)}% acceptance · avg confidence ${c.avgConfidence}</div>
+        <div class="muted">${c.promotionRationale}</div>
+      </div>
+    `).join("");
+  } catch (e) {
+    el.innerHTML = `<div class="empty">${e.message}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------
+
+function refreshAll() {
+  refreshApprovals();
+  refreshIncidents();
+  refreshKpis();
+  refreshRecommendations();
+  refreshRisk();
+  refreshPromotionCandidates();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const tokenInput = document.getElementById("tokenInput");
+  tokenInput.value = getToken();
+  tokenInput.addEventListener("change", () => {
+    setToken(tokenInput.value);
+    refreshAll();
+  });
+
+  document.getElementById("startIncidentForm").addEventListener("submit", startIncident);
+  document.getElementById("copilotForm").addEventListener("submit", askCopilot);
+  document.getElementById("memorySearchForm").addEventListener("submit", searchDecisionMemory);
+  document.getElementById("runRecalibrationBtn").addEventListener("click", runRecalibration);
+  document.getElementById("runRagDemoBtn").addEventListener("click", runRagDemo);
+
+  refreshAll();
+  setInterval(refreshAll, 4000);
+});

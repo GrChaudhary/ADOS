@@ -1,0 +1,38 @@
+# Secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+build/
+.next/
+coverage/
+
+# IBM watsonx Orchestrate ADK
+.orchestrate/
+orchestrate-cache/
+
+# Vendored Claude Code skills (antigravity-awesome-skills) — reinstall via
+# scripts/install-skills.sh rather than committing 50MB of third-party content.
+.claude/skills/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log

@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+# Shared root config — covers backend/tests as well as any tests added
+# under agents/ or knowledge/ for the Phase 2 work happening in parallel.
+pythonpath = ["."]
+asyncio_mode = "auto"

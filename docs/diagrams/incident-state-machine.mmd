@@ -1,0 +1,20 @@
+stateDiagram-v2
+    [*] --> Detected
+    Detected --> Diagnosing
+    Diagnosing --> CandidateGeneration: candidates generated
+    CandidateGeneration --> Reserving
+    Reserving --> AwaitingApproval
+    AwaitingApproval --> Executing: approved
+    Executing --> Resolved
+    Diagnosing --> Failed
+    CandidateGeneration --> Failed
+    Reserving --> Failed
+    Executing --> Failed
+    AwaitingApproval --> Escalated: policy tier requires it
+    Escalated --> AwaitingApproval
+    Diagnosing --> Preempted
+    CandidateGeneration --> Preempted
+    Reserving --> Preempted
+    Preempted --> Diagnosing: resumed
+    Failed --> [*]
+    Resolved --> [*]
