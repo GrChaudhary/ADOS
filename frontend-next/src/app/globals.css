@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+/*
+ * ADOS "Deep Space Industrial" design system
+ * (documentation/03_Design_System.md), ported literally as CSS custom
+ * properties and wired into Tailwind v4's CSS-native @theme config (this
+ * Next.js/Tailwind version has no tailwind.config.ts by default - themes
+ * are declared here, not in JS).
+ */
+
+:root {
+  --bg-app: #0b0f19;
+  --bg-card: #111827;
+  --bg-glass: rgba(17, 24, 39, 0.75);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-accent: rgba(59, 130, 246, 0.3);
+  --status-emerald: #10b981;
+  --status-red: #ef4444;
+  --status-cobalt: #3b82f6;
+  --status-amber: #f59e0b;
+  --status-purple: #8b5cf6;
+  --status-cyan: #06b6d4;
+  --status-pink: #ec4899;
+  --status-teal: #14b8a6;
+  --status-indigo: #6366f1;
+  --text-primary: #f9fafb;
+  --text-secondary: #9ca3af;
+  --text-mono: #38bdf8;
+}
+
+@theme inline {
+  --color-app: var(--bg-app);
+  --color-card: var(--bg-card);
+  --color-glass: var(--bg-glass);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-accent: var(--border-accent);
+  --color-emerald: var(--status-emerald);
+  --color-status-red: var(--status-red);
+  --color-cobalt: var(--status-cobalt);
+  --color-amber: var(--status-amber);
+  --color-purple: var(--status-purple);
+  --color-cyan: var(--status-cyan);
+  --color-pink: var(--status-pink);
+  --color-teal: var(--status-teal);
+  --color-indigo: var(--status-indigo);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-mono: var(--text-mono);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+}
+
+html,
+body {
+  background: var(--bg-app);
+  color: var(--text-primary);
+}
+
+body {
+  font-family: var(--font-sans), -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+/* documentation/03_Design_System.md section 6 - status pulse animations */
+@keyframes pulse-emerald {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(16, 185, 129, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+@keyframes pulse-red {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.8);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
+.status-active-green {
+  animation: pulse-emerald 2s infinite;
+}
+
+.status-incident-red {
+  animation: pulse-red 1.5s infinite;
+}
