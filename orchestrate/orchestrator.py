@@ -186,7 +186,7 @@ class DecisionOrchestrator:
 
                 sm.transition(IncidentState.AWAITING_APPROVAL)
                 capability = self._capability_for_option(top_opt["option_id"], out4a.result)
-                tier = assign_policy_tier(capability, out5.confidence)
+                tier = assign_policy_tier(capability, out5.confidence, top_opt["estimated_cost_usd"])
                 approved_by: Optional[str] = None
                 recommendation_accepted: Optional[bool] = None
 

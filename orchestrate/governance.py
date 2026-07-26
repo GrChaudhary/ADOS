@@ -2,13 +2,19 @@
 L5 Governance enforcement — docs/007-governance.md. This is what closes
 the gap left in Phase 1: `/capabilities/invoke` accepted whatever
 `governance` the caller supplied. Here, tier is computed server-side from
-the capability's risk class and the decision's confidence, never trusted
-from a caller, and Tier 1/2 decisions block on ApprovalQueue until a human
-acts.
+the capability's risk class, the decision's confidence, and its financial
+exposure, never trusted from a caller, and Tier 1/2 decisions block on
+ApprovalQueue until a human acts.
 
-Risk-class-first, confidence-second — a high-confidence high-risk action
-still doesn't earn Tier 0 (docs/007's stated reason: impact class matters
-independent of confidence). Tuning these thresholds per plant/capability
+Financial-exposure-first, per documentation/05_Product_Bible.md's Governance
+Autonomy Tier Matrix: Low exposure (<$25,000) needs >90% confidence to earn
+Tier 0; the $25,000-$250,000 medium band never reaches Tier 0 in this model
+(the doc's own row targets Tier 1, not Tier 0, for that band); >$250,000
+exposure is always Tier 2 regardless of confidence; and "Critical/process
+modification" capabilities (mapped here to the existing "high" risk class -
+CREATE_CHANGE_REQUEST, CREATE_PURCHASE_ORDER, CREATE_EXTERNAL_PO - the
+closest existing concept to "process modification") are always Tier 2
+regardless of cost or confidence. Tuning these thresholds per plant/capability
 is the open question docs/007-governance.md already flags; this is the
 MVP starting policy, not a final one.
 """
@@ -33,9 +39,10 @@ CAPABILITY_RISK_CLASS: Dict[Capability, str] = {
     Capability.CREATE_EXTERNAL_PO: "high",
 }
 
-# Confidence required to earn Tier 0 within a risk class. "high" has no
-# entry: it can never be Tier 0 regardless of confidence.
-_TIER0_CONFIDENCE_THRESHOLD = {"low": 0.85, "medium": 0.97}
+# Financial exposure bands, documentation/05_Product_Bible.md section 5.
+_LOW_EXPOSURE_MAX_USD = 25_000
+_HIGH_EXPOSURE_MIN_USD = 250_000
+_TIER0_CONFIDENCE_THRESHOLD = 0.90
 
 
 def promote_policy_tier(capability: Capability, target_risk_class: str) -> None:
@@ -43,12 +50,11 @@ def promote_policy_tier(capability: Capability, target_risk_class: str) -> None:
     CAPABILITY_RISK_CLASS[capability] = target_risk_class
 
 
-def assign_policy_tier(capability: Capability, confidence: float) -> PolicyTier:
-    risk_class = CAPABILITY_RISK_CLASS.get(capability, "high")  # unknown capability: fail safe
-    if risk_class == "high":
+def assign_policy_tier(capability: Capability, confidence: float, estimated_cost_usd: float) -> PolicyTier:
+    is_critical = CAPABILITY_RISK_CLASS.get(capability, "high") == "high"  # unknown capability: fail safe
+    if is_critical or estimated_cost_usd > _HIGH_EXPOSURE_MIN_USD:
         return PolicyTier.EXECUTIVE_APPROVAL
-    threshold = _TIER0_CONFIDENCE_THRESHOLD.get(risk_class, 0.97)
-    if confidence >= threshold:
+    if estimated_cost_usd < _LOW_EXPOSURE_MAX_USD and confidence > _TIER0_CONFIDENCE_THRESHOLD:
         return PolicyTier.AUTONOMOUS
     return PolicyTier.APPROVAL_REQUIRED
 

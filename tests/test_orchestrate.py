@@ -75,17 +75,28 @@ def test_priority_score_orders_by_safety_first():
 
 
 def test_governance_high_risk_capability_never_tier0():
-    tier = assign_policy_tier(Capability.CREATE_PURCHASE_ORDER, confidence=0.999)
+    # "Critical" capabilities are Tier 2 regardless of cost or confidence.
+    tier = assign_policy_tier(Capability.CREATE_PURCHASE_ORDER, confidence=0.999, estimated_cost_usd=5_000)
     assert tier == PolicyTier.EXECUTIVE_APPROVAL
 
 
 def test_governance_low_risk_high_confidence_is_autonomous():
-    tier = assign_policy_tier(Capability.NOTIFY_OPERATOR, confidence=0.95)
+    tier = assign_policy_tier(Capability.NOTIFY_OPERATOR, confidence=0.95, estimated_cost_usd=1_000)
     assert tier == PolicyTier.AUTONOMOUS
 
 
 def test_governance_low_risk_low_confidence_needs_approval():
-    tier = assign_policy_tier(Capability.NOTIFY_OPERATOR, confidence=0.5)
+    tier = assign_policy_tier(Capability.NOTIFY_OPERATOR, confidence=0.5, estimated_cost_usd=1_000)
+    assert tier == PolicyTier.APPROVAL_REQUIRED
+
+
+def test_governance_medium_cost_band_never_reaches_tier0():
+    # The headline behavior change from the old risk-class model: under the
+    # old model this would have been AUTONOMOUS (NOTIFY_OPERATOR is "low"
+    # risk class, 0.95 clears the old 0.85 threshold). Under the new
+    # dollar-threshold matrix, the $25k-$250k medium band never reaches
+    # Tier 0 (documentation/05_Product_Bible.md's row targets Tier 1).
+    tier = assign_policy_tier(Capability.NOTIFY_OPERATOR, confidence=0.95, estimated_cost_usd=100_000)
     assert tier == PolicyTier.APPROVAL_REQUIRED
 
 

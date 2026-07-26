@@ -109,10 +109,13 @@ async def test_marketplace_connector_freight_quote():
 def test_governance_policy_tier_promotion():
     cap = Capability.CREATE_EXTERNAL_PO
     assert CAPABILITY_RISK_CLASS[cap] == "high"
-    assert assign_policy_tier(cap, 0.99) == PolicyTier.EXECUTIVE_APPROVAL
+    # Still "high"/critical here, so any cost forces Tier 2 regardless.
+    assert assign_policy_tier(cap, 0.99, estimated_cost_usd=5_000) == PolicyTier.EXECUTIVE_APPROVAL
 
     # Promote capability from high to medium risk class
     promote_policy_tier(cap, "medium")
 
     assert CAPABILITY_RISK_CLASS[cap] == "medium"
-    assert assign_policy_tier(cap, 0.98) == PolicyTier.AUTONOMOUS
+    # No longer critical, but cost still gates Tier 0 independent of the
+    # risk-class promotion — must also be under the $25k low-exposure band.
+    assert assign_policy_tier(cap, 0.98, estimated_cost_usd=10_000) == PolicyTier.AUTONOMOUS

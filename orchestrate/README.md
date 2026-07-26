@@ -21,9 +21,11 @@ state_machine.py   IncidentStateMachine — enforces docs/005's transition graph
 priority.py        compute_priority_score() — safety-weighted MVP scoring
 preemption.py       PreemptionEngine — one occupant per line_id, signals
                      the lower-priority occupant's preempt_event on bump
-governance.py        assign_policy_tier() (capability risk class x
-                     confidence — never Tier 0 for high-risk capabilities
-                     regardless of confidence) + ApprovalQueue (Tier 1/2
+governance.py        assign_policy_tier() (financial exposure x confidence
+                     x capability risk class — never Tier 0 for high-risk/
+                     "critical" capabilities or exposure over $250k
+                     regardless of confidence; documentation/05_Product_Bible.md's
+                     dollar-threshold matrix) + ApprovalQueue (Tier 1/2
                      human-in-the-loop, backend/app/routers/incidents.py)
 agent_runner.py       bridges to the Phase 2 agent roster (agents/) —
                      publishes StageRequested + the agent's AgentCompleted
@@ -65,9 +67,10 @@ Preempted for good. Verified end-to-end in
 the line frees.
 
 **Still open**:
-- Governance risk-class-to-tier mapping (`governance.py`'s
-  `CAPABILITY_RISK_CLASS`) is a starting policy, not a tuned one — same
-  open question docs/007-governance.md already flags.
+- Governance's dollar-threshold bands (`governance.py`'s
+  `_LOW_EXPOSURE_MAX_USD`/`_HIGH_EXPOSURE_MIN_USD`) and the
+  `CAPABILITY_RISK_CLASS` -> "critical" mapping are a starting policy, not
+  a tuned one — same open question docs/007-governance.md already flags.
 
 ## Local ADK setup — live and activated
 
