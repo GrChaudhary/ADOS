@@ -9,6 +9,7 @@
 // per-endpoint casing table this was verified against.
 
 const TOKEN_KEY = "ados_service_token"; // same localStorage key as frontend/app.js and frontend/demo.js
+const TOKEN_CHANGED_EVENT = "ados-token-changed";
 const PROXY_BASE = "/api/backend"; // next.config.ts rewrites this to the real backend's /api/v1
 const BACKEND_ORIGIN = process.env.NEXT_PUBLIC_ADOS_BACKEND_ORIGIN ?? "http://localhost:8000";
 
@@ -19,6 +20,15 @@ export function getToken(): string {
 
 export function setToken(value: string): void {
   window.localStorage.setItem(TOKEN_KEY, value);
+  // Same-tab localStorage writes don't fire the native `storage` event (only
+  // other tabs get that) - dispatch our own so components like useHasToken()
+  // can react to a token entered in this same tab/session.
+  window.dispatchEvent(new Event(TOKEN_CHANGED_EVENT));
+}
+
+export function subscribeToTokenChanges(callback: () => void): () => void {
+  window.addEventListener(TOKEN_CHANGED_EVENT, callback);
+  return () => window.removeEventListener(TOKEN_CHANGED_EVENT, callback);
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {

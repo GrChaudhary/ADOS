@@ -2,15 +2,14 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { getToken, setToken } from "@/lib/api";
 
 export function HeaderTelemetryBar() {
-  const [token, setTokenState] = useState("");
-
-  useEffect(() => {
-    setTokenState(getToken());
-  }, []);
+  // Lazy initializer (not an effect) - getToken() itself guards on
+  // `typeof window`, so this is safe during SSR and reads the real value
+  // on the client's first render without an extra effect+setState pass.
+  const [token, setTokenState] = useState(getToken);
 
   return (
     <header className="flex items-center justify-between border-b border-border-subtle bg-card px-6 py-3">
