@@ -32,8 +32,8 @@ def run_demo():
 
     context = IncidentContext(
         incident_id="INC-2026-0722-001",
-        plant_id="FAC-P1-L3",
-        line_id="Line 3",
+        plant_id="FAC-P04-L2",
+        line_id="Line 2",
         severity="HIGH"
     )
     print(f"\n[INCIDENT STARTED] ID: {context.incident_id} | Plant: {context.plant_id} | Line: {context.line_id}\n")
@@ -50,7 +50,7 @@ def run_demo():
     # STAGE 2: Understanding (CAD & Spec Comparison Agent)
     print("\n--- 2. Understanding Stage: CAD & Spec Comparison Agent ---")
     cad_agent = CADSpecAgent(knowledge_graph=kg)
-    stage2_in = StageInput(stage_name="Reasoning", payload={"part_number": "MH-100", "measured_value": out1.result['measured_value']})
+    stage2_in = StageInput(stage_name="Reasoning", payload={"part_number": "MH-8820", "measured_value": out1.result['measured_value']})
     out2, env2 = cad_agent.run(context, stage2_in)
     print(f"Confidence: {out2.confidence}")
     print(f"Result: IsViolation={out2.result['is_violation']}, Nominal={out2.result['nominal']}mm, Limits={out2.result['tolerance_range']}")
@@ -68,7 +68,7 @@ def run_demo():
     # STAGE 4A: Candidate Generation (Substitution Agent)
     print("\n--- 4A. Candidate Generation Stage: Substitution Agent ---")
     sub_agent = SubstitutionAgent(knowledge_graph=kg)
-    stage4a_in = StageInput(stage_name="CandidateGeneration", payload={"part_number": "MH-100"})
+    stage4a_in = StageInput(stage_name="CandidateGeneration", payload={"part_number": "MH-8820"})
     out4a, env4a = sub_agent.run(context, stage4a_in)
     print(f"Confidence: {out4a.confidence}")
     if out4a.result["has_approved_substitute"]:
@@ -98,7 +98,7 @@ def run_demo():
     stage6_in = StageInput(stage_name="Execution", payload={"selected_option": top_opt["option_id"]})
     out6, env6 = reroute_agent.run(context, stage6_in)
     print(f"Confidence: {out6.confidence}")
-    print(f"Capacity Reserved on Line 3: {out6.result['capacity_reserved']}")
+    print(f"Capacity Reserved on Line 2: {out6.result['capacity_reserved']}")
     print("Execution Plan:")
     for step in out6.result["execution_steps"]:
         print(f"   {step}")

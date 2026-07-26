@@ -123,53 +123,63 @@ class EnterpriseAssetModel:
             self._seed_ground_truth()
 
     def _seed_ground_truth(self) -> None:
-        """Seeds ground truth operational asset model for ADOS manufacturing plants."""
-        # Line 1 (Assembly & Cooling)
-        plc_robot1 = PLC(plcId="PLC-ROBOT-01", name="Robot Arm Controller PLC", ipAddress="192.168.10.11", machineId="ROBOT-ARM-01", sensors=[])
-        m_robot1 = Machine(machineId="ROBOT-ARM-01", name="Robot Arm Assembly Station", machineType="ROBOTIC_ARM", line_id="Line 1", plcs=[plc_robot1])
-        
-        plc_assy1 = PLC(plcId="PLC-ASSY-01", name="Assembly Conveyor Controller PLC", ipAddress="192.168.10.12", machineId="ASSY-LINE-01", sensors=[])
-        m_assy1 = Machine(machineId="ASSY-LINE-01", name="Assembly Line Conveyor", machineType="CONVEYOR", line_id="Line 1", plcs=[plc_assy1])
+        """Seeds ground truth operational asset model for Nova Motors Plant 04
+        (Austin, TX) per documentation/02_Demo_Dataset_and_Digital_Twin.md."""
+        # Line 1 (Stator & Rotor Cell)
+        plc_stator = PLC(plcId="PLC-STATOR-01", name="Stator Winding Controller PLC", ipAddress="192.168.10.11", machineId="STATOR-WIND-01", sensors=[])
+        m_stator = Machine(machineId="STATOR-WIND-01", name="Stator Winding Station", machineType="WINDING", line_id="Line 1", plcs=[plc_stator])
 
-        line1 = Line(lineId="Line 1", name="Line 1 Assembly & Cooling", factory_id="FAC-P1", machines=[m_robot1, m_assy1])
+        plc_rotor = PLC(plcId="PLC-ROTOR-01", name="Rotor Assembly Controller PLC", ipAddress="192.168.10.12", machineId="ROTOR-ASSY-01", sensors=[])
+        m_rotor = Machine(machineId="ROTOR-ASSY-01", name="Rotor Assembly Cell", machineType="ASSEMBLY", line_id="Line 1", plcs=[plc_rotor])
 
-        # Line 2 (Machining & Fitting - Hero Incident Line)
-        sns_vib_101 = Sensor(sensorId="SNS-VIB-101", name="CNC 101 Vibration Sensor", sensorType="vibration", unit="mm/s", plcId="PLC-CNC-101", currentValue=1.2)
-        plc_cnc_101 = PLC(plcId="PLC-CNC-101", name="CNC 101 Controller PLC", ipAddress="192.168.10.21", machineId="CNC-101", sensors=[sns_vib_101])
-        m_cnc_101 = Machine(machineId="CNC-101", name="Precision CNC Machining Center 101", machineType="CNC_MILL", line_id="Line 2", plcs=[plc_cnc_101])
+        line1 = Line(lineId="Line 1", name="Line 1 Stator & Rotor Cell", factory_id="FAC-P04", machines=[m_stator, m_rotor])
 
-        plc_insp_01 = PLC(plcId="PLC-INSP-01", name="Inspection Cell Controller PLC", ipAddress="192.168.10.22", machineId="INSP-CELL-01", sensors=[])
-        m_insp_01 = Machine(machineId="INSP-CELL-01", name="Automated Optical Inspection Station 1", machineType="INSPECTION", line_id="Line 2", plcs=[plc_insp_01])
+        # Line 2 (Housing Machining & Inspection - Hero Incident Line)
+        sns_vib_02 = Sensor(sensorId="SENS-VIB-02", name="Spindle Vibration Sensor", sensorType="vibration", unit="mm/s", plcId="PLC-CNC-102", currentValue=4.8)
+        sns_temp_04 = Sensor(sensorId="SENS-TEMP-04", name="Bearing Temperature Sensor", sensorType="temperature", unit="C", plcId="PLC-CNC-102", currentValue=58.2)
+        plc_cnc_101 = PLC(plcId="PLC-CNC-101", name="CNC-101 Controller PLC", ipAddress="192.168.10.21", machineId="CNC-101", sensors=[])
+        m_cnc_101 = Machine(machineId="CNC-101", name="Pre-Roughing Spindle (Tooling Assembly T-882)", machineType="CNC_MILL", line_id="Line 2", plcs=[plc_cnc_101])
 
-        line2 = Line(lineId="Line 2", name="Line 2 Machining & Fitting", factory_id="FAC-P1", machines=[m_cnc_101, m_insp_01])
+        plc_cnc_102 = PLC(plcId="PLC-CNC-102", name="CNC-102 Controller PLC (Siemens S7-1500)", ipAddress="192.168.10.42", machineId="CNC-102", sensors=[sns_vib_02, sns_temp_04])
+        m_cnc_102 = Machine(machineId="CNC-102", name="Precision Finish Spindle", machineType="CNC_MILL", line_id="Line 2", plcs=[plc_cnc_102])
 
-        # Line 3 (High-Precision Housing Assembly)
-        sns_vib = Sensor(sensorId="SNS-VIB-45", name="Spindle Bearing Vibration Sensor", sensorType="vibration", unit="mm/s", plcId="PLC-CNC-03", currentValue=4.8)
-        sns_disp = Sensor(sensorId="SNS-DISP-01", name="Z-Axis Tool Offset Displacement Sensor", sensorType="displacement", unit="mm", plcId="PLC-CNC-03", currentValue=0.035)
-        plc_cnc = PLC(plcId="PLC-CNC-03", name="Line 3 CNC Spindle Controller PLC", ipAddress="192.168.10.3", machineId="CNC-SPINDLE-03", sensors=[sns_vib, sns_disp])
-        cnc_machine = Machine(machineId="CNC-SPINDLE-03", name="Precision CNC Spindle Station 3", machineType="CNC_MILL", line_id="Line 3", plcs=[plc_cnc])
+        plc_rob_401 = PLC(plcId="PLC-ROB-401", name="Robotic Transfer Arm Controller PLC", ipAddress="192.168.10.43", machineId="ROB-401", sensors=[])
+        m_rob_401 = Machine(machineId="ROB-401", name="6-Axis Robotic Transfer Arm", machineType="ROBOTIC_ARM", line_id="Line 2", plcs=[plc_rob_401])
 
-        line3 = Line(lineId="Line 3", name="Line 3 High-Precision Housing Assembly", factory_id="FAC-P1", machines=[cnc_machine])
+        sns_opt_01 = Sensor(sensorId="SENS-OPT-01", name="Laser Optical Micrometer", sensorType="displacement", unit="mm", plcId="PLC-CMM-02", currentValue=0.031)
+        plc_cmm_02 = PLC(plcId="PLC-CMM-02", name="CMM-02 Controller PLC", ipAddress="192.168.10.44", machineId="CMM-02", sensors=[sns_opt_01])
+        m_cmm_02 = Machine(machineId="CMM-02", name="Automated Laser Coordinate Measurement Machine", machineType="INSPECTION", line_id="Line 2", plcs=[plc_cmm_02])
 
-        # Warehouse (Inventory Staging)
-        plc_wh = PLC(plcId="PLC-WH-01", name="Warehouse Staging Controller PLC", ipAddress="192.168.10.99", machineId="STAGING-BAY-01", sensors=[])
-        m_wh = Machine(machineId="STAGING-BAY-01", name="Warehouse Staging Bay 1", machineType="STAGING", line_id="Warehouse", plcs=[plc_wh])
+        line2 = Line(lineId="Line 2", name="Line 2 Housing Machining & Inspection", factory_id="FAC-P04", machines=[m_cnc_101, m_cnc_102, m_rob_401, m_cmm_02])
 
-        warehouse = Line(lineId="Warehouse", name="Warehouse Inventory Staging", factory_id="FAC-P1", machines=[m_wh])
+        # Line 3 (Final Drive Testing & Pack Out)
+        plc_test = PLC(plcId="PLC-TEST-01", name="Final Drive Test Bench Controller PLC", ipAddress="192.168.10.31", machineId="TEST-BENCH-01", sensors=[])
+        m_test = Machine(machineId="TEST-BENCH-01", name="Final Drive Test Bench", machineType="TEST_STAND", line_id="Line 3", plcs=[plc_test])
+
+        plc_pack = PLC(plcId="PLC-PACK-01", name="Pack-Out Station Controller PLC", ipAddress="192.168.10.32", machineId="PACKOUT-01", sensors=[])
+        m_pack = Machine(machineId="PACKOUT-01", name="Pack-Out Station", machineType="PACKAGING", line_id="Line 3", plcs=[plc_pack])
+
+        line3 = Line(lineId="Line 3", name="Line 3 Final Drive Testing & Pack Out", factory_id="FAC-P04", machines=[m_test, m_pack])
+
+        # Warehouse (Central Warehouse Automated Storage & Retrieval)
+        plc_wh = PLC(plcId="PLC-WH-01", name="Warehouse ASRS Controller PLC", ipAddress="192.168.10.99", machineId="ASRS-01", sensors=[])
+        m_wh = Machine(machineId="ASRS-01", name="Central Warehouse ASRS Bay", machineType="STAGING", line_id="Warehouse", plcs=[plc_wh])
+
+        warehouse = Line(lineId="Warehouse", name="Central Warehouse (Austin ASRS)", factory_id="FAC-P04", machines=[m_wh])
 
         # Factories
-        factory1 = Factory(factoryId="FAC-P1", name="Plant 1 Main Assembly Facility", plant_id="PLANT-NA-01", lines=[line1, line2, line3, warehouse])
+        factory1 = Factory(factoryId="FAC-P04", name="Plant 04 Powertrain Assembly Factory", plant_id="PLANT-04-AUSTIN", lines=[line1, line2, line3, warehouse])
 
         # Plants
-        plant_na = Plant(plantId="PLANT-NA-01", name="North America Operations Division", region="North America", factories=[factory1])
+        plant_austin = Plant(plantId="PLANT-04-AUSTIN", name="Nova Motors Austin Operations", region="North America", factories=[factory1])
 
-        self.plants[plant_na.plant_id] = plant_na
+        self.plants[plant_austin.plant_id] = plant_austin
 
         # Components & Products
-        comp_housing = Component(partNumber="MH-100", name="Motor Housing Part", specId="SP-100", approvedSupplierIds=["SUP-201", "SUP-202"])
-        prod_housing = AssetProduct(sku="PROD-100", name="Motor Housing", lineId="Line 2", components=[comp_housing])
+        comp_housing = Component(partNumber="MH-8820", name="Motor Housing", specId="SP-8820", approvedSupplierIds=["SUP-301", "SUP-302"])
+        prod_drive_unit = AssetProduct(sku="EV-POW-800V", name="800V High-Performance Electric Drive Unit", lineId="Line 2", components=[comp_housing])
 
-        self.products[prod_housing.sku] = prod_housing
+        self.products[prod_drive_unit.sku] = prod_drive_unit
 
     def resolve_lineage(self, asset_id: str) -> Optional[AssetLineage]:
         """

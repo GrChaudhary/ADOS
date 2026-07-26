@@ -22,9 +22,9 @@ def test_digital_twin_store_all_lines():
     line_ids = {l.line_id for l in lines}
     assert line_ids == {"Line 1", "Line 2", "Line 3", "Warehouse"}
 
-    line3 = store.get_line_state("Line 3")
-    assert line3 is not None
-    assert line3.status == "DEGRADED"
+    line2 = store.get_line_state("Line 2")
+    assert line2 is not None
+    assert line2.status == "DEGRADED"
 
 
 def test_get_digital_twin_lines_unauthorized(client):
@@ -47,5 +47,5 @@ def test_get_digital_twin_lines_success(client):
     assert "Line 3" in line_ids
     assert "Warehouse" in line_ids
 
-    line3 = next(item for item in data if item["lineId"] == "Line 3")
-    assert line3["status"] == "DEGRADED"
+    line2 = next(item for item in data if item["lineId"] == "Line 2")
+    assert line2["status"] == "DEGRADED"

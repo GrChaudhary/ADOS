@@ -63,7 +63,7 @@ class OperationalIntelligenceEngine:
         connector_failures = 0
 
         # 5. Inventory soft locks & active reservations
-        twin_state = self.digital_twin.get_line_state("FAC-P1-L3")
+        twin_state = self.digital_twin.get_line_state("FAC-P04-L3")
         active_reservations = twin_state.active_reservations if twin_state else []
         inventory_locks_count = len(active_reservations)
 

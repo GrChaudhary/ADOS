@@ -54,23 +54,23 @@ def context():
 # --- 1. Knowledge Graph Tests ---
 
 def test_knowledge_graph_get_specification(kg):
-    spec = kg.getSpecification("MH-100")
+    spec = kg.getSpecification("MH-8820")
     assert spec is not None
-    assert spec.spec_id == "SP-100"
+    assert spec.spec_id == "SP-8820"
     assert spec.nominal == 45.0
-    assert spec.tolerance_plus == 0.05
+    assert spec.tolerance_plus == 0.020
 
 
 def test_knowledge_graph_find_affected_products(kg):
-    products = kg.findAffectedProducts("SP-100")
+    products = kg.findAffectedProducts("SP-8820")
     assert len(products) > 0
-    assert any(p.sku == "PROD-100" for p in products)
+    assert any(p.sku == "EV-POW-800V" for p in products)
 
 
 def test_knowledge_graph_find_approved_substitutes(kg):
-    substitutes = kg.findApprovedSubstitutes("MH-100")
+    substitutes = kg.findApprovedSubstitutes("MH-8820")
     assert len(substitutes) > 0
-    assert any(p.part_number == "MH-100B" for p in substitutes)
+    assert any(p.part_number == "MH-8820-PC" for p in substitutes)
 
 
 # --- 2. Causal Graph Tests ---
@@ -98,11 +98,11 @@ def test_causal_graph_recalibration_loop(cg):
 # --- 3. Digital Twin Tests ---
 
 def test_digital_twin_operations(dt):
-    line_state = dt.get_line_state("Line 3")
+    line_state = dt.get_line_state("Line 2")
     assert line_state is not None
     assert line_state.status == "DEGRADED"
 
-    res_ok = dt.reserve_line_capacity("Line 3", "INC-TEST-9901", units=100, duration_hrs=2)
+    res_ok = dt.reserve_line_capacity("Line 2", "INC-TEST-9901", units=100, duration_hrs=2)
     assert res_ok is True
 
 
@@ -127,15 +127,15 @@ def test_causal_isolation_agent_end_to_end(context, kg, cg):
     output, envelope = agent.run(context, stage_in)
 
     assert output.confidence >= 0.72
-    assert output.result["primary_root_cause"] == "Tolerance drift on Line 2 CNC-101"
-    assert "PROD-100" in output.result["affected_products"]
+    assert output.result["primary_root_cause"] == "Tolerance drift on Line 2 CNC-102 (Precision Finish Spindle)"
+    assert "EV-POW-800V" in output.result["affected_products"]
     assert len(output.evidence) >= 2
     assert len(output.alternatives) >= 2
 
 
 def test_cad_spec_agent(context, kg):
     agent = CADSpecAgent(knowledge_graph=kg)
-    stage_in = StageInput(stage_name="Reasoning", payload={"part_number": "MH-100", "measured_value": 45.08})
+    stage_in = StageInput(stage_name="Reasoning", payload={"part_number": "MH-8820", "measured_value": 45.08})
     output, envelope = agent.run(context, stage_in)
 
     assert output.result["is_violation"] is True
@@ -144,11 +144,11 @@ def test_cad_spec_agent(context, kg):
 
 def test_substitution_agent(context, kg):
     agent = SubstitutionAgent(knowledge_graph=kg)
-    stage_in = StageInput(stage_name="CandidateGeneration", payload={"part_number": "MH-100"})
+    stage_in = StageInput(stage_name="CandidateGeneration", payload={"part_number": "MH-8820"})
     output, envelope = agent.run(context, stage_in)
 
     assert output.result["has_approved_substitute"] is True
-    assert output.result["top_candidate"]["target_part_number"] == "MH-100B"
+    assert output.result["top_candidate"]["target_part_number"] == "MH-8820-PC"
 
 
 def test_parameter_adjustment_agent(context, dt):

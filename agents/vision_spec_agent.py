@@ -17,8 +17,8 @@ class VisionSpecAgent(BaseAgent):
         vision_data = stage_input.payload.get("vision_data", {})
         telemetry = stage_input.payload.get("telemetry", {})
 
-        measured_val = vision_data.get("measured_bore_diameter_mm", 45.08)
-        defect_detected = measured_val > 45.05 or measured_val < 44.95
+        measured_val = vision_data.get("measured_bore_diameter_mm", 45.031)
+        defect_detected = measured_val > 45.020 or measured_val < 44.980
 
         result = {
             "defect_detected": defect_detected,
@@ -33,8 +33,8 @@ class VisionSpecAgent(BaseAgent):
         evidence = [
             EvidenceItem(
                 source_type="TELEMETRY",
-                reference_id=f"VIS-CAM-LINE3-{context.line_id}",
-                description=f"High-speed optical camera measurement: {measured_val}mm (limit: +/-0.05mm)",
+                reference_id=f"VIS-CAM-{context.line_id}",
+                description=f"High-speed optical camera measurement: {measured_val}mm (limit: +/-0.020mm)",
                 data={"measured_val": measured_val, "raw_telemetry": telemetry}
             )
         ]

@@ -16,13 +16,13 @@ from knowledge import EnterpriseAssetModel, KnowledgeGraph, AssetLineage
 def test_enterprise_asset_model_structure():
     eam = EnterpriseAssetModel()
 
-    assert "PLANT-NA-01" in eam.plants
-    plant = eam.plants["PLANT-NA-01"]
-    assert plant.name == "North America Operations Division"
+    assert "PLANT-04-AUSTIN" in eam.plants
+    plant = eam.plants["PLANT-04-AUSTIN"]
+    assert plant.name == "Nova Motors Austin Operations"
     assert len(plant.factories) > 0
 
     factory = plant.factories[0]
-    assert factory.factory_id == "FAC-P1"
+    assert factory.factory_id == "FAC-P04"
     assert len(factory.lines) == 4
 
     line_ids = [l.line_id for l in factory.lines]
@@ -31,45 +31,43 @@ def test_enterprise_asset_model_structure():
     assert "Line 3" in line_ids
     assert "Warehouse" in line_ids
 
-    line3 = next(l for l in factory.lines if l.line_id == "Line 3")
-    assert len(line3.machines) > 0
+    line2 = next(l for l in factory.lines if l.line_id == "Line 2")
+    assert len(line2.machines) == 4
 
-    machine = line3.machines[0]
-    assert machine.machine_id == "CNC-SPINDLE-03"
+    machine = next(m for m in line2.machines if m.machine_id == "CNC-102")
     assert len(machine.plcs) > 0
 
     plc = machine.plcs[0]
-    assert plc.plc_id == "PLC-CNC-03"
+    assert plc.plc_id == "PLC-CNC-102"
     assert len(plc.sensors) > 0
 
-    sensor = plc.sensors[0]
-    assert sensor.sensor_id == "SNS-VIB-45"
+    sensor_ids = [s.sensor_id for s in plc.sensors]
+    assert "SENS-VIB-02" in sensor_ids
 
-    assert "PROD-100" in eam.products
-    prod = eam.products["PROD-100"]
-    assert prod.sku == "PROD-100"
+    assert "EV-POW-800V" in eam.products
+    prod = eam.products["EV-POW-800V"]
+    assert prod.sku == "EV-POW-800V"
     assert prod.line_id == "Line 2"
-    assert prod.components[0].part_number == "MH-100"
-
+    assert prod.components[0].part_number == "MH-8820"
 
 
 def test_asset_lineage_resolution():
     eam = EnterpriseAssetModel()
 
     # Resolve sensor lineage
-    lineage = eam.resolve_lineage("SNS-VIB-45")
+    lineage = eam.resolve_lineage("SENS-VIB-02")
     assert lineage is not None
-    assert lineage.plant_id == "PLANT-NA-01"
-    assert lineage.factory_id == "FAC-P1"
-    assert lineage.line_id == "Line 3"
-    assert lineage.machine_id == "CNC-SPINDLE-03"
-    assert lineage.sensor_id == "SNS-VIB-45"
-    assert "North America Operations Division > Plant 1 Main Assembly Facility > Line 3 High-Precision Housing Assembly > Precision CNC Spindle Station 3 > Line 3 CNC Spindle Controller PLC > Spindle Bearing Vibration Sensor" == lineage.lineage_path
+    assert lineage.plant_id == "PLANT-04-AUSTIN"
+    assert lineage.factory_id == "FAC-P04"
+    assert lineage.line_id == "Line 2"
+    assert lineage.machine_id == "CNC-102"
+    assert lineage.sensor_id == "SENS-VIB-02"
+    assert "Nova Motors Austin Operations > Plant 04 Powertrain Assembly Factory > Line 2 Housing Machining & Inspection > Precision Finish Spindle > CNC-102 Controller PLC (Siemens S7-1500) > Spindle Vibration Sensor" == lineage.lineage_path
 
 
 def test_knowledge_graph_asset_model_delegation():
     kg = KnowledgeGraph()
-    lineage = kg.resolveAssetLineage("SNS-VIB-45")
+    lineage = kg.resolveAssetLineage("SENS-VIB-02")
 
     assert lineage is not None
-    assert lineage.machine_id == "CNC-SPINDLE-03"
+    assert lineage.machine_id == "CNC-102"

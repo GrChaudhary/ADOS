@@ -38,7 +38,7 @@ async def get_promotion_candidates():
 
 class MemoryRagDemoRequest(BaseModel):
     defect_type: str = "dimensional fault"
-    plant_id: str = "FAC-P1-L3"
+    plant_id: str = "FAC-P04-L3"
     line_id: str = "Line 3"
 
 

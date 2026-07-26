@@ -26,7 +26,7 @@ def run_demo():
 
     # STEP 1: Decision Memory Query & Search
     print("\n--- 1. Decision Memory Search (Historical Precedents) ---")
-    query = DecisionMemoryQuery(defectType="dimensional fault", plantId="FAC-P1-L3", limit=3)
+    query = DecisionMemoryQuery(defectType="dimensional fault", plantId="FAC-P04-L2", limit=3)
     search_res = index.search(query)
     print(f"Query: DefectType='{query.defect_type}', PlantId='{query.plant_id}'")
     print(f"Matches Found: {search_res.total_matches} historical incident records")
@@ -48,8 +48,8 @@ def run_demo():
     causal_agent = CausalIsolationAgent(memory_index=index)
     context = IncidentContext(
         incident_id="INC-2026-0723-999",
-        plant_id="FAC-P1-L3",
-        line_id="Line 3",
+        plant_id="FAC-P04-L2",
+        line_id="Line 2",
         severity="HIGH"
     )
     stage_in = StageInput(stage_name="Reasoning", payload={"defect_type": "dimensional fault"})

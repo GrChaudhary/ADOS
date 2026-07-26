@@ -55,8 +55,8 @@ def test_kpi_engine_metrics_derivation(kpi_eng):
     assert kpis.resolved_incidents == 100
     assert kpis.mttr_avg_minutes > 0
     assert kpis.revenue_protected_usd > 0
-    assert kpis.autonomy_index == 0.59
-    assert kpis.recommendation_acceptance_rate == 0.9024
+    assert kpis.autonomy_index == 0.52
+    assert kpis.recommendation_acceptance_rate == 0.8542
 
 
 def test_kpi_engine_what_if_simulation(kpi_eng):
@@ -85,24 +85,24 @@ def test_recommendation_engine_generation(rec_eng):
 def test_edi_pattern_analysis(edi_eng):
     clusters = edi_eng.analyze_root_cause_clusters()
     assert len(clusters) > 0
-    assert clusters[0]["condition_id"] == "COND-TOL-DRIFT"
+    assert clusters[0]["condition_id"] == "COND-TOOL-WEAR"
 
     variance = edi_eng.analyze_cost_variance()
     assert variance["total_estimated_cost_usd"] > variance["total_actual_cost_usd"]
     assert variance["net_revenue_protected_usd"] > 0
 
     benchmarks = edi_eng.generate_plant_benchmarks()
-    assert "FAC-P1-L3" in benchmarks
-    assert benchmarks["FAC-P1-L3"]["autonomy_index"] > 0
+    assert "FAC-P04-L2" in benchmarks
+    assert benchmarks["FAC-P04-L2"]["autonomy_index"] > 0
 
 
 # --- 4. Predictive Risk Analytics Tests ---
 
 def test_predictive_risk_evaluation(risk_eng):
-    signal = risk_eng.evaluate_line_risk("FAC-P1-L3", "Line 3")
+    signal = risk_eng.evaluate_line_risk("FAC-P04-L2", "Line 2")
 
-    assert signal.plant_id == "FAC-P1-L3"
-    assert signal.line_id == "Line 3"
+    assert signal.plant_id == "FAC-P04-L2"
+    assert signal.line_id == "Line 2"
     assert 0.0 <= signal.risk_score <= 1.0
     assert signal.risk_level in ["CRITICAL", "ELEVATED", "NORMAL"]
 
@@ -122,7 +122,7 @@ def test_copilot_kpi_query(copilot):
 
 
 def test_copilot_supplier_query(copilot):
-    resp = copilot.ask("Show me supplier resilience metrics for SUP-201")
+    resp = copilot.ask("Show me supplier resilience metrics for SUP-301")
 
     assert resp.confidence >= 0.90
     assert "Supplier Resilience" in resp.answer

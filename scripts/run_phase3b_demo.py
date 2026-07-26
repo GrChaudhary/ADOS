@@ -87,7 +87,7 @@ def run_demo():
     print("\n--- 6. Natural Language Executive Copilot Q&A ---")
     sample_queries = [
         "What is our current MTTR and Autonomy Index?",
-        "Show me supplier resilience metrics for SUP-201",
+        "Show me supplier resilience metrics for SUP-301",
         "What if we automate CNC tolerance drift decisions?",
         "Which manufacturing lines are currently at highest risk?"
     ]

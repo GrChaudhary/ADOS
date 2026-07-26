@@ -25,18 +25,22 @@ class _Category(NamedTuple):
     supplier_id: Optional[str]
     capability: Capability
     base_weight: float
+    sample_weight: float  # relative frequency, per documentation/02's 100-record breakdown
 
 
 # Mirrors the 8 causal conditions seeded in knowledge/causal_graph.py.
+# sample_weight distribution approximates documentation/02_Demo_Dataset_and_Digital_Twin.md's
+# "Breakdown of Historical Incidents": 42 tolerance/tool-wear, 21 environmental,
+# 18 supplier material inclusion, 12 spindle vibration, 7 robot/calibration.
 CATEGORIES: List[_Category] = [
-    _Category("COND-TOL-DRIFT", "Tolerance drift", "FAC-P1-L2", "Line 2", "SUP-201", Capability.UPDATE_MES, 0.72),
-    _Category("COND-HUMIDITY-SPIKE", "Humidity spike", "FAC-P1-L3", "Line 3", None, Capability.NOTIFY_OPERATOR, 0.55),
-    _Category("COND-SUPPLIER-BATCH", "Supplier defects", "FAC-P1-L2", "Line 2", "SUP-201", Capability.RESERVE_INVENTORY, 0.66),
-    _Category("COND-TOOL-WEAR", "Tool wear", "FAC-P1-L2", "Line 2", None, Capability.UPDATE_MES, 0.63),
-    _Category("COND-CALIBRATION-DRIFT", "Calibration drift", "FAC-P1-L3", "Line 3", None, Capability.SCHEDULE_MAINTENANCE, 0.60),
-    _Category("COND-MACHINE-VIBRATION", "Machine vibration", "FAC-P1-L1", "Line 1", None, Capability.SCHEDULE_MAINTENANCE, 0.58),
-    _Category("COND-MATERIAL-MISMATCH", "Material mismatch", "FAC-P1-L3", "Line 3", "SUP-203", Capability.RESERVE_INVENTORY, 0.61),
-    _Category("COND-SHIPPING-DELAY", "Shipping delay", "FAC-P1-WH", "Warehouse", "SUP-205", Capability.CREATE_PURCHASE_ORDER, 0.55),
+    _Category("COND-TOL-DRIFT", "Tolerance drift", "FAC-P04-L2", "Line 2", "SUP-301", Capability.UPDATE_MES, 0.72, 21.0),
+    _Category("COND-TOOL-WEAR", "Tool wear", "FAC-P04-L2", "Line 2", None, Capability.UPDATE_MES, 0.63, 21.0),
+    _Category("COND-HUMIDITY-SPIKE", "Humidity spike", "FAC-P04-L2", "Line 2", None, Capability.NOTIFY_OPERATOR, 0.55, 21.0),
+    _Category("COND-SUPPLIER-BATCH", "Supplier defects", "FAC-P04-L2", "Line 2", "SUP-301", Capability.RESERVE_INVENTORY, 0.66, 9.0),
+    _Category("COND-MATERIAL-MISMATCH", "Material mismatch", "FAC-P04-L1", "Line 1", "SUP-303", Capability.RESERVE_INVENTORY, 0.61, 9.0),
+    _Category("COND-MACHINE-VIBRATION", "Machine vibration", "FAC-P04-L2", "Line 2", "SUP-302", Capability.SCHEDULE_MAINTENANCE, 0.58, 12.0),
+    _Category("COND-CALIBRATION-DRIFT", "Calibration drift", "FAC-P04-L2", "Line 2", None, Capability.SCHEDULE_MAINTENANCE, 0.60, 4.0),
+    _Category("COND-SHIPPING-DELAY", "Shipping delay", "FAC-P04-WH", "Warehouse", "SUP-305", Capability.CREATE_PURCHASE_ORDER, 0.55, 3.0),
 ]
 
 # (policy_tier, weight, confidence_range, mttr_min_range)
@@ -46,7 +50,7 @@ _TIER_PROFILES = [
     (PolicyTier.EXECUTIVE_APPROVAL, 0.15, (0.78, 0.97), (60.0, 240.0)),
 ]
 
-_APPROVERS = ["usr_mfg_mgr_detroit", "usr_qa_lead_detroit", "usr_plant_supervisor"]
+_APPROVERS = ["usr_mfg_mgr_austin", "usr_qa_lead_austin", "usr_plant_supervisor"]
 _MONTH_DAYS = [(m, d) for m in range(1, 7) for d in (3, 8, 14, 19, 24, 28)]  # Jan-Jun 2026, pre-hero-incident history
 
 
@@ -66,9 +70,10 @@ def generate_historical_incidents(count: int = 95, seed: int = 42) -> List[Incid
     incidents (order and content), so tests can assert on exact counts."""
     rng = random.Random(seed)
     records: List[IncidentRecord] = []
+    category_sequence = rng.choices(CATEGORIES, weights=[c.sample_weight for c in CATEGORIES], k=count)
 
     for i in range(count):
-        category = CATEGORIES[i % len(CATEGORIES)]
+        category = category_sequence[i]
         tier, _, confidence_range, mttr_range = _pick_tier(rng)
 
         month, day = _MONTH_DAYS[i % len(_MONTH_DAYS)]

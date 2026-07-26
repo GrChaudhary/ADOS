@@ -16,13 +16,13 @@ class CADSpecAgent(BaseAgent):
         self.knowledge_graph = knowledge_graph or KnowledgeGraph()
 
     def process(self, context: IncidentContext, stage_input: StageInput) -> StageOutput:
-        part_number = stage_input.payload.get("part_number", "MH-100")
-        measured_value = stage_input.payload.get("measured_value", 45.08)
+        part_number = stage_input.payload.get("part_number", "MH-8820")
+        measured_value = stage_input.payload.get("measured_value", 45.031)
 
         spec = self.knowledge_graph.getSpecification(part_number)
         nominal = spec.nominal if spec else 45.00
-        upper_limit = nominal + (spec.tolerance_plus if spec else 0.05)
-        lower_limit = nominal - (spec.tolerance_minus if spec else 0.05)
+        upper_limit = nominal + (spec.tolerance_plus if spec else 0.020)
+        lower_limit = nominal - (spec.tolerance_minus if spec else 0.020)
 
         is_violation = measured_value > upper_limit or measured_value < lower_limit
         over_under = "UPPER" if measured_value > upper_limit else ("LOWER" if measured_value < lower_limit else "WITHIN")

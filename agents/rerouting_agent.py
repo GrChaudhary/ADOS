@@ -63,7 +63,7 @@ class ReroutingAgent(BaseAgent):
         alternatives = [
             AlternativeOption(
                 option_id=f"OPT-REROUTE-{alt_line.replace(' ', '-').upper()}",
-                description=f"Re-route production batch to Nova Motors Detroit Plant {alt_line}",
+                description=f"Re-route production batch to Nova Motors Plant 04 {alt_line}",
                 status="REJECTED",
                 reason=f"Changeover setup time on {alt_line} requires 3.5 hours"
             )

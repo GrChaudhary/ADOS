@@ -49,18 +49,18 @@ class DigitalTwinStore:
 
         line1 = FactoryLineState(
             line_id="Line 1",
-            plant_name="Nova Motors - Detroit Plant",
+            plant_name="Nova Motors - Plant 04 (Austin, TX)",
             status="OPERATIONAL",
-            active_product_sku="PROD-400",
+            active_product_sku="EV-POW-800V",
             current_speed_units_per_hr=150,
             parameters={
-                "conveyor_speed_m_s": MachineParameter(
-                    name="Conveyor Speed",
-                    current_value=1.2,
-                    target_nominal=1.2,
-                    min_limit=0.5,
-                    max_limit=2.0,
-                    unit="m/s"
+                "stator_winding_tension_n": MachineParameter(
+                    name="Stator Winding Tension",
+                    current_value=42.0,
+                    target_nominal=42.0,
+                    min_limit=35.0,
+                    max_limit=50.0,
+                    unit="N"
                 )
             },
             telemetry={
@@ -72,61 +72,29 @@ class DigitalTwinStore:
 
         line2 = FactoryLineState(
             line_id="Line 2",
-            plant_name="Nova Motors - Detroit Plant",
-            status="OPERATIONAL",
-            active_product_sku="PROD-100",
-            current_speed_units_per_hr=120,
-            parameters={
-                "spindle_speed_rpm": MachineParameter(
-                    name="Spindle Speed",
-                    current_value=3500.0,
-                    target_nominal=3500.0,
-                    min_limit=3000.0,
-                    max_limit=4000.0,
-                    unit="RPM"
-                ),
-                "coolant_flow_l_min": MachineParameter(
-                    name="Coolant Flow Rate",
-                    current_value=12.5,
-                    target_nominal=12.5,
-                    min_limit=10.0,
-                    max_limit=15.0,
-                    unit="L/min"
-                )
-            },
-            telemetry={
-                "vibration_rms_mm_s": 1.2,
-                "spindle_temp_c": 42.0,
-                "ambient_humidity_pct": 48.0,
-                "last_reading_time": now_iso
-            }
-        )
-
-        line3 = FactoryLineState(
-            line_id="Line 3",
-            plant_name="Nova Motors - Detroit Plant",
+            plant_name="Nova Motors - Plant 04 (Austin, TX)",
             status="DEGRADED",
-            active_product_sku="PROD-200",
+            active_product_sku="EV-POW-800V",
             current_speed_units_per_hr=105,
             parameters={
-                "spindle_speed_rpm": MachineParameter(
-                    name="Spindle Speed",
-                    current_value=3450.0,
-                    target_nominal=3500.0,
-                    min_limit=3000.0,
-                    max_limit=4000.0,
-                    unit="RPM"
-                ),
-                "feed_rate_mm_min": MachineParameter(
-                    name="Feed Rate",
+                "cnc101_feed_rate_mm_min": MachineParameter(
+                    name="CNC-101 Pre-Roughing Feed Rate",
                     current_value=180.0,
                     target_nominal=200.0,
                     min_limit=150.0,
                     max_limit=250.0,
                     unit="mm/min"
                 ),
-                "tool_offset_z_mm": MachineParameter(
-                    name="Tool Z Offset Compensation",
+                "cnc102_spindle_speed_rpm": MachineParameter(
+                    name="CNC-102 Precision Finish Spindle Speed",
+                    current_value=3450.0,
+                    target_nominal=3500.0,
+                    min_limit=3000.0,
+                    max_limit=4000.0,
+                    unit="RPM"
+                ),
+                "cnc102_tool_offset_z_mm": MachineParameter(
+                    name="CNC-102 Tool Z Offset Compensation",
                     current_value=0.045,
                     target_nominal=0.000,
                     min_limit=-0.100,
@@ -137,14 +105,38 @@ class DigitalTwinStore:
             telemetry={
                 "vibration_rms_mm_s": 4.8,
                 "spindle_temp_c": 58.2,
-                "ambient_humidity_pct": 82.0,
+                "ambient_humidity_pct": 78.0,
+                "last_reading_time": now_iso
+            }
+        )
+
+        line3 = FactoryLineState(
+            line_id="Line 3",
+            plant_name="Nova Motors - Plant 04 (Austin, TX)",
+            status="OPERATIONAL",
+            active_product_sku="EV-POW-800V",
+            current_speed_units_per_hr=120,
+            parameters={
+                "test_bench_load_kw": MachineParameter(
+                    name="Final Drive Test Bench Load",
+                    current_value=185.0,
+                    target_nominal=185.0,
+                    min_limit=150.0,
+                    max_limit=220.0,
+                    unit="kW"
+                )
+            },
+            telemetry={
+                "vibration_rms_mm_s": 1.2,
+                "spindle_temp_c": 42.0,
+                "ambient_humidity_pct": 48.0,
                 "last_reading_time": now_iso
             }
         )
 
         warehouse = FactoryLineState(
             line_id="Warehouse",
-            plant_name="Nova Motors - Detroit Plant",
+            plant_name="Nova Motors - Plant 04 (Austin, TX)",
             status="OPERATIONAL",
             active_product_sku="STAGING",
             current_speed_units_per_hr=0,

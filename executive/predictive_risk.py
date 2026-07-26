@@ -25,7 +25,7 @@ class PredictiveRiskAnalytics:
         self.digital_twin: DigitalTwinStore = digital_twin or DigitalTwinStore()
         self.records: List[IncidentRecord] = records if records is not None else list(INCIDENT_RECORDS_SEED)
 
-    def evaluate_line_risk(self, plant_id: str = "FAC-P1-L3", line_id: str = "Line 3") -> RiskSignal:
+    def evaluate_line_risk(self, plant_id: str = "FAC-P04-L2", line_id: str = "Line 2") -> RiskSignal:
         """Evaluates predictive risk score for a specific plant line."""
         # 1. Fetch Causal Graph edge weight for top condition
         edge = self.causal_graph.get_edge("COND-TOL-DRIFT", "OUT-DIMENSIONAL-FAULT")
@@ -60,10 +60,10 @@ class PredictiveRiskAnalytics:
     def get_all_plant_risk_signals(self) -> List[RiskSignal]:
         """Returns risk signals for all active lines across plants."""
         signals = [
-            self.evaluate_line_risk("FAC-P1-L3", "Line 3"),
+            self.evaluate_line_risk("FAC-P04-L2", "Line 2"),
             RiskSignal(
-                signal_id="RISK-FAC-P1-L1",
-                plant_id="FAC-P1-L1",
+                signal_id="RISK-FAC-P04-L1",
+                plant_id="FAC-P04-L1",
                 line_id="Line 1",
                 risk_score=0.48,
                 risk_level="NORMAL",
@@ -72,12 +72,12 @@ class PredictiveRiskAnalytics:
                 recommended_mitigation="Monitor room HVAC humidity sensor stability."
             ),
             RiskSignal(
-                signal_id="RISK-FAC-P1-L2",
-                plant_id="FAC-P1-L2",
-                line_id="Line 2",
+                signal_id="RISK-FAC-P04-L3",
+                plant_id="FAC-P04-L3",
+                line_id="Line 3",
                 risk_score=0.62,
                 risk_level="ELEVATED",
-                primary_risk_driver="Supplier SUP-201 (PrecisionCast) Material Hardness Variance",
+                primary_risk_driver="Supplier SUP-301 (Titan Metals) Casting Porosity Variance",
                 causal_condition_id="COND-SUPPLIER-BATCH",
                 recommended_mitigation="Enforce 100% incoming lot hardness testing at receiving dock."
             )

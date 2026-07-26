@@ -24,64 +24,67 @@ class CausalGraph:
     def _load_seed_priors(self) -> None:
         """Seed priors per docs/003-causal-graph.md illustration.
 
-        Nova Motors demo dataset (Blueprints/ADOS_Demo_Product_Experience_Blueprint.md):
-        8 incident categories, hero incident is Motor Housing tolerance drift
-        on Line 2 / CNC-101 (FAC-P1-L2)."""
+        Nova Motors Plant 04 (Austin, TX) demo dataset
+        (documentation/02_Demo_Dataset_and_Digital_Twin.md): 8 incident
+        categories, hero incident is Motor Housing (MH-8820) bore tolerance
+        breach on Line 2 / CNC-102 Precision Finish Spindle (FAC-P04-L2).
+        CNC-101, CNC-102, ROB-401, and CMM-02 are all Line 2 cells per the
+        documented Housing Machining & Inspection topology."""
         c1 = ConditionNode(
             condition_id="COND-TOL-DRIFT",
-            name="Tolerance drift on Line 2 CNC-101",
+            name="Tolerance drift on Line 2 CNC-102 (Precision Finish Spindle)",
             condition_type="PROCESS_PARAMETER",
-            description="Tooling wear causing spindle runout outside +/-0.03mm nominal",
-            plant_id="FAC-P1-L2"
+            description="Tooling wear causing spindle runout outside +/-0.020mm bore tolerance",
+            plant_id="FAC-P04-L2"
         )
         c2 = ConditionNode(
             condition_id="COND-SUPPLIER-BATCH",
-            name="Supplier batch change (Lot #B-9021)",
+            name="Supplier batch change (Titan Metals Lot #B-409)",
             condition_type="SUPPLIER",
-            description="Raw material hardness shift in recent PrecisionCast shipment",
-            plant_id="FAC-P1-L2"
+            description="Casting porosity in recent Titan Metals Inc. Motor Housing shipment",
+            plant_id="FAC-P04-L2"
         )
         c3 = ConditionNode(
             condition_id="COND-HUMIDITY-SPIKE",
-            name="Ambient humidity spike (>85%)",
+            name="Ambient humidity spike (>75%)",
             condition_type="ENVIRONMENT",
-            description="Plant floor environmental sensor reading high humidity",
-            plant_id="FAC-P1-L2"
+            description="Plant floor environmental sensor reading high humidity causing thermal expansion",
+            plant_id="FAC-P04-L2"
         )
         c4 = ConditionNode(
             condition_id="COND-TOOL-WEAR",
             name="CNC-101 tool wear beyond service interval",
             condition_type="EQUIPMENT",
-            description="Cutting tool wear exceeding recommended replacement threshold",
-            plant_id="FAC-P1-L2"
+            description="Carbide bore reamer (Tooling Assembly T-882) wear exceeding recommended replacement threshold",
+            plant_id="FAC-P04-L2"
         )
         c5 = ConditionNode(
             condition_id="COND-CALIBRATION-DRIFT",
-            name="Inspection Cell calibration drift",
+            name="CMM-02 calibration drift",
             condition_type="EQUIPMENT",
-            description="Coordinate measuring machine calibration outside acceptable drift window",
-            plant_id="FAC-P1-L3"
+            description="Automated Laser Coordinate Measurement Machine calibration outside acceptable drift window",
+            plant_id="FAC-P04-L2"
         )
         c6 = ConditionNode(
             condition_id="COND-MACHINE-VIBRATION",
-            name="Robot Arm excess vibration",
+            name="ROB-401 excess vibration",
             condition_type="EQUIPMENT",
-            description="Abnormal vibration signature on Line 1 Robot Arm joint actuator",
-            plant_id="FAC-P1-L1"
+            description="Abnormal vibration signature on the 6-Axis Robotic Transfer Arm joint actuator",
+            plant_id="FAC-P04-L2"
         )
         c7 = ConditionNode(
             condition_id="COND-MATERIAL-MISMATCH",
-            name="Rotor core material certification mismatch",
+            name="Stator core material certification mismatch",
             condition_type="SUPPLIER",
-            description="Incoming silicon steel lot fails material certification cross-check",
-            plant_id="FAC-P1-L3"
+            description="Incoming electrical steel lamination lot fails material certification cross-check",
+            plant_id="FAC-P04-L1"
         )
         c8 = ConditionNode(
             condition_id="COND-SHIPPING-DELAY",
             name="Inbound shipment delay",
             condition_type="SUPPLIER",
-            description="Carrier-reported delay on inbound supplier shipment to Warehouse",
-            plant_id="FAC-P1-WH"
+            description="Carrier-reported delay on inbound supplier shipment to Central Warehouse",
+            plant_id="FAC-P04-WH"
         )
 
         o1 = OutcomeNode(

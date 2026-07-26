@@ -49,12 +49,12 @@ async def run_demo():
         is_systemic=False,
     )
 
-    print("\n[INCIDENT] Starting run against Line 3 (FAC-P1)...")
+    print("\n[INCIDENT] Starting run against Line 2 (FAC-P04-L2)...")
     run_task = asyncio.create_task(
         orchestrator.run_incident(
-            plant_id="FAC-P1-L3",
-            line_id="Line 3",
-            part_number="MH-100",
+            plant_id="FAC-P04-L2",
+            line_id="Line 2",
+            part_number="MH-8820",
             vision_data={"measured_bore_diameter_mm": 45.085},
             priority=priority,
         )

@@ -55,7 +55,7 @@ class RecommendationEngine:
                     action_items=[
                         f"Issue formal Quality Corrective Action Request (SCAR) to {supp_name}",
                         "Audit lot sampling hardness inspection protocol at supplier facility",
-                        "Temporarily divert 30% of purchase order allocation to qualified secondary supplier SUP-202 (SteelCore)"
+                        "Temporarily divert 30% of purchase order allocation to qualified secondary supplier SUP-302 (PrecisionCast GmbH)"
                     ]
                 )
                 recommendations.append(rec)

@@ -33,19 +33,19 @@ class MarketplaceConnector(Connector):
         return True
 
     async def execute(self, call: CapabilityCall) -> CapabilityResponse:
-        part_number = call.input.get("part_number", "MH-100")
-        supplier_id = call.input.get("supplier_id", "SUP-202")
+        part_number = call.input.get("part_number", "MH-8820")
+        supplier_id = call.input.get("supplier_id", "SUP-302")
         quantity = call.input.get("quantity", 50)
 
         if call.capability == Capability.QUERY_EXTERNAL_STOCK:
             output = {
                 "part_number": part_number,
-                "available_stock": 450,
+                "available_stock": 4500,
                 "suppliers_in_stock": [
-                    {"supplier_id": "SUP-202", "name": "SteelCore Manufacturing", "qty": 300, "unit_price_usd": 42.50, "lead_time_days": 2},
-                    {"supplier_id": "MKT-VF-01", "name": "Vanguard Forge Ltd.", "qty": 150, "unit_price_usd": 44.00, "lead_time_days": 1}
+                    {"supplier_id": "SUP-302", "name": "PrecisionCast GmbH", "qty": 4500, "unit_price_usd": 435.00, "lead_time_days": 1},
+                    {"supplier_id": "MKT-VF-01", "name": "Vanguard Forge Ltd.", "qty": 150, "unit_price_usd": 440.00, "lead_time_days": 1}
                 ],
-                "recommended_supplier": "SUP-202"
+                "recommended_supplier": "SUP-302"
             }
         elif call.capability == Capability.CREATE_EXTERNAL_PO:
             output = {
@@ -61,8 +61,8 @@ class MarketplaceConnector(Connector):
             output = {
                 "quote_id": f"FRT-EXT-{call.incident_id[:8].upper()}",
                 "carrier": "DHL Supply Chain Express",
-                "origin": "Supplier Facility SUP-202",
-                "destination": call.input.get("plant_id", "FAC-P1-L3"),
+                "origin": "Supplier Facility SUP-302",
+                "destination": call.input.get("plant_id", "FAC-P04-L3"),
                 "shipping_mode": "EXPEDITED_AIR_FREIGHT",
                 "estimated_cost_usd": 450.00,
                 "transit_time_hours": 18
