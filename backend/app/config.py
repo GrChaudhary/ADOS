@@ -34,5 +34,11 @@ class Settings(BaseSettings):
     wo_instance: str = ""
     wo_api_key: str = ""
 
+    # Phase 5B: the Next.js dev server (frontend-next/) runs on a different
+    # origin than this API, unlike frontend/'s same-origin static mount —
+    # needs CORS. EventSource requests bypass the Next.js rewrite proxy and
+    # hit this origin directly, so this must stay enabled even with the proxy.
+    frontend_dev_origin: str = "http://localhost:3000"
+
 
 settings = Settings()

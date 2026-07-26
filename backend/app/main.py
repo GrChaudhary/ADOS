@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from integrations import default_hub
@@ -30,15 +31,36 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ADOS Backend", version="0.1.0", lifespan=lifespan)
 
-app.include_router(health.router)
-app.include_router(events.router)
-app.include_router(capabilities.router)
-app.include_router(incidents.router)
-app.include_router(executive.router)
-app.include_router(memory.router)
-app.include_router(learning.router)
-app.include_router(digital_twin.router)
-app.include_router(events_stream.router)
+# frontend-next/ (Phase 5B, React/Next.js) runs on a different origin than
+# frontend/'s same-origin static mount and needs CORS. Explicit origin, not
+# "*" — the bearer token is honest-but-simple shared-secret auth (docs/009),
+# no cookies involved, but there's no reason to widen this beyond the one
+# known dev origin.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[settings.frontend_dev_origin],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+_ROUTERS = (
+    health.router, events.router, capabilities.router, incidents.router,
+    executive.router, memory.router, learning.router, digital_twin.router,
+    events_stream.router,
+)
+
+for _router in _ROUTERS:
+    app.include_router(_router)
+
+# /api/v1 aliases of the exact same routes, per documentation/04_Demo_UI_Architecture.md's
+# API table — mirrors every real endpoint under the versioned prefix with
+# zero logic duplication (same router objects, re-mounted). The doc's own
+# sub-paths that don't correspond to any real capability (e.g.
+# /api/v1/digital-twin/status, /api/v1/incidents/{id}/evidence) are treated
+# as informal shorthand for the real endpoints below, not built as new routes.
+for _router in _ROUTERS:
+    app.include_router(_router, prefix="/api/v1")
 
 if _FRONTEND_DIR.exists():
     # docs/011-ui-ux.md's approval surface + executive dashboard — plain
