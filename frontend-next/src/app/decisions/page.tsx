@@ -55,7 +55,7 @@ export default function DecisionsPage() {
     return {
       id: `dec-${rec.incidentId}`,
       incidentId: rec.incidentId,
-      plantId: rec.plantId ?? "PLANT-04-AUSTIN",
+      plantId: rec.plantId ?? "PLANT-04-BANGALORE",
       lineId: rec.lineId ?? "Line 2",
       defectType: (rec.causalChain?.[0]?.conditionId ?? "BORE_TOLERANCE_EXCEEDED").replace("COND-", ""),
       selectedOption: rec.capabilityInvoked

@@ -15,6 +15,7 @@ from .connectors.sap import SAPConnector
 from .connectors.servicenow import ServiceNowConnector
 from .connectors.watsonx_itsm import WatsonxITSMConnector
 from .connectors.marketplace import MarketplaceConnector
+from .connectors.cloudant import CloudantConnector
 from .policy_engine import ConnectorPolicyEngine, PolicyViolation
 
 
@@ -45,6 +46,7 @@ def default_hub() -> IntegrationHub:
     — see its is_configured() docstring for why those aren't sufficient
     alone."""
     hub = IntegrationHub()
+    hub.registry.register(CloudantConnector())
     hub.registry.register(WatsonxITSMConnector())
     hub.registry.register(MarketplaceConnector())
     hub.registry.register(ServiceNowConnector())

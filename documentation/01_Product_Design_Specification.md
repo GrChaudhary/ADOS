@@ -98,7 +98,7 @@ sequenceDiagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ ADOS Executive Intelligence                    [Plant 04 - Austin] [Live 🟢]│
+│ ADOS Executive Intelligence                    [Plant 04 - Bangalore] [Live 🟢]│
 ├──────────────┬──────────────┬──────────────┬────────────────────────────────┤
 │ Revenue Prot.│ MTTR         │ Autonomy %   │ Active Agent Swarms            │
 │ $4,280,000   │ 8.4 Minutes  │ 78.4%        │ 8 Specialist AI Agents Active  │

@@ -71,7 +71,7 @@ export default function ExecutiveEnterprisePage() {
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-text-primary">Executive Intelligence Command Center</h1>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-mono bg-emerald/10 text-emerald border border-emerald/30">
-              Plant 04 - Austin TX
+              Plant 04 - Bangalore, Karnataka
             </span>
           </div>
           <p className="text-sm text-text-secondary mt-1">

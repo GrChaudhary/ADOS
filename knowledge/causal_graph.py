@@ -24,7 +24,7 @@ class CausalGraph:
     def _load_seed_priors(self) -> None:
         """Seed priors per docs/003-causal-graph.md illustration.
 
-        Nova Motors Plant 04 (Austin, TX) demo dataset
+        Nova Motors Plant 04 (Bangalore, Karnataka) demo dataset
         (documentation/02_Demo_Dataset_and_Digital_Twin.md): 8 incident
         categories, hero incident is Motor Housing (MH-8820) bore tolerance
         breach on Line 2 / CNC-102 Precision Finish Spindle (FAC-P04-L2).

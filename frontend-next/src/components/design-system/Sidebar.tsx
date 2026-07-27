@@ -8,13 +8,15 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV_ITEMS = [
-  { href: "/executive/enterprise", icon: "\u{1F4CA}", label: "Executive" },
-  { href: "/digital-twin", icon: "\u{1F3ED}", label: "Twin Room" },
-  { href: "/knowledge", icon: "\u{1F578}\u{FE0F}", label: "Knowledge" },
-  { href: "/agents/network", icon: "\u{1F9E0}", label: "Agents" },
-  { href: "/memory", icon: "\u{1F4BE}", label: "Memory" },
-  { href: "/governance", icon: "\u{1F6E1}️", label: "Autonomy" },
-  { href: "/integrations", icon: "\u{1F50C}", label: "Hub" },
+  { href: "/executive/enterprise", icon: "📊", label: "Executive" },
+  { href: "/digital-twin", icon: "🏭", label: "Twin Room" },
+  { href: "/incidents", icon: "🚨", label: "Incidents" },
+  { href: "/decisions", icon: "⚖️", label: "Decisions" },
+  { href: "/knowledge", icon: "🕸️", label: "Knowledge" },
+  { href: "/agents/network", icon: "🧠", label: "Agents" },
+  { href: "/memory", icon: "💾", label: "Memory" },
+  { href: "/governance", icon: "🛡️", label: "Autonomy" },
+  { href: "/integrations", icon: "🔌", label: "Hub" },
 ];
 
 export function Sidebar() {

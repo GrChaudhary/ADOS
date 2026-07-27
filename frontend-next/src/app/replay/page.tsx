@@ -44,7 +44,7 @@ export default function DecisionReplayPage() {
   const triggerIncidentMutation = useMutation({
     mutationFn: () =>
       api.startIncident({
-        plant_id: "PLANT-04-AUSTIN",
+        plant_id: "PLANT-04-BANGALORE",
         line_id: "Line 2",
         part_number: "MH-8820",
         vision_data: { defect: "BORE_TOLERANCE_EXCEEDED", offset_mm: 0.031 },

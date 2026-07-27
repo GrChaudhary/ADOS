@@ -7,7 +7,7 @@ you don't need anything from a prior conversation.
 
 ADOS (Autonomous Defect & Orchestration System) is a multi-agent AI system
 for manufacturing defect detection and root-cause resolution, for **Nova
-Motors, Plant 04 (Austin, TX)** — an EV powertrain assembly facility
+Motors, Plant 04 (Bangalore, Karnataka)** — an EV powertrain assembly facility
 producing the **EV-POW-800V** (800V Electric Drive Unit). Repo root:
 `/Users/gauravchaudhary/Documents/Projects/Ai Projects/Hackathon/ADOS`
 (git repo — run `git log --oneline` and confirm you're on top of the latest
@@ -25,7 +25,7 @@ reference) — these are the actual product specs this whole rebuild follows.
 Mid-project, the whole frontend was rebuilt from a plain-HTML/JS demo page
 into a real **Next.js 16 (App Router) + TypeScript + Tailwind v4 + TanStack
 Query + Zustand** app at `frontend-next/`, alongside a dataset rename
-(Nova Motors Detroit → Plant 04 Austin TX) and a governance rewrite
+(Nova Motors Detroit → Plant 04 Bangalore, Karnataka) and a governance rewrite
 (`orchestrate/governance.py` now uses the dollar-threshold tier matrix from
 `documentation/05`'s section 5, not the old risk-class model). None of that
 is yours to redo — **do not touch** `orchestrate/governance.py`,

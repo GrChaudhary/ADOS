@@ -15,7 +15,7 @@ export function HeaderTelemetryBar() {
     <header className="flex items-center justify-between border-b border-border-subtle bg-card px-6 py-3">
       <div>
         <div className="text-sm font-semibold text-text-primary">⚡ ADOS</div>
-        <div className="text-xs text-text-secondary">Nova Motors · Plant 04 (Austin, TX)</div>
+        <div className="text-xs text-text-secondary">Nova Motors · Plant 04 (Bangalore, Karnataka)</div>
       </div>
       <input
         type="text"

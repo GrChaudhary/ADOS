@@ -274,10 +274,27 @@ export interface KnowledgeGraphSnapshot {
   edges: GraphEdge[];
 }
 
-// ---------------------------------------------------------------------
-// Endpoint functions - the extension point for Phase 5B's 5 screens: add
-// functions here, don't create a second client.
-// ---------------------------------------------------------------------
+export interface WatsonxConnectionTestResult {
+  connected: boolean;
+  agentCount: number | null;
+  agents: string[] | null;
+  error: string | null;
+}
+
+export interface IntegrationConnectorItem {
+  id: string;
+  name: string;
+  status: string;
+  auth: string;
+  module: string;
+  description: string;
+  capabilities: string[];
+  connected: boolean;
+  latency_ms?: number;
+  doc_count?: number;
+  host?: string;
+  database_name?: string;
+}
 
 export const api = {
   getDigitalTwinLines: () => apiFetch<DigitalTwinLine[]>("/digital-twin/lines"),
@@ -302,6 +319,9 @@ export const api = {
   getLearningRecalibration: (learningRate = 0.08) => apiFetch<LearningReplaySummary>(`/learning/recalibration?learning_rate=${learningRate}`),
   getPromotionCandidates: () => apiFetch<PolicyPromotionCandidate[]>("/learning/promotion-candidates"),
   getKnowledgeGraph: () => apiFetch<KnowledgeGraphSnapshot>("/knowledge/graph"),
+  getIntegrationsStatus: () => apiFetch<IntegrationConnectorItem[]>("/integrations/status"),
+  testWatsonxConnection: () =>
+    apiFetch<WatsonxConnectionTestResult>("/integrations/watsonx/test-connection", { method: "POST" }),
 };
 
 /**

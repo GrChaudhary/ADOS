@@ -50,7 +50,7 @@ _TIER_PROFILES = [
     (PolicyTier.EXECUTIVE_APPROVAL, 0.15, (0.78, 0.97), (60.0, 240.0)),
 ]
 
-_APPROVERS = ["usr_mfg_mgr_austin", "usr_qa_lead_austin", "usr_plant_supervisor"]
+_APPROVERS = ["usr_mfg_mgr_bangalore", "usr_qa_lead_bangalore", "usr_plant_supervisor"]
 _MONTH_DAYS = [(m, d) for m in range(1, 7) for d in (3, 8, 14, 19, 24, 28)]  # Jan-Jun 2026, pre-hero-incident history
 
 

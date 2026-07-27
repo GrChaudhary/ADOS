@@ -12,6 +12,8 @@ from ..auth import require_service_auth
 
 router = APIRouter(prefix="/memory", tags=["Decision Memory"], dependencies=[Depends(require_service_auth)])
 
+from knowledge.cloudant_client import cloudant_db
+
 # In-memory store singleton for Decision Memory REST API
 _MEMORY_INDEX = DecisionMemoryIndex()
 
@@ -24,7 +26,27 @@ def get_memory_index() -> DecisionMemoryIndex:
 async def search_decision_memory(query: DecisionMemoryQuery):
     """
     Search historical Decision Memory audit records by similarity, plant, defect type, or supplier.
+    Queries IBM Cloudant NoSQL database when configured.
     """
+    if cloudant_db.is_configured():
+        search_text = query.defect_type or query.condition_id or query.line_id or query.plant_id or ""
+        docs = cloudant_db.search_incidents(search_text, limit=query.limit or 50)
+        records: List[IncidentRecord] = []
+        for d in docs:
+            try:
+                # Clean up CouchDB internal fields before parsing into pydantic
+                clean_d = {k: v for k, v in d.items() if not k.startswith("_")}
+                records.append(IncidentRecord.model_validate(clean_d))
+            except Exception:
+                pass
+
+        if len(records) > 0:
+            return DecisionMemorySearchResult(
+                total_matches=len(records),
+                records=records,
+                relevance_scores=[0.95] * len(records),
+            )
+
     idx = get_memory_index()
     return idx.search(query)
 
@@ -34,6 +56,12 @@ async def get_memory_record(incident_id: str):
     """
     Fetch a specific historical incident audit record by its unique ID.
     """
+    if cloudant_db.is_configured():
+        doc = cloudant_db.get_incident(incident_id)
+        if doc:
+            clean_d = {k: v for k, v in doc.items() if not k.startswith("_")}
+            return IncidentRecord.model_validate(clean_d)
+
     idx = get_memory_index()
     query = DecisionMemoryQuery(limit=100)
     res = idx.search(query)
@@ -51,8 +79,11 @@ async def get_memory_record(incident_id: str):
 @router.post("/records", response_model=IncidentRecord, status_code=status.HTTP_201_CREATED)
 async def create_memory_record(record: IncidentRecord):
     """
-    Persists a new incident audit trail record into Decision Memory.
+    Persists a new incident audit trail record into Decision Memory & Cloudant.
     """
+    if cloudant_db.is_configured():
+        cloudant_db.save_incident(record.model_dump(by_alias=True))
+
     idx = get_memory_index()
     idx.add_record(record)
     return record

@@ -25,3 +25,12 @@ class CapabilityRegistry:
 
     def is_supported(self, capability: Capability) -> bool:
         return bool(self._connectors_by_capability.get(capability))
+
+    def list_connectors(self) -> List[Connector]:
+        """Every registered connector, deduped by identity (a connector can
+        be registered under several capabilities)."""
+        seen: Dict[str, Connector] = {}
+        for connectors in self._connectors_by_capability.values():
+            for connector in connectors:
+                seen[connector.name] = connector
+        return list(seen.values())

@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+Blueprints/apikey.json
+data*orchestrate.json
 
 # Python
 .venv/

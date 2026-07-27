@@ -2,7 +2,7 @@
 Seed dataset of IncidentRecord fixtures for local development and testing of
 Executive Intelligence (Phase 3B).
 
-Nova Motors Plant 04 (Austin, TX) demo dataset
+Nova Motors Plant 04 (Bangalore, Karnataka) demo dataset
 (documentation/02_Demo_Dataset_and_Digital_Twin.md): 5 "hero" incidents
 hand-authored for the narrative demo flow, plus ~95 generated historical
 incidents (executive/incident_generator.py) spanning all 8 incident
@@ -70,7 +70,7 @@ HERO_INCIDENTS: List[IncidentRecord] = [
             {"option_id": "OPT-3-WAIT-FOR-RESUPPLY", "name": "Wait for Titan Metals Resupply", "estimated_cost_usd": 8500.0, "downtime_minutes": 7200.0, "quality_risk_score": 0.02, "overall_score": 0.52, "recommendation": "FEASIBLE"},
         ],
         policy_tier=PolicyTier.APPROVAL_REQUIRED,
-        approved_by="usr_mfg_mgr_austin",
+        approved_by="usr_mfg_mgr_bangalore",
         recommendation_accepted=True,  # Approved as recommended
         capability_invoked=Capability.RESERVE_INVENTORY,
         capability_status=CallStatus.SUCCEEDED,
@@ -103,7 +103,7 @@ HERO_INCIDENTS: List[IncidentRecord] = [
             {"option_id": "OPT-2-MANUAL-INSPECTION", "name": "Manual Lamination Inspection", "estimated_cost_usd": 200.0, "downtime_minutes": 180.0, "quality_risk_score": 0.15, "overall_score": 0.55, "recommendation": "FEASIBLE"},
         ],
         policy_tier=PolicyTier.APPROVAL_REQUIRED,
-        approved_by="usr_mfg_mgr_austin",
+        approved_by="usr_mfg_mgr_bangalore",
         recommendation_accepted=False,  # Operator rejected automated cert override and did manual inspection
         capability_invoked=Capability.NOTIFY_OPERATOR,
         capability_status=CallStatus.SUCCEEDED,

@@ -23,6 +23,8 @@ class Capability(str, Enum):
     QUERY_EXTERNAL_STOCK = "QueryExternalStock"
     CREATE_EXTERNAL_PO = "CreateExternalPO"
     GET_FREIGHT_QUOTE = "GetFreightQuote"
+    QUERY_DATABASE = "QueryDatabase"
+    PERSIST_INCIDENT = "PersistIncident"
 
 
 class PolicyTier(int, Enum):

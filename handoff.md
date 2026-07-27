@@ -82,7 +82,7 @@ ADOS is an autonomous, multi-agent AI system for industrial manufacturing defect
 - **Environment File**: `/Users/gauravchaudhary/Documents/Projects/Ai Projects/Hackathon/ADOS/.env`
 - **IBM watsonx Orchestrate Configured Parameters**:
   - `WO_INSTANCE`: `https://api.br-sao.watson-orchestrate.cloud.ibm.com/instances/22dd8b0e-e746-40f6-8142-38f5a7c60210`
-  - `WO_API_KEY`: `p0jNi4161XhcDwhEfO1WrOpU2fy-Mqj1b9kEAII_RADd`
+  - `WO_API_KEY`: see `.env` (not committed — gitignored)
   - Active `orchestrate` CLI environment: `ados-prod`
 
 ---

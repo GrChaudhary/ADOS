@@ -119,7 +119,7 @@ Each AI specialist owns a strictly bounded responsibility:
 
 ## 9. Enterprise Data & Demo Strategy
 
-- **Enterprise Profile**: Nova Motors (Plant 04, Austin TX).
+- **Enterprise Profile**: Nova Motors (Plant 04, Bangalore, Karnataka).
 - **Core Story**: Healthy Factory ➔ Defect Detection ➔ Emma Investigates ➔ ADOS Multi-Agent Reasoning ➔ Ranked Options ➔ 1-Click Approval ➔ IBM watsonx & SAP Execution ➔ Factory Recovery ➔ Executive Revenue Protected Metric ➔ Decision Replay Audit.
 
 ---

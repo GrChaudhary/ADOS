@@ -1,7 +1,7 @@
 """
 Seed dataset for local development of Enterprise Knowledge Graph and Causal Graph.
 
-Demo company: Nova Motors, Plant 04 (Austin, TX) — an EV powertrain assembly
+Demo company: Nova Motors, Plant 04 (Bangalore, Karnataka) — an EV powertrain assembly
 facility producing the 800V High-Performance Electric Drive Unit
 (EV-POW-800V), per Blueprints/ADOS_Demo_Product_Experience_Blueprint.md and
 documentation/02_Demo_Dataset_and_Digital_Twin.md.
@@ -126,7 +126,7 @@ SUPPLIER_PRECISIONCAST = Supplier(
     supplier_id="SUP-302",
     name="PrecisionCast GmbH",
     capacity_units_per_week=3000,
-    region="Austin, TX (Hub Warehouse)",
+    region="Bangalore, Karnataka (Hub Warehouse)",
     qualification_status="APPROVED",
     lead_time_days=1
 )
@@ -224,28 +224,28 @@ PART_CP7700 = Part(
 
 FACILITY_LINE1 = Facility(
     facility_id="FAC-P04-L1",
-    plant_name="Nova Motors - Plant 04 (Austin, TX)",
+    plant_name="Nova Motors - Plant 04 (Bangalore, Karnataka)",
     line_id="Line 1",
     cell_id="Cell 1-A (Stator & Rotor Cell)"
 )
 
 FACILITY_LINE2 = Facility(
     facility_id="FAC-P04-L2",
-    plant_name="Nova Motors - Plant 04 (Austin, TX)",
+    plant_name="Nova Motors - Plant 04 (Bangalore, Karnataka)",
     line_id="Line 2",
     cell_id="Cell 2-A (Housing Machining & Inspection)"
 )
 
 FACILITY_LINE3 = Facility(
     facility_id="FAC-P04-L3",
-    plant_name="Nova Motors - Plant 04 (Austin, TX)",
+    plant_name="Nova Motors - Plant 04 (Bangalore, Karnataka)",
     line_id="Line 3",
     cell_id="Cell 3-A (Final Drive Testing & Pack Out)"
 )
 
 FACILITY_WAREHOUSE = Facility(
     facility_id="FAC-P04-WH",
-    plant_name="Nova Motors - Plant 04 (Austin, TX)",
+    plant_name="Nova Motors - Plant 04 (Bangalore, Karnataka)",
     line_id="Warehouse",
     cell_id="Cell WH-1 (Central Warehouse ASRS)"
 )

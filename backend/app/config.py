@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     wo_instance: str = ""
     wo_api_key: str = ""
 
+    # IBM Cloudant NoSQL Database
+    cloudant_url: str = ""
+    cloudant_api_key: str = ""
+    cloudant_username: str = ""
+    cloudant_db_incidents: str = "ados_incidents"
+    cloudant_db_events: str = "ados_events"
+
     # Phase 5B: the Next.js dev server (frontend-next/) runs on a different
     # origin than this API, unlike frontend/'s same-origin static mount —
     # needs CORS. EventSource requests bypass the Next.js rewrite proxy and

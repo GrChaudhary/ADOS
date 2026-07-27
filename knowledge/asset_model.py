@@ -124,7 +124,7 @@ class EnterpriseAssetModel:
 
     def _seed_ground_truth(self) -> None:
         """Seeds ground truth operational asset model for Nova Motors Plant 04
-        (Austin, TX) per documentation/02_Demo_Dataset_and_Digital_Twin.md."""
+        (Bangalore, Karnataka) per documentation/02_Demo_Dataset_and_Digital_Twin.md."""
         # Line 1 (Stator & Rotor Cell)
         plc_stator = PLC(plcId="PLC-STATOR-01", name="Stator Winding Controller PLC", ipAddress="192.168.10.11", machineId="STATOR-WIND-01", sensors=[])
         m_stator = Machine(machineId="STATOR-WIND-01", name="Stator Winding Station", machineType="WINDING", line_id="Line 1", plcs=[plc_stator])
@@ -165,15 +165,15 @@ class EnterpriseAssetModel:
         plc_wh = PLC(plcId="PLC-WH-01", name="Warehouse ASRS Controller PLC", ipAddress="192.168.10.99", machineId="ASRS-01", sensors=[])
         m_wh = Machine(machineId="ASRS-01", name="Central Warehouse ASRS Bay", machineType="STAGING", line_id="Warehouse", plcs=[plc_wh])
 
-        warehouse = Line(lineId="Warehouse", name="Central Warehouse (Austin ASRS)", factory_id="FAC-P04", machines=[m_wh])
+        warehouse = Line(lineId="Warehouse", name="Central Warehouse (Bangalore ASRS)", factory_id="FAC-P04", machines=[m_wh])
 
         # Factories
-        factory1 = Factory(factoryId="FAC-P04", name="Plant 04 Powertrain Assembly Factory", plant_id="PLANT-04-AUSTIN", lines=[line1, line2, line3, warehouse])
+        factory1 = Factory(factoryId="FAC-P04", name="Plant 04 Powertrain Assembly Factory", plant_id="PLANT-04-BANGALORE", lines=[line1, line2, line3, warehouse])
 
         # Plants
-        plant_austin = Plant(plantId="PLANT-04-AUSTIN", name="Nova Motors Austin Operations", region="North America", factories=[factory1])
+        plant_bangalore = Plant(plantId="PLANT-04-BANGALORE", name="Nova Motors Bangalore Operations", region="Asia-Pacific", factories=[factory1])
 
-        self.plants[plant_austin.plant_id] = plant_austin
+        self.plants[plant_bangalore.plant_id] = plant_bangalore
 
         # Components & Products
         comp_housing = Component(partNumber="MH-8820", name="Motor Housing", specId="SP-8820", approvedSupplierIds=["SUP-301", "SUP-302"])

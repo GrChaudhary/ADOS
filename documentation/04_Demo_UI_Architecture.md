@@ -24,7 +24,7 @@ To ensure ADOS feels like a tier-1 Enterprise SaaS platform (comparable to Palan
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ TOP TELEMETRY HEADER                                                        │
-│ [⚡ ADOS] [Plant 04 - Austin TX]  [Incidents: 1 🔴] [SSE: Live 🟢]  [Copilot 💬]│
+│ [⚡ ADOS] [Plant 04 - Bangalore, Karnataka]  [Incidents: 1 🔴] [SSE: Live 🟢]  [Copilot 💬]│
 ├──────────────┬──────────────────────────────────────────────────────────────┤
 │ SIDEBAR NAV  │ MAIN CONTENT CANVAS                                          │
 │              │                                                              │

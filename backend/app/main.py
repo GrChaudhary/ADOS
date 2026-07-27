@@ -10,9 +10,12 @@ from orchestrate import DecisionOrchestrator
 
 from .config import settings
 from .eventbus import get_event_bus
-from .routers import capabilities, digital_twin, events, events_stream, executive, health, incidents, knowledge_graph, learning, memory
+from .routers import capabilities, digital_twin, events, events_stream, executive, health, incidents, integrations, knowledge_graph, learning, memory
 
 _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+
+
+from knowledge.cloudant_client import cloudant_db
 
 
 @asynccontextmanager
@@ -26,6 +29,11 @@ async def lifespan(app: FastAPI):
         event_bus=app.state.event_bus, integration_hub=app.state.integration_hub
     )
     app.state.incident_tasks = {}
+
+    # Initialize IBM Cloudant NoSQL Database connection and seed data
+    if cloudant_db.is_configured():
+        cloudant_db.initialize()
+
     yield
 
 
@@ -47,7 +55,7 @@ app.add_middleware(
 _ROUTERS = (
     health.router, events.router, capabilities.router, incidents.router,
     executive.router, memory.router, learning.router, digital_twin.router,
-    events_stream.router, knowledge_graph.router,
+    events_stream.router, knowledge_graph.router, integrations.router,
 )
 
 for _router in _ROUTERS:

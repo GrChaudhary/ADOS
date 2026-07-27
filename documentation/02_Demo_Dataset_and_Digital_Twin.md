@@ -9,9 +9,9 @@
 ## 1. Enterprise Profile: Nova Motors
 
 ### Overview
-Nova Motors is a next-generation Electric Vehicle (EV) manufacturer. This dataset models **Plant 04 (Austin, Texas)**, Nova Motors' flagship powertrain assembly facility producing the **800V High-Performance Electric Drive Unit (Model EV-POW-800V)**.
+Nova Motors is a next-generation Electric Vehicle (EV) manufacturer. This dataset models **Plant 04 (Bangalore, Karnataka)**, Nova Motors' flagship powertrain assembly facility producing the **800V High-Performance Electric Drive Unit (Model EV-POW-800V)**.
 
-- **Facility**: Plant 04, Austin TX
+- **Facility**: Plant 04, Bangalore, Karnataka
 - **Annual Production**: 250,000 drive units / year
 - **Operating Cost of Unplanned Downtime**: **$8,500 / minute** ($510,000 / hour)
 - **Target Line OEE**: 92.5%
@@ -21,7 +21,7 @@ Nova Motors is a next-generation Electric Vehicle (EV) manufacturer. This datase
 ## 2. Enterprise Asset Model (EAM Ground Truth Hierarchy)
 
 ```
-Plant 04 (Austin TX)
+Plant 04 (Bangalore, Karnataka)
 └── Factory Floor 01 (Powertrain Assembly)
     ├── Line 1 (Stator & Rotor Cell) [Status: 🟢 HEALTHY]
     ├── Line 2 (Housing Machining & Inspection) [Status: 🔴 INCIDENT ACTIVE]
@@ -35,7 +35,7 @@ Plant 04 (Austin TX)
     │   └── Cell CMM-02 (Automated Laser Coordinate Measurement Machine)
     │       └── Sensor SENS-OPT-01 (Laser Optical Micrometer)
     ├── Line 3 (Final Drive Testing & Pack Out) [Status: 🟢 HEALTHY]
-    └── Central Warehouse (Austin Automated Storage & Retrieval)
+    └── Central Warehouse (Bangalore Automated Storage & Retrieval)
 ```
 
 ---
@@ -72,7 +72,7 @@ graph TD
 ### Supplier Matrix Details
 
 1. **PrecisionCast GmbH** (Tier 1 - Preferred Alt)
-   - **Location**: Austin Hub Warehouse (20 miles from Plant 04)
+   - **Location**: Bangalore Hub Warehouse (20 miles from Plant 04)
    - **Quality Score**: `94.2%` | **On-Time Delivery**: `99.2%`
    - **Available Stock**: 4,500 units (`MH-8820`)
    - **Expedited Lead Time**: 8 hours | **Unit Freight Premium**: +$15/unit
@@ -144,7 +144,7 @@ Timeline:
 [09:41:05] 👁️ VisionSpecAgent generates visual bounding box & isolates defect zone.
 [09:41:12] 📐 CADSpecAgent overlays STEP CAD file MH-8820_rev4.step, confirming 11 micrometer outward drift on Y-axis.
 [09:41:20] 🧠 CausalIsolationAgent evaluates Causal Graph: Tooling Wear (68% prob) + Humidity Spike (28% prob).
-[09:41:30] 📦 SubstitutionAgent queries local SAP ERP & B2B Marketplace; identifies PrecisionCast GmbH stock (4,500 units in Austin warehouse).
+[09:41:30] 📦 SubstitutionAgent queries local SAP ERP & B2B Marketplace; identifies PrecisionCast GmbH stock (4,500 units in Bangalore warehouse).
 [09:41:40] 📈 ImpactSimulationAgent simulates 3 pathways (Option A: $430k savings, 8h lead; Option B: $2.1M loss, 5 days; Option C: High scrap risk).
 [09:41:50] ⚖️ DecisionOrchestrator invokes Governance Policy Engine: Triggers Tier 1 Holding Queue (Financial impact $430k > $50k threshold).
 [09:42:15] 👤 Emma (Quality Engineer) reviews incident workspace, sees 94.2% precedent match, and clicks [APPROVE OPTION A].

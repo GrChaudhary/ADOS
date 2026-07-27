@@ -49,7 +49,7 @@ class DigitalTwinStore:
 
         line1 = FactoryLineState(
             line_id="Line 1",
-            plant_name="Nova Motors - Plant 04 (Austin, TX)",
+            plant_name="Nova Motors - Plant 04 (Bangalore, Karnataka)",
             status="OPERATIONAL",
             active_product_sku="EV-POW-800V",
             current_speed_units_per_hr=150,
@@ -72,7 +72,7 @@ class DigitalTwinStore:
 
         line2 = FactoryLineState(
             line_id="Line 2",
-            plant_name="Nova Motors - Plant 04 (Austin, TX)",
+            plant_name="Nova Motors - Plant 04 (Bangalore, Karnataka)",
             status="DEGRADED",
             active_product_sku="EV-POW-800V",
             current_speed_units_per_hr=105,
@@ -112,7 +112,7 @@ class DigitalTwinStore:
 
         line3 = FactoryLineState(
             line_id="Line 3",
-            plant_name="Nova Motors - Plant 04 (Austin, TX)",
+            plant_name="Nova Motors - Plant 04 (Bangalore, Karnataka)",
             status="OPERATIONAL",
             active_product_sku="EV-POW-800V",
             current_speed_units_per_hr=120,
@@ -136,7 +136,7 @@ class DigitalTwinStore:
 
         warehouse = FactoryLineState(
             line_id="Warehouse",
-            plant_name="Nova Motors - Plant 04 (Austin, TX)",
+            plant_name="Nova Motors - Plant 04 (Bangalore, Karnataka)",
             status="OPERATIONAL",
             active_product_sku="STAGING",
             current_speed_units_per_hr=0,

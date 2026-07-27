@@ -95,7 +95,7 @@ export const AGENTS: Record<string, AgentMeta> = {
     label: "Rerouting",
     icon: "🚚",
     color: "teal",
-    description: "Evaluates freight routes and logistics modes for urgent replacement part transport to Plant 04 Austin TX.",
+    description: "Evaluates freight routes and logistics modes for urgent replacement part transport to Plant 04 Bangalore, Karnataka.",
     model: "Expedited Logistics Routing Engine",
     inputSchema: "Origin Hub + Destination Plant 04 + SLA Window",
     outputSchema: "LogisticsQuote { carrier, mode, transit_time_hrs, freight_cost }",

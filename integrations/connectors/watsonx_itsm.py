@@ -67,6 +67,42 @@ class WatsonxITSMConnector(Connector):
             pass
         return None
 
+    async def test_connection(self) -> Dict[str, Any]:
+        """Read-only reachability check: IAM token exchange + GET
+        /v1/orchestrate/agents against WO_INSTANCE. Makes no state-changing
+        calls, so it's safe to run without WO_ITSM_INTEGRATION_ENABLED —
+        that flag only gates real capability invocation (execute() above).
+        Endpoint confirmed live against the configured instance: it 200s
+        and returns the tenant's registered agents (unlike /v1/agents/itsm/run,
+        which execute() itself flags as unverified)."""
+        instance_url, api_key = self._configured()
+        if not instance_url or not api_key:
+            return {"connected": False, "error": "WO_INSTANCE / WO_API_KEY not set"}
+
+        async with httpx.AsyncClient(transport=self._transport) as client:
+            token = await self._get_iam_token(api_key, client)
+            if not token:
+                return {"connected": False, "error": "IAM token exchange failed"}
+
+            try:
+                response = await client.get(
+                    f"{instance_url.rstrip('/')}/v1/orchestrate/agents",
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                    timeout=10.0,
+                )
+            except httpx.HTTPError as e:
+                return {"connected": False, "error": f"request failed: {e}"}
+
+        if response.status_code != 200:
+            return {"connected": False, "error": f"{response.status_code}: {response.text[:300]}"}
+
+        agents = response.json()
+        return {
+            "connected": True,
+            "agent_count": len(agents),
+            "agents": [a.get("name") for a in agents if isinstance(a, dict) and a.get("name")],
+        }
+
     async def execute(self, call: CapabilityCall) -> CapabilityResponse:
         instance_url, api_key = self._configured()
         if not instance_url or not api_key:
