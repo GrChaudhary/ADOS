@@ -174,6 +174,86 @@ export interface EventEnvelope<TPayload = Record<string, unknown>> {
   payload: TPayload;
 }
 
+export interface EnterpriseIntelligenceSummary {
+  revenueProtectedUsd: number;
+  totalActualCostUsd: number;
+  mttrAvgMinutes: number;
+  autonomyIndex: number;
+  recommendationAcceptanceRate: number;
+  supplierRiskResilience: Record<string, Record<string, unknown>>;
+  strategicRecommendationsCount: number;
+  topPlantRiskDriver: string;
+}
+
+export interface StrategicRecommendation {
+  recommendationId: string;
+  category: string;
+  title: string;
+  summary: string;
+  impact_level?: string;
+  estimatedAnnualSavingsUsd: number;
+  supportingEvidence: string[];
+  actionItems: string[];
+}
+
+// Raw hand-built dict, snake_case throughout - no pydantic response_model
+// on GET /executive/kpis/what-if, so nothing aliases it to camelCase.
+export interface WhatIfSimulation {
+  target_condition_id: string;
+  promoted_to_tier: string;
+  baseline: { mttr_avg_min: number; autonomy_index: number; revenue_protected_usd: number };
+  simulated: { mttr_avg_min: number; autonomy_index: number; revenue_protected_usd: number };
+  delta: { mttr_reduction_min: number; autonomy_increase_pct: number; additional_revenue_protected_usd: number };
+}
+
+export interface RiskSignal {
+  signalId: string;
+  plantId: string;
+  lineId: string;
+  risk_score: number;
+  risk_level: string;
+  primaryRiskDriver: string;
+  causalConditionId: string;
+  recommendedMitigation: string;
+}
+
+export interface DecisionMemoryQuery {
+  plantId?: string;
+  lineId?: string;
+  defectType?: string;
+  conditionId?: string;
+  supplierId?: string;
+  minConfidence?: number;
+  limit?: number;
+}
+
+export interface DecisionMemorySearchResult {
+  totalMatches: number;
+  records: IncidentRecord[];
+  relevanceScores: number[];
+}
+
+export interface LearningReplaySummary {
+  recordsProcessed: number;
+  edgesUpdated: number;
+  weightAdjustments: Record<string, unknown>[];
+  timestamp: string;
+}
+
+export interface PolicyPromotionCandidate {
+  candidateId: string;
+  conditionId: string;
+  decisionClassName: string;
+  currentTier: string;
+  targetTier: string;
+  sampleVolume: number;
+  operatorAcceptanceRate: number;
+  avgConfidence: number;
+  isEligible: boolean;
+  promotionRationale: string;
+  safetyGuardrails: string[];
+}
+
 // ---------------------------------------------------------------------
 // Endpoint functions - the extension point for Phase 5B's 5 screens: add
 // functions here, don't create a second client.
@@ -182,16 +262,25 @@ export interface EventEnvelope<TPayload = Record<string, unknown>> {
 export const api = {
   getDigitalTwinLines: () => apiFetch<DigitalTwinLine[]>("/digital-twin/lines"),
   getKpis: () => apiFetch<KpiSummary>("/executive/kpis"),
+  getEnterpriseSummary: () => apiFetch<EnterpriseIntelligenceSummary>("/executive/enterprise"),
+  getWhatIf: (conditionId = "COND-TOL-DRIFT") => apiFetch<WhatIfSimulation>(`/executive/kpis/what-if?condition_id=${encodeURIComponent(conditionId)}`),
+  getRiskSignals: () => apiFetch<RiskSignal[]>("/executive/risk"),
+  getStrategicRecommendations: () => apiFetch<StrategicRecommendation[]>("/executive/recommendations"),
   startIncident: (body: StartIncidentRequest) =>
     apiFetch<StartIncidentResponse>("/incidents", { method: "POST", body: JSON.stringify(body) }),
   getIncident: (id: string) => apiFetch<IncidentRecord | IncidentInProgress>(`/incidents/${id}`),
   listIncidentEvents: (incidentId: string) => apiFetch<EventEnvelope[]>(`/events?incident_id=${incidentId}`),
+  listAllEvents: (limit = 200) => apiFetch<EventEnvelope[]>(`/events?limit=${limit}`),
   approveIncident: (id: string, approvedBy: string) =>
     apiFetch<{ incidentId: string; decision: string }>(`/incidents/${id}/approve`, {
       method: "POST",
       body: JSON.stringify({ approved_by: approvedBy }),
     }),
   getIncidentOptions: (id: string) => apiFetch<IncidentComparison>(`/executive/incidents/${id}/options`),
+  searchDecisionMemory: (query: DecisionMemoryQuery) =>
+    apiFetch<DecisionMemorySearchResult>("/memory/search", { method: "POST", body: JSON.stringify(query) }),
+  getLearningRecalibration: (learningRate = 0.08) => apiFetch<LearningReplaySummary>(`/learning/recalibration?learning_rate=${learningRate}`),
+  getPromotionCandidates: () => apiFetch<PolicyPromotionCandidate[]>("/learning/promotion-candidates"),
 };
 
 /**

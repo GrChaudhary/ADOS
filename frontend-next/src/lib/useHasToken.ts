@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { getToken, subscribeToTokenChanges } from "./api";
 
 /**
@@ -8,16 +8,17 @@ import { getToken, subscribeToTokenChanges } from "./api";
  * TanStack Query calls with `enabled: hasToken` instead of firing an
  * unauthenticated request (and a noisy 401) on first render before the
  * user has entered one in HeaderTelemetryBar.
+ *
+ * useSyncExternalStore (rather than useState+useEffect) so the server
+ * snapshot can be forced to `false` (matching SSR, which has no
+ * `window`/localStorage) while the client snapshot reads the real value -
+ * without that split, a returning user with a token already saved would
+ * hit a React hydration mismatch on first paint.
  */
 export function useHasToken(): boolean {
-  const [hasToken, setHasToken] = useState(() => Boolean(getToken()));
-
-  useEffect(() => {
-    // Legitimate effect use: subscribing to an external event, calling
-    // setState from within the callback - not synchronously in the effect
-    // body itself.
-    return subscribeToTokenChanges(() => setHasToken(Boolean(getToken())));
-  }, []);
-
-  return hasToken;
+  return useSyncExternalStore(
+    subscribeToTokenChanges,
+    () => Boolean(getToken()),
+    () => false
+  );
 }
