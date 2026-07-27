@@ -254,6 +254,26 @@ export interface PolicyPromotionCandidate {
   safetyGuardrails: string[];
 }
 
+export interface GraphNode {
+  id: string;
+  type: "PRODUCT" | "PART" | "SUPPLIER";
+  label: string;
+  detail: Record<string, unknown>;
+}
+
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: "BOM" | "SUPPLIES" | "SUBSTITUTE";
+  label: string | null;
+}
+
+export interface KnowledgeGraphSnapshot {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
 // ---------------------------------------------------------------------
 // Endpoint functions - the extension point for Phase 5B's 5 screens: add
 // functions here, don't create a second client.
@@ -281,6 +301,7 @@ export const api = {
     apiFetch<DecisionMemorySearchResult>("/memory/search", { method: "POST", body: JSON.stringify(query) }),
   getLearningRecalibration: (learningRate = 0.08) => apiFetch<LearningReplaySummary>(`/learning/recalibration?learning_rate=${learningRate}`),
   getPromotionCandidates: () => apiFetch<PolicyPromotionCandidate[]>("/learning/promotion-candidates"),
+  getKnowledgeGraph: () => apiFetch<KnowledgeGraphSnapshot>("/knowledge/graph"),
 };
 
 /**

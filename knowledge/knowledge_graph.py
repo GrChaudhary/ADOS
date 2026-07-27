@@ -3,7 +3,7 @@ Enterprise Knowledge Graph store implementation per docs/002-knowledge-graph.md.
 """
 
 from typing import Dict, List, Optional, Union
-from .models import Product, Part, Supplier, Facility, Specification, Substitution
+from .models import Product, Part, Supplier, Facility, Specification, Substitution, GraphNode, GraphEdge, KnowledgeGraphSnapshot
 from .asset_model import EnterpriseAssetModel, AssetLineage
 from .seed_data import (
     INITIAL_PRODUCTS, INITIAL_PARTS, INITIAL_SUPPLIERS,
@@ -125,8 +125,97 @@ class KnowledgeGraph:
     def list_substitutions_for_part(self, part_number: str) -> List[Substitution]:
         return [s for s in self._substitutions.values() if s.source_part_number == part_number]
 
+    def list_products(self) -> List[Product]:
+        return list(self._products.values())
+
+    def list_parts(self) -> List[Part]:
+        return list(self._parts.values())
+
+    def list_suppliers(self) -> List[Supplier]:
+        return list(self._suppliers.values())
+
     def resolveAssetLineage(self, asset_id: str) -> Optional[AssetLineage]:
         """
         Delegates physical asset topology lineage resolution to the operational EnterpriseAssetModel.
         """
         return self.asset_model.resolve_lineage(asset_id)
+
+    # --- Knowledge Explorer (/knowledge) graph projection ---
+
+    def build_graph_snapshot(self) -> KnowledgeGraphSnapshot:
+        """
+        Projects the BOM/supplier relationships in this store into a
+        nodes/edges shape for the Knowledge Explorer graph view.
+        """
+        nodes: List[GraphNode] = []
+        edges: List[GraphEdge] = []
+
+        for product in self.list_products():
+            nodes.append(GraphNode(
+                id=product.sku,
+                type="PRODUCT",
+                label=product.name,
+                detail={
+                    "sku": product.sku,
+                    "revision": product.revision,
+                    "name": product.name,
+                    "facilityId": product.facility_id,
+                },
+            ))
+            for part_number in product.part_numbers:
+                edges.append(GraphEdge(
+                    id=f"bom-{product.sku}-{part_number}",
+                    source=product.sku,
+                    target=part_number,
+                    type="BOM",
+                ))
+
+        for part in self.list_parts():
+            nodes.append(GraphNode(
+                id=part.part_number,
+                type="PART",
+                label=part.name,
+                detail={
+                    "partNumber": part.part_number,
+                    "name": part.name,
+                    "inStockQuantity": part.in_stock_quantity,
+                    "unitCostUsd": part.unit_cost_usd,
+                },
+            ))
+            for supplier_id in part.approved_supplier_ids:
+                edges.append(GraphEdge(
+                    id=f"supplies-{part.part_number}-{supplier_id}",
+                    source=part.part_number,
+                    target=supplier_id,
+                    type="SUPPLIES",
+                ))
+            for sub_part_number in part.substitute_part_numbers:
+                sub_rule = next(
+                    (s for s in self.list_substitutions_for_part(part.part_number) if s.target_part_number == sub_part_number),
+                    None,
+                )
+                label = f"+${sub_rule.cost_delta_usd:,.0f}" if sub_rule else None
+                edges.append(GraphEdge(
+                    id=f"substitute-{part.part_number}-{sub_part_number}",
+                    source=part.part_number,
+                    target=sub_part_number,
+                    type="SUBSTITUTE",
+                    label=label,
+                ))
+
+        for supplier in self.list_suppliers():
+            nodes.append(GraphNode(
+                id=supplier.supplier_id,
+                type="SUPPLIER",
+                label=supplier.name,
+                detail={
+                    "supplierId": supplier.supplier_id,
+                    "name": supplier.name,
+                    "region": supplier.region,
+                    "qualificationStatus": supplier.qualification_status,
+                    "leadTimeDays": supplier.lead_time_days,
+                    "capacityUnitsPerWeek": supplier.capacity_units_per_week,
+                },
+            ))
+
+        return KnowledgeGraphSnapshot(nodes=nodes, edges=edges)

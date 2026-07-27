@@ -79,3 +79,32 @@ class Substitution(BaseModel):
     cost_delta_usd: float = Field(default=0.0, alias="costDeltaUsd")
     quality_risk_score: float = Field(default=0.0, alias="qualityRiskScore", description="[0.0 - 1.0]")
     approval_status: str = Field(default="PRE_APPROVED", alias="approvalStatus")
+
+
+class GraphNode(BaseModel):
+    """One entity node in a KnowledgeGraphSnapshot - Knowledge Explorer (/knowledge)."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    type: str = Field(..., description="PRODUCT | PART | SUPPLIER")
+    label: str
+    detail: Dict[str, Any] = Field(default_factory=dict)
+
+
+class GraphEdge(BaseModel):
+    """One relationship edge in a KnowledgeGraphSnapshot - Knowledge Explorer (/knowledge)."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    source: str
+    target: str
+    type: str = Field(..., description="BOM | SUPPLIES | SUBSTITUTE")
+    label: Optional[str] = None
+
+
+class KnowledgeGraphSnapshot(BaseModel):
+    """Nodes/edges view of the Knowledge Graph for the Knowledge Explorer screen."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    nodes: List[GraphNode] = Field(default_factory=list)
+    edges: List[GraphEdge] = Field(default_factory=list)

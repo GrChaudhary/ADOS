@@ -10,7 +10,7 @@ from orchestrate import DecisionOrchestrator
 
 from .config import settings
 from .eventbus import get_event_bus
-from .routers import capabilities, digital_twin, events, events_stream, executive, health, incidents, learning, memory
+from .routers import capabilities, digital_twin, events, events_stream, executive, health, incidents, knowledge_graph, learning, memory
 
 _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
@@ -47,7 +47,7 @@ app.add_middleware(
 _ROUTERS = (
     health.router, events.router, capabilities.router, incidents.router,
     executive.router, memory.router, learning.router, digital_twin.router,
-    events_stream.router,
+    events_stream.router, knowledge_graph.router,
 )
 
 for _router in _ROUTERS:

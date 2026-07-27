@@ -1,6 +1,6 @@
 """ADOS Knowledge & Reasoning (L2) package."""
 
-from .models import Product, Part, Supplier, Facility, Specification, Substitution
+from .models import Product, Part, Supplier, Facility, Specification, Substitution, GraphNode, GraphEdge, KnowledgeGraphSnapshot
 from .asset_model import EnterpriseAssetModel, AssetLineage, Plant, Factory, Line, Machine, PLC, Sensor, Component
 from .knowledge_graph import KnowledgeGraph
 from .causal_models import ConditionNode, OutcomeNode, CausalEdge, CausalRankResult
@@ -10,7 +10,7 @@ from .decision_memory_index import DecisionMemoryIndex
 from .learning_engine import LearningEngine, LearningReplaySummary
 
 __all__ = [
-    "Product", "Part", "Supplier", "Facility", "Specification", "Substitution",
+    "Product", "Part", "Supplier", "Facility", "Specification", "Substitution", "GraphNode", "GraphEdge", "KnowledgeGraphSnapshot",
     "EnterpriseAssetModel", "AssetLineage", "Plant", "Factory", "Line", "Machine", "PLC", "Sensor", "Component",
     "KnowledgeGraph",
     "ConditionNode", "OutcomeNode", "CausalEdge", "CausalRankResult",

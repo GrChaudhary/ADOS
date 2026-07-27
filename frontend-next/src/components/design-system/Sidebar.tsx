@@ -10,6 +10,7 @@ import { usePathname } from "next/navigation";
 const NAV_ITEMS = [
   { href: "/executive/enterprise", icon: "\u{1F4CA}", label: "Executive" },
   { href: "/digital-twin", icon: "\u{1F3ED}", label: "Twin Room" },
+  { href: "/knowledge", icon: "\u{1F578}\u{FE0F}", label: "Knowledge" },
   { href: "/agents/network", icon: "\u{1F9E0}", label: "Agents" },
   { href: "/memory", icon: "\u{1F4BE}", label: "Memory" },
   { href: "/governance", icon: "\u{1F6E1}️", label: "Autonomy" },
