@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
+from conftest import admin_auth_header
 from knowledge import KnowledgeGraph
 
 
@@ -49,10 +50,7 @@ def test_get_knowledge_graph_unauthorized(client):
 
 
 def test_get_knowledge_graph_success(client):
-    response = client.get(
-        "/knowledge/graph",
-        headers={"Authorization": "Bearer dev-local-only-token"}
-    )
+    response = client.get("/knowledge/graph", headers=admin_auth_header())
     assert response.status_code == 200
     data = response.json()
 
@@ -61,5 +59,7 @@ def test_get_knowledge_graph_success(client):
     assert "MH-8820-PC" in node_ids
     assert "SUP-305" in node_ids
 
+    # 4 products now (knowledge/seed_data.py): EV-POW-800V (5 parts),
+    # EV-DRV-400V (5), EV-BAT-100KWH (4), EV-INV-800V (3) = 17 BOM edges.
     bom_edges = [e for e in data["edges"] if e["type"] == "BOM"]
-    assert len(bom_edges) == 5
+    assert len(bom_edges) == 17

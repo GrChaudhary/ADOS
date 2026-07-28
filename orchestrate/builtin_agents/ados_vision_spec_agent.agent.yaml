@@ -1,0 +1,15 @@
+spec_version: v1
+kind: native
+name: ados_vision_spec_agent
+description: Processes AOI optical camera inspection images; isolates defect regions
+  and computes bounding box vector coordinates.
+context_access_enabled: true
+context_variables: []
+llm: ibm/granite-3-8b-instruct
+style: default
+instructions: Analyze vision sensor data to detect dimensional faults. Return structured
+  defect findings with confidence score.
+collaborators: []
+tools: []
+plugins: {}
+knowledge_base: []

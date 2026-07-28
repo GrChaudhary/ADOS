@@ -10,6 +10,7 @@
 
 const TOKEN_KEY = "ados_service_token"; // same localStorage key as frontend/app.js and frontend/demo.js
 const TOKEN_CHANGED_EVENT = "ados-token-changed";
+const USER_KEY = "ados_current_user"; // RBAC (backend/app/rbac.py) - the User returned by /auth/login|me
 const PROXY_BASE = "/api/backend"; // next.config.ts rewrites this to the real backend's /api/v1
 const BACKEND_ORIGIN = process.env.NEXT_PUBLIC_ADOS_BACKEND_ORIGIN ?? "http://localhost:8000";
 
@@ -31,6 +32,46 @@ export function subscribeToTokenChanges(callback: () => void): () => void {
   return () => window.removeEventListener(TOKEN_CHANGED_EVENT, callback);
 }
 
+// useSyncExternalStore (useCurrentUser.ts) requires getSnapshot to return
+// a stable (===) reference when nothing changed - JSON.parse-ing
+// localStorage fresh on every call returns a new object every time even
+// when the raw string is identical, which reads as "the store changed"
+// on every render and causes an infinite update loop. Cache the parsed
+// result and only re-parse when the raw string actually changes.
+let _cachedUserRaw: string | null = null;
+let _cachedUser: AuthUser | null = null;
+
+export function getStoredUser(): AuthUser | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(USER_KEY);
+  if (raw === _cachedUserRaw) return _cachedUser;
+  _cachedUserRaw = raw;
+  if (!raw) {
+    _cachedUser = null;
+    return null;
+  }
+  try {
+    _cachedUser = JSON.parse(raw) as AuthUser;
+  } catch {
+    _cachedUser = null;
+  }
+  return _cachedUser;
+}
+
+function setStoredUser(user: AuthUser): void {
+  window.localStorage.setItem(USER_KEY, JSON.stringify(user));
+  window.dispatchEvent(new Event(TOKEN_CHANGED_EVENT));
+}
+
+/** Logs the current session out client-side: clears the stored JWT + user.
+ * Called both by an explicit "Log out" click and automatically by
+ * apiFetch() on a 401 (expired/invalid session). */
+export function clearSession(): void {
+  window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem(USER_KEY);
+  window.dispatchEvent(new Event(TOKEN_CHANGED_EVENT));
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${PROXY_BASE}${path}`, {
     ...init,
@@ -40,12 +81,34 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
+  if (res.status === 401) {
+    // Session expired/invalid (backend/app/rbac.py) - clear it and send the
+    // user back to log in rather than surfacing a raw fetch error on every
+    // query on the page.
+    clearSession();
+    if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+      window.location.href = "/login";
+    }
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status} ${path}: ${text}`);
   }
   if (res.status === 204) return null as T;
   return res.json() as Promise<T>;
+}
+
+// Binary responses (audio) can't go through apiFetch's res.json() - and
+// unlike EventSource, a plain fetch() can set the Authorization header, so
+// (unlike openIncidentEventStream below) this doesn't need a ?token= param.
+async function apiFetchBlob(path: string): Promise<Blob> {
+  const res = await fetch(`${PROXY_BASE}${path}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  });
+  if (!res.ok) {
+    throw new Error(`${res.status} ${path}`);
+  }
+  return res.blob();
 }
 
 // ---------------------------------------------------------------------
@@ -296,6 +359,126 @@ export interface IntegrationConnectorItem {
   database_name?: string;
 }
 
+// Manual capability invocation (backend/app/routers/capabilities.py's
+// POST /capabilities/invoke) - bypasses the whole incident pipeline
+// (vision/causal/governance stages); the caller supplies the governance
+// decision itself. contracts/capabilities.py's Capability/PolicyTier/
+// CallStatus enums, contracts/capability_call.py's CapabilityCall/
+// GovernanceInfo/CapabilityResponse models.
+export type Capability =
+  | "CreatePurchaseOrder"
+  | "CreateIncident"
+  | "ReserveInventory"
+  | "NotifyOperator"
+  | "UpdateMES"
+  | "CreateChangeRequest"
+  | "ScheduleMaintenance"
+  | "QueryExternalStock"
+  | "CreateExternalPO"
+  | "GetFreightQuote"
+  | "QueryDatabase";
+
+export type PolicyTier = 0 | 1 | 2; // AUTONOMOUS | APPROVAL_REQUIRED | EXECUTIVE_APPROVAL
+
+export interface CapabilityCallRequest {
+  capability: Capability;
+  incidentId: string;
+  requestedBy: string;
+  input: Record<string, unknown>;
+  governance: {
+    policyTier: PolicyTier;
+    approvedBy?: string | null;
+  };
+}
+
+export interface CapabilityCallResponse {
+  requestId: string;
+  status: "succeeded" | "failed" | "rolled_back";
+  connector: string | null;
+  output: Record<string, unknown>;
+  error: string | null;
+  compensatingActionRan: boolean;
+  occurredAt: string;
+}
+
+export type AgentTier =
+  | "Tier 0 (Autonomous)"
+  | "Tier 1 (Engineer Approval)"
+  | "Tier 2 (Multi-Executive)";
+
+export type AgentStage =
+  | "Perception"
+  | "Reasoning"
+  | "CandidateGen"
+  | "Evaluation"
+  | "Execution"
+  | "Learning";
+
+export interface AgentRegistryEntry {
+  id: string;
+  label: string;
+  icon: string;
+  color: string;
+  description: string;
+  model: string;
+  inputSchema: string;
+  outputSchema: string;
+  memoryRAG: boolean;
+  targetTier: AgentTier;
+  stage: AgentStage;
+  isBuiltIn: boolean;
+  instructions: string;
+  createdAt: string;
+}
+
+// RBAC (backend/app/rbac.py) - real per-user login, replacing the shared
+// service-token box that used to be the only "auth" in this app.
+export type Role = "manager" | "executive" | "admin" | "auditor";
+
+export interface AuthUser {
+  userId: string;
+  username: string;
+  displayName: string;
+  role: Role;
+  approvalLimitUsd: number;
+  active: boolean;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: AuthUser;
+}
+
+export interface GovernancePolicies {
+  financialExposureBands: {
+    lowExposureMaxUsd: number;
+    highExposureMinUsd: number;
+    tier0ConfidenceThreshold: number;
+    source: string;
+  };
+  capabilityRiskClass: Record<string, string>;
+  rbacApprovalRules: string[];
+  itsmLiveWriteGate: {
+    connectorEligible: boolean;
+    liveWritesEnabled: boolean;
+    source: string;
+  };
+}
+
+export interface CreateAgentRequest {
+  label: string;
+  icon: string;
+  color: string;
+  description: string;
+  model: string;
+  inputSchema: string;
+  outputSchema: string;
+  memoryRAG: boolean;
+  targetTier: AgentTier;
+  stage: AgentStage;
+  instructions: string;
+}
+
 export const api = {
   getDigitalTwinLines: () => apiFetch<DigitalTwinLine[]>("/digital-twin/lines"),
   getKpis: () => apiFetch<KpiSummary>("/executive/kpis"),
@@ -308,10 +491,13 @@ export const api = {
   getIncident: (id: string) => apiFetch<IncidentRecord | IncidentInProgress>(`/incidents/${id}`),
   listIncidentEvents: (incidentId: string) => apiFetch<EventEnvelope[]>(`/events?incident_id=${incidentId}`),
   listAllEvents: (limit = 200) => apiFetch<EventEnvelope[]>(`/events?limit=${limit}`),
-  approveIncident: (id: string, approvedBy: string) =>
+  // approved_by is no longer client-supplied - the backend derives it from
+  // the caller's session (backend/app/rbac.py), so this takes no identity
+  // argument anymore and the request has no body.
+  approveIncident: (id: string, selectedOptionId?: string) =>
     apiFetch<{ incidentId: string; decision: string }>(`/incidents/${id}/approve`, {
       method: "POST",
-      body: JSON.stringify({ approved_by: approvedBy }),
+      body: selectedOptionId ? JSON.stringify({ selected_option_id: selectedOptionId }) : undefined,
     }),
   getIncidentOptions: (id: string) => apiFetch<IncidentComparison>(`/executive/incidents/${id}/options`),
   searchDecisionMemory: (query: DecisionMemoryQuery) =>
@@ -322,6 +508,33 @@ export const api = {
   getIntegrationsStatus: () => apiFetch<IntegrationConnectorItem[]>("/integrations/status"),
   testWatsonxConnection: () =>
     apiFetch<WatsonxConnectionTestResult>("/integrations/watsonx/test-connection", { method: "POST" }),
+  invokeCapability: (body: CapabilityCallRequest) =>
+    apiFetch<CapabilityCallResponse>("/capabilities/invoke", { method: "POST", body: JSON.stringify(body) }),
+  // 404 when TTS_INCIDENT_BRIEFING_ENABLED isn't set on the backend or the
+  // incident hasn't reached a terminal state yet - callers should treat
+  // that as "no briefing", not an error banner (see .env.example).
+  getIncidentBriefingAudio: (id: string) => apiFetchBlob(`/incidents/${id}/briefing-audio`),
+  // Agent Registry — dynamic, Cloudant-backed
+  listAgents: () => apiFetch<AgentRegistryEntry[]>("/agents-registry"),
+  getStageTemplates: () => apiFetch<Record<string, Omit<AgentRegistryEntry, "id" | "label" | "isBuiltIn" | "createdAt">>>("/agents-registry/stage-templates"),
+  createAgent: (body: CreateAgentRequest) =>
+    apiFetch<AgentRegistryEntry>("/agents-registry", { method: "POST", body: JSON.stringify(body) }),
+  deleteAgent: (id: string) => apiFetch<null>(`/agents-registry/${id}`, { method: "DELETE" }),
+  // RBAC (backend/app/routers/auth.py)
+  login: async (username: string, password: string) => {
+    const res = await apiFetch<LoginResponse>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+    setToken(res.token);
+    setStoredUser(res.user);
+    return res;
+  },
+  getCurrentUser: () => apiFetch<AuthUser>("/auth/me"),
+  listUsers: () => apiFetch<AuthUser[]>("/auth/users"),
+  createUser: (body: { username: string; password: string; display_name: string; role: Role; approval_limit_usd: number }) =>
+    apiFetch<AuthUser>("/auth/users", { method: "POST", body: JSON.stringify(body) }),
+  getGovernancePolicies: () => apiFetch<GovernancePolicies>("/governance/policies"),
 };
 
 /**

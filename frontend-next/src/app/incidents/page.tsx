@@ -6,7 +6,9 @@ import { useQuery } from "@tanstack/react-query";
 import { api, IncidentRecord } from "@/lib/api";
 import { useMissionControlStore } from "@/lib/store";
 import { useHasToken } from "@/lib/useHasToken";
-import { MOTOR_HOUSING_QUALITY_ALERT } from "@/lib/demoScenario";
+import { QUALITY_ALERT_SCENARIOS } from "@/lib/demoScenario";
+
+const MOTOR_HOUSING_QUALITY_ALERT = QUALITY_ALERT_SCENARIOS.find((s) => s.lineId === "Line 2")!.request;
 
 export default function IncidentsHubPage() {
   const router = useRouter();

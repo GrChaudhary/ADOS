@@ -8,7 +8,7 @@ import asyncio
 import pytest
 
 from backend.app.eventbus import InMemoryEventBus
-from contracts import Capability, IncidentState, PolicyTier
+from contracts import CallStatus, Capability, IncidentState, PolicyTier
 from integrations import default_hub
 from orchestrate import (
     DecisionOrchestrator,
@@ -340,3 +340,83 @@ async def test_preempted_incident_auto_resumes_under_same_incident_id():
     assert high_record.final_state == IncidentState.RESOLVED.value
     assert low_record.final_state == IncidentState.RESOLVED.value
     assert low_record.incident_id == "inc-low"  # same incident_id throughout — resumed, not restarted as a new incident
+
+
+@pytest.mark.asyncio
+async def test_watsonx_itsm_capability_publishes_agent_completed_event(monkeypatch):
+    """orchestrator.py additionally publishes an AgentCompleted event
+    (agent_id="watsonx-itsm-agent") whenever the watsonx_itsm connector
+    fulfills a capability call, so backend/app/routers/agents_registry.py's
+    watsonx-itsm-agent entry shows real invocation stats/lineage on
+    frontend-next/src/app/agents/network/page.tsx's Live Swarm tab instead
+    of always reading zero invocations - see the comment at orchestrator.py's
+    publish site. Uses httpx.MockTransport like tests/test_itsm_connector.py
+    - no live network calls."""
+    import httpx
+
+    from integrations.connectors.cloudant import CloudantConnector
+    from integrations.connectors.console import ConsoleConnector
+    from integrations.connectors.marketplace import MarketplaceConnector
+    from integrations.connectors.sap import SAPConnector
+    from integrations.connectors.servicenow import ServiceNowConnector
+    from integrations.connectors.watsonx_itsm import WatsonxITSMConnector
+    from integrations.hub import IntegrationHub
+
+    monkeypatch.setenv("WO_INSTANCE", "https://api.example.watson-orchestrate.cloud.ibm.com/instances/x")
+    monkeypatch.setenv("WO_API_KEY", "test-key")
+    monkeypatch.setenv("WO_ITSM_INTEGRATION_ENABLED", "true")
+    monkeypatch.setenv("WO_ITSM_LIVE_WRITES_ENABLED", "true")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "iam.cloud.ibm.com" in str(request.url):
+            return httpx.Response(200, json={"access_token": "fake-iam-token"})
+        content = 'RESULT: {"status": "created", "ticket_id": "INC-TEST-9001", "reason": null}'
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    hub = IntegrationHub()
+    hub.registry.register(CloudantConnector())
+    hub.registry.register(WatsonxITSMConnector(transport=httpx.MockTransport(handler)))
+    hub.registry.register(MarketplaceConnector())
+    hub.registry.register(ServiceNowConnector())
+    hub.registry.register(SAPConnector())
+    hub.registry.register(ConsoleConnector())
+
+    bus = InMemoryEventBus()
+    orchestrator = DecisionOrchestrator(event_bus=bus, integration_hub=hub)
+    priority = PriorityInputs(
+        safety_impact=0.9, customer_impact=0.6, line_down_cost_per_hour_usd=12_000,
+        production_priority=0.7, is_systemic=False,
+    )
+
+    async def auto_approve():
+        for _ in range(200):
+            pending = orchestrator.approvals.list_pending()
+            if pending:
+                orchestrator.approvals.approve(pending[0].incident_id, approved_by="ops-lead-itsm-test")
+                return
+            await asyncio.sleep(0.01)
+
+    run_task = asyncio.create_task(
+        orchestrator.run_incident(
+            plant_id="FAC-P1", line_id="Line-ITSM-Test", part_number="P-1002",
+            vision_data={"measured_bore_diameter_mm": 45.085}, priority=priority,
+        )
+    )
+    approver_task = asyncio.create_task(auto_approve())
+    record = await asyncio.wait_for(run_task, timeout=5)
+    await approver_task
+
+    assert record.capability_invoked == Capability.SCHEDULE_MAINTENANCE
+    assert record.capability_status == CallStatus.SUCCEEDED
+
+    events = await bus.recent(incident_id=record.incident_id)
+    completed = next(e for e in events if e.event_type == "CapabilityInvocationCompleted")
+    assert completed.payload["connector"] == "watsonx_itsm"
+
+    agent_completed = [
+        e for e in events
+        if e.event_type == "AgentCompleted" and e.payload.get("agentId") == "watsonx-itsm-agent"
+    ]
+    assert len(agent_completed) == 1
+    assert agent_completed[0].payload["result"]["ticket_id"] == "INC-TEST-9001"
+    assert agent_completed[0].payload["stageName"] == "Execution"

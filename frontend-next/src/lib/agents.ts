@@ -114,7 +114,22 @@ export const AGENTS: Record<string, AgentMeta> = {
     memoryRAG: true,
     targetTier: "Tier 0 (Autonomous)",
   },
+  "watsonx-itsm-agent": {
+    id: "watsonx-itsm-agent",
+    label: "ITSM Execution",
+    icon: "🎫",
+    color: "teal",
+    description: "Creates and looks up real ServiceNow incident records via a dedicated watsonx Orchestrate agent (ados_itsm_agent) against a live ServiceNow instance — the real system-of-record write for CreateIncident, CreateChangeRequest, ScheduleMaintenance, and NotifyOperator capability calls.",
+    model: "watsonx Orchestrate Agent (groq/openai/gpt-oss-120b) — ServiceNow Table API",
+    inputSchema: "CapabilityCall { capability, executionSteps, targetLineId, governance }",
+    outputSchema: "ExecutionResult { ticket_id, status }",
+    memoryRAG: false,
+    targetTier: "Tier 1 (Engineer Approval)",
+  },
 };
+
+/** Set of IDs belonging to the 8 built-in agents — used to lock delete actions in the UI. */
+export const BUILTIN_AGENT_IDS: ReadonlySet<string> = new Set(Object.keys(AGENTS));
 
 export function resolveAgentMeta(agentId: string): AgentMeta {
   return (

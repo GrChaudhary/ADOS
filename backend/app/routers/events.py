@@ -11,9 +11,9 @@ from fastapi import APIRouter, Depends, Request
 
 from contracts import EventEnvelope
 
-from ..auth import require_service_auth
+from ..auth import get_current_user
 
-router = APIRouter(prefix="/events", tags=["events"], dependencies=[Depends(require_service_auth)])
+router = APIRouter(prefix="/events", tags=["events"], dependencies=[Depends(get_current_user)])
 
 
 @router.post("", response_model=EventEnvelope)

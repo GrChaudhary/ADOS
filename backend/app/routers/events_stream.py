@@ -1,16 +1,19 @@
 """
 SSE live event stream for the Mission Control agent timeline (Phase 2).
 Separate router from events.py because browser EventSource can't set an
-Authorization header — this accepts the service token via ?token= instead,
-same shared-secret trust model as require_service_auth (backend/app/auth.py).
+Authorization header — this accepts the session JWT via ?token= instead,
+verified the same way backend/app/rbac.py's get_current_user() would
+(it also accepts a ?token= query param for exactly this reason), just
+called directly here since Query(...) already extracts the string and a
+second HTTPBearer/Request-based Depends would be redundant.
 """
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
-from ..config import settings
+from ..rbac import decode_access_token
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -22,8 +25,8 @@ async def stream_events(
     incident_id: Optional[str] = Query(None),
     max_events: Optional[int] = Query(None),
 ):
-    if token != settings.service_auth_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing token")
+    # Raises 401 itself (invalid/expired) - same as get_current_user().
+    decode_access_token(token)
 
     async def event_generator():
         count = 0

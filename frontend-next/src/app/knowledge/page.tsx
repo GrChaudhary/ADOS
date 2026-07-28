@@ -92,7 +92,7 @@ function prettifyKey(key: string): string {
 
 function formatDetailValue(key: string, value: unknown): string {
   if (typeof value === "number") {
-    return /usd/i.test(key) ? `$${value.toLocaleString()}` : value.toLocaleString();
+    return /usd/i.test(key) ? `$${value.toLocaleString("en-US")}` : value.toLocaleString("en-US");
   }
   if (typeof value === "boolean") return value ? "Yes" : "No";
   return String(value);

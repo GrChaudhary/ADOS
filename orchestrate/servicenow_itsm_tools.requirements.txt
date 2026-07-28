@@ -1,0 +1,8 @@
+# Deliberately pins a harmless, already-widely-available package (not
+# imported by servicenow_itsm_tools.py, which is stdlib + ADK SDK only) so
+# this tool's build gets a distinct venv-cache fingerprint from
+# watsonx_tools.py's zero-extra-dependency build. Both tools otherwise
+# resolve to an identical bare environment, which collided on IBM's shared
+# /shared/venv-cache/<hash> build path at deploy time ("rename build->final:
+# ... file exists") - see orchestrate/ITSM_AGENT_SETUP.md.
+certifi>=2024.2.2

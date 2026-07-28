@@ -8,14 +8,16 @@ from fastapi.staticfiles import StaticFiles
 from integrations import default_hub
 from orchestrate import DecisionOrchestrator
 
+from . import user_store
 from .config import settings
 from .eventbus import get_event_bus
-from .routers import capabilities, digital_twin, events, events_stream, executive, health, incidents, integrations, knowledge_graph, learning, memory
+from .routers import ai_services, agents_registry, auth, capabilities, digital_twin, events, events_stream, executive, governance, health, incidents, integrations, knowledge_graph, learning, memory
 
 _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
 
 from knowledge.cloudant_client import cloudant_db
+from executive.seed_data import INCIDENT_RECORDS_SEED
 
 
 @asynccontextmanager
@@ -26,13 +28,29 @@ async def lifespan(app: FastAPI):
     app.state.event_bus = get_event_bus(settings.event_bus_backend, **kwargs)
     app.state.integration_hub = default_hub()
     app.state.orchestrator = DecisionOrchestrator(
-        event_bus=app.state.event_bus, integration_hub=app.state.integration_hub
+        event_bus=app.state.event_bus,
+        integration_hub=app.state.integration_hub,
+        # 20 hero + 200 generated demo incidents (executive/seed_data.py) -
+        # always loaded for a populated dashboard/KPI baseline. Additive
+        # with real Cloudant-backed incidents below, not a replacement:
+        # different incident_id namespace (INC-2026-* vs real UUIDs).
+        seed_records=INCIDENT_RECORDS_SEED,
     )
     app.state.incident_tasks = {}
 
     # Initialize IBM Cloudant NoSQL Database connection and seed data
     if cloudant_db.is_configured():
         cloudant_db.initialize()
+        loaded = await app.state.orchestrator.audit_trail.hydrate_from_cloudant()
+        print(f"[Startup] Hydrated {loaded} incident(s) from Cloudant into the audit trail")
+
+    # RBAC (backend/app/user_store.py) - seeds the 5 demo accounts only if
+    # the user store is empty; never resets existing accounts/passwords.
+    generated_passwords = user_store.bootstrap_users()
+    if generated_passwords:
+        print("[Startup] Seeded RBAC accounts with generated passwords (change via POST /auth/users):")
+        for username, password in generated_passwords.items():
+            print(f"  {username} / {password}")
 
     yield
 
@@ -53,9 +71,10 @@ app.add_middleware(
 )
 
 _ROUTERS = (
-    health.router, events.router, capabilities.router, incidents.router,
+    health.router, auth.router, events.router, capabilities.router, incidents.router,
     executive.router, memory.router, learning.router, digital_twin.router,
     events_stream.router, knowledge_graph.router, integrations.router,
+    ai_services.router, agents_registry.router, governance.router,
 )
 
 for _router in _ROUTERS:

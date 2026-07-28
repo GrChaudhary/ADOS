@@ -10,8 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
+from conftest import admin_auth_header
 
-AUTH = {"Authorization": "Bearer dev-local-only-token"}
+AUTH = admin_auth_header()
 
 
 @pytest.fixture

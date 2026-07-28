@@ -1,0 +1,15 @@
+spec_version: v1
+kind: native
+name: ados_cad_spec_agent
+description: Aligns 2D/3D defect scans against nominal STEP CAD files (.step) to measure
+  micrometer tolerance offset vectors.
+context_access_enabled: true
+context_variables: []
+llm: ibm/granite-3-8b-instruct
+style: default
+instructions: Compare measured part geometry against CAD nominal. Report offset vectors
+  and tolerance compliance.
+collaborators: []
+tools: []
+plugins: {}
+knowledge_base: []

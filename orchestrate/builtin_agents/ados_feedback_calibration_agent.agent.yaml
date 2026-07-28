@@ -1,0 +1,15 @@
+spec_version: v1
+kind: native
+name: ados_feedback_calibration_agent
+description: Replays completed incident audit trails to update Causal Graph edge weights
+  via Bayesian & EMA updates.
+context_access_enabled: true
+context_variables: []
+llm: ibm/granite-3-8b-instruct
+style: default
+instructions: Replay resolved incident outcomes to recalibrate causal graph edge weights
+  via Bayesian update.
+collaborators: []
+tools: []
+plugins: {}
+knowledge_base: []

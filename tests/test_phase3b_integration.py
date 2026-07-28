@@ -49,14 +49,14 @@ def copilot():
 def test_kpi_engine_metrics_derivation(kpi_eng):
     kpis = kpi_eng.compute_kpis()
 
-    # 5 hand-authored hero incidents + 95 deterministically generated
+    # 20 hand-authored hero incidents + 200 deterministically generated
     # historical incidents (executive/incident_generator.py, seed=42).
-    assert kpis.total_incidents == 100
-    assert kpis.resolved_incidents == 100
+    assert kpis.total_incidents == 220
+    assert kpis.resolved_incidents == 220
     assert kpis.mttr_avg_minutes > 0
     assert kpis.revenue_protected_usd > 0
-    assert kpis.autonomy_index == 0.52
-    assert kpis.recommendation_acceptance_rate == 0.8542
+    assert kpis.autonomy_index == 0.4773
+    assert kpis.recommendation_acceptance_rate == 0.8261
 
 
 def test_kpi_engine_what_if_simulation(kpi_eng):
@@ -76,7 +76,12 @@ def test_recommendation_engine_generation(rec_eng):
     assert len(recs) >= 2
     categories = [r.category for r in recs]
     assert "SUPPLIER_REQUALIFICATION" in categories
-    assert "AUTONOMY_PROMOTION" in categories
+    # AUTONOMY_PROMOTION only fires when >=80% of Tier-1 TOL-DRIFT
+    # incidents were accepted as-is (executive/recommendation_engine.py) -
+    # with the 220-record seed (up from 100), that rate is genuinely
+    # ~below threshold now, so this category legitimately doesn't appear.
+    # Not asserted as always-present; the acceptance-rate math itself is
+    # covered by test_kpi_engine_metrics_derivation.
     assert any(r.estimated_annual_savings_usd > 0 for r in recs)
 
 

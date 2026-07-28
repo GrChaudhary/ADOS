@@ -9,9 +9,9 @@ from fastapi import APIRouter, Depends, Request
 
 from knowledge import FactoryLineState
 
-from ..auth import require_service_auth
+from ..auth import get_current_user
 
-router = APIRouter(prefix="/digital-twin", tags=["Digital Twin"], dependencies=[Depends(require_service_auth)])
+router = APIRouter(prefix="/digital-twin", tags=["Digital Twin"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/lines", response_model=List[FactoryLineState])

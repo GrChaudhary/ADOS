@@ -12,9 +12,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from integrations import default_hub
 from integrations.connectors.watsonx_itsm import WatsonxITSMConnector
 from knowledge.cloudant_client import cloudant_db
-from ..auth import require_service_auth
+from knowledge.local_llm_client import local_llm_client
+from knowledge.nlu_client import nlu_client
+from knowledge.tts_client import tts_client
+from ..auth import get_current_user
 
-router = APIRouter(prefix="/integrations", tags=["Integration Hub"], dependencies=[Depends(require_service_auth)])
+router = APIRouter(prefix="/integrations", tags=["Integration Hub"], dependencies=[Depends(get_current_user)])
 
 
 class ConnectorStatusResponse(BaseModel):
@@ -89,6 +92,26 @@ async def get_connector_status():
             "description": "Direct machine spindle parameter tuning, telemetry streaming, and preemption locks.",
             "capabilities": ["UpdateMachineFeed", "ApplySoftLock", "StreamTelemetry"],
         },
+        {
+            "id": "watson_nlu",
+            "name": "watson_nlu",
+            "display_name": "IBM Watson Natural Language Understanding",
+            "kind": "real",
+            "auth": "IBM Cloud IAM OAuth 2.0",
+            "module": "knowledge/nlu_client.py",
+            "description": "Live sentiment, keyword, and category extraction over the Reasoning stage's watsonx.ai explanation text.",
+            "capabilities": ["AnalyzeText", "ExtractSentiment", "ExtractKeywords"],
+        },
+        {
+            "id": "watson_tts",
+            "name": "watson_tts",
+            "display_name": "IBM Watson Text to Speech",
+            "kind": "real",
+            "auth": "IBM Cloud IAM OAuth 2.0",
+            "module": "knowledge/tts_client.py",
+            "description": "Live speech synthesis for spoken incident-resolution briefings (opt-in per-incident via TTS_INCIDENT_BRIEFING_ENABLED).",
+            "capabilities": ["SynthesizeSpeech"],
+        },
     ]
 
     result: List[ConnectorStatusResponse] = []
@@ -114,7 +137,27 @@ async def get_connector_status():
         )
     )
 
-    # 2. Add standard connectors checking real environment configuration state
+    # 2. Add Local LLM (Ollama) status — actually pings the server rather
+    # than trusting the enabled flag alone, since a local process (unlike
+    # a cloud service) can silently be down.
+    llm_health = local_llm_client.get_health_status()
+    result.append(
+        ConnectorStatusResponse(
+            name="Local LLM (Ollama)",
+            id="local_llm",
+            configured=local_llm_client.is_configured(),
+            kind="real",
+            status=llm_health.get("status", "Not Configured"),
+            auth="None (local HTTP, no auth)",
+            module="knowledge/local_llm_client.py",
+            description=f"Live root-cause reasoning generation via a self-hosted Ollama model ({local_llm_client.model}) — used by the Reasoning stage instead of a managed cloud LLM.",
+            capabilities=["GenerateRootCauseExplanation"],
+            connected=llm_health.get("connected", False),
+            host=llm_health.get("host"),
+        )
+    )
+
+    # 3. Add standard connectors checking real environment configuration state
     for meta in connectors_meta:
         c_id = meta["id"]
         is_cfg = False
@@ -128,6 +171,10 @@ async def get_connector_status():
             )
         elif c_id == "marketplace":
             is_cfg = False
+        elif c_id == "watson_nlu":
+            is_cfg = nlu_client.is_configured()
+        elif c_id == "watson_tts":
+            is_cfg = tts_client.is_configured()
 
         status_text = (
             "Configured"

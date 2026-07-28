@@ -8,9 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from contracts import IncidentRecord, DecisionMemoryQuery, DecisionMemorySearchResult
 from knowledge import DecisionMemoryIndex
 
-from ..auth import require_service_auth
+from ..auth import get_current_user
 
-router = APIRouter(prefix="/memory", tags=["Decision Memory"], dependencies=[Depends(require_service_auth)])
+router = APIRouter(prefix="/memory", tags=["Decision Memory"], dependencies=[Depends(get_current_user)])
 
 from knowledge.cloudant_client import cloudant_db
 

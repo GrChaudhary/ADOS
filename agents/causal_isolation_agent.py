@@ -6,12 +6,14 @@ Performs root-cause analysis by querying the Causal Graph and Enterprise Knowled
 from typing import Dict, Any, List, Optional
 from agents.sdk import BaseAgent, IncidentContext, StageInput, StageOutput, EvidenceItem, AlternativeOption, DecisionMemoryRAG
 from knowledge import CausalGraph, KnowledgeGraph, DecisionMemoryIndex
+from knowledge.local_llm_client import local_llm_client
+from knowledge.nlu_client import nlu_client
 
 
 class CausalIsolationAgent(BaseAgent):
     """
-    Queries Causal Graph for ranked root causes and cross-references Knowledge Graph
-    and Decision Memory RAG precedents.
+    Queries Causal Graph for ranked root causes and cross-references Knowledge Graph,
+    IBM watsonx.ai Granite LLM reasoning, and Decision Memory RAG precedents.
     """
 
     def __init__(
@@ -38,11 +40,51 @@ class CausalIsolationAgent(BaseAgent):
 
         primary_cause = ranked_causes[0] if ranked_causes else None
 
+        # Local LLM (Ollama) root-cause explanation. status is surfaced
+        # as-is to result["llm_status"] below — the frontend gates its
+        # "LIVE" badge on that, not on presence of text, so a fallback
+        # never gets shown as if it were live generation.
+        llm_reasoning = local_llm_client.generate_root_cause_explanation(
+            defect_type=defect_type,
+            primary_cause=primary_cause.condition.name if primary_cause else "Unknown",
+            confidence=primary_cause.weight if primary_cause else 0.0,
+            evidence_paths=primary_cause.evidence_path if primary_cause else [],
+            part_number="MH-8820",
+        )
+        if llm_reasoning.get("status") != "live_llm_generated":
+            # Honest, clearly-labeled rule-based synthesis - never claims
+            # to be model output when no model actually ran.
+            llm_reasoning = {
+                "status": llm_reasoning.get("status", "not_configured"),
+                "model_used": "Rule-based synthesis (no live LLM configured)",
+                "explanation": (
+                    f"{primary_cause.condition.name if primary_cause else 'Unknown cause'} identified as the "
+                    f"primary root cause (confidence {(primary_cause.weight if primary_cause else 0.0) * 100:.1f}%) "
+                    f"for defect '{defect_type}'."
+                ),
+            }
+
+        # IBM Watson NLU pass over the reasoning explanation — keyword/
+        # sentiment/category signal on top of the LLM text. Never
+        # fabricated: nlu_status reflects exactly what nlu_client returned
+        # (not_configured/auth_failed/error/live), and the insight fields
+        # stay empty rather than guessed at when it isn't "live".
+        explanation_text = llm_reasoning.get("explanation") or ""
+        nlu_result = nlu_client.analyze_text(explanation_text) if explanation_text else {"status": "not_configured"}
+        nlu_live = nlu_result.get("status") == "live"
+
         result = {
             "defect_type": defect_type,
             "primary_root_cause": primary_cause.condition.name if primary_cause else "Unknown",
             "primary_condition_id": primary_cause.condition.condition_id if primary_cause else None,
             "root_cause_confidence": primary_cause.weight if primary_cause else 0.0,
+            "llm_status": llm_reasoning.get("status"),
+            "llm_explanation": llm_reasoning.get("explanation"),
+            "model_used": llm_reasoning.get("model_used"),
+            "nlu_status": nlu_result.get("status"),
+            "nlu_sentiment": nlu_result.get("sentiment", {}).get("document") if nlu_live else None,
+            "nlu_keywords": [kw["text"] for kw in nlu_result.get("keywords", [])[:5]] if nlu_live else [],
+            "nlu_categories": [c["label"] for c in nlu_result.get("categories", [])[:3]] if nlu_live else [],
             "ranked_causes": [
                 {
                     "rank": rc.rank,

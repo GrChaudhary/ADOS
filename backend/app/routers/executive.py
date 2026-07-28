@@ -28,9 +28,9 @@ from executive import (
     IntelligenceFacade
 )
 
-from ..auth import require_service_auth
+from ..auth import get_current_user
 
-router = APIRouter(prefix="/executive", tags=["executive"], dependencies=[Depends(require_service_auth)])
+router = APIRouter(prefix="/executive", tags=["executive"], dependencies=[Depends(get_current_user)])
 
 
 class CopilotQuery(BaseModel):

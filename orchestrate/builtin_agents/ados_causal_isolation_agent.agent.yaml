@@ -1,0 +1,15 @@
+spec_version: v1
+kind: native
+name: ados_causal_isolation_agent
+description: Evaluates Bayesian Causal Graph probabilistic edges to isolate primary
+  root cause (tooling wear vs humidity vs raw material).
+context_access_enabled: true
+context_variables: []
+llm: ibm/granite-3-8b-instruct
+style: default
+instructions: Use Bayesian causal graph and decision memory to isolate root cause
+  with probability and evidence chain.
+collaborators: []
+tools: []
+plugins: {}
+knowledge_base: []

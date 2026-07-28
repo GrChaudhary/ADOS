@@ -4,11 +4,12 @@
 // reset - Zustand's store lives outside the React tree).
 //
 // Tracks: incidents started from this browser session, and which lines
-// currently have one in flight. The real DigitalTwinStore doesn't yet
-// flip a line's status on incident start/resolve (see
-// docs/PHASE5B_ANTIGRAVITY_HANDOFF.md's note on this), so this overlay is
-// an honest, session-local "this line has an active incident" signal,
-// not a claim about what the backend's digital twin itself reports.
+// currently have one in flight. The backend's DigitalTwinStore does flip a
+// line's real status on incident start/resolve (orchestrate/orchestrator.py's
+// run_incident/_finalize), but that only lands on the next 5s poll of
+// /digital-twin/lines - this overlay exists purely to show the line as
+// DEGRADED instantly, in the gap between clicking "Simulate Quality Alert"
+// and the next poll, not to compensate for a backend that never updates it.
 
 import { create } from "zustand";
 

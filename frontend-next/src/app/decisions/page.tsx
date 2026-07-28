@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, DecisionMemorySearchResult, IncidentRecord } from "@/lib/api";
-import { useActivePersona } from "@/lib/usePersona";
+import { api, clearSession, DecisionMemorySearchResult, IncidentRecord } from "@/lib/api";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 import { useHasToken } from "@/lib/useHasToken";
 
 interface DecisionItem {
@@ -23,7 +23,7 @@ interface DecisionItem {
 
 export default function DecisionsPage() {
   const hasToken = useHasToken();
-  const activePersona = useActivePersona();
+  const currentUser = useCurrentUser();
   const [activeFilter, setActiveFilter] = useState<string>("ALL");
   const [localApprovals, setLocalApprovals] = useState<Record<string, boolean>>({});
 
@@ -65,20 +65,21 @@ export default function DecisionsPage() {
       exposureUsd: rec.estimatedCostUsd ?? 0,
       downtimeMin: rec.actualDowntimeMin ?? rec.estimatedDowntimeMin ?? 6,
       status: status,
-      approvedBy: rec.approvedBy ?? (isTier0 ? "Tier 0 Autonomy Policy Engine" : isLocalApproved ? `${activePersona.name} (${activePersona.role})` : null),
+      approvedBy: rec.approvedBy ?? (isTier0 ? "Tier 0 Autonomy Policy Engine" : isLocalApproved && currentUser ? `${currentUser.displayName} (${currentUser.role})` : null),
       timestamp: rec.createdAt ? new Date(rec.createdAt).toLocaleTimeString() : "Just now",
     };
   });
 
-  // The active persona (set on /admin) is this session's approver identity
-  // and its approvalLimitUsd is enforced here, not just displayed - a
-  // decision whose cost exposure exceeds the persona's limit (or a
-  // read-only persona with a $0 limit) cannot be approved from this screen.
-  const canApprove = (exposureUsd: number) => activePersona.approvalLimitUsd > 0 && exposureUsd <= activePersona.approvalLimitUsd;
+  // The logged-in user's approvalLimitUsd is checked here for a responsive
+  // UI (grey out what would 403 anyway), but the backend
+  // (backend/app/routers/incidents.py's _authorize_decision) is the real
+  // enforcement point - this is a hint, not the security boundary.
+  const canApprove = (exposureUsd: number) =>
+    Boolean(currentUser) && currentUser!.approvalLimitUsd > 0 && exposureUsd <= currentUser!.approvalLimitUsd;
 
   const handleApprove = (incidentId: string) => {
     setLocalApprovals((prev) => ({ ...prev, [incidentId]: true }));
-    api.approveIncident(incidentId, `${activePersona.name} (${activePersona.role})`).catch((err) => {
+    api.approveIncident(incidentId).catch((err) => {
       console.error("Failed to approve incident on backend", err);
     });
   };
@@ -118,9 +119,19 @@ export default function DecisionsPage() {
             Cross-incident recommendation command center reading real <code className="text-emerald">IncidentRecord</code> audit trails from Decision Memory.
           </p>
           <p className="text-xs font-mono text-text-secondary mt-1">
-            Approving as <span className="text-cobalt font-semibold">{activePersona.name}</span> —{" "}
-            {activePersona.approvalLimitUsd > 0 ? `up to $${activePersona.approvalLimitUsd.toLocaleString()}` : "read-only, no approval authority"}{" "}
-            (<a href="/admin" className="underline hover:text-text-primary">switch persona</a>)
+            {currentUser ? (
+              <>
+                Approving as <span className="text-cobalt font-semibold">{currentUser.displayName}</span> —{" "}
+                {currentUser.approvalLimitUsd > 0 ? `up to $${currentUser.approvalLimitUsd.toLocaleString("en-US")}` : "read-only, no approval authority"}{" "}
+                (
+                <button onClick={() => { clearSession(); window.location.href = "/login"; }} className="underline hover:text-text-primary">
+                  log out
+                </button>
+                )
+              </>
+            ) : (
+              <a href="/login" className="underline hover:text-text-primary">Log in to approve decisions</a>
+            )}
           </p>
         </div>
 
@@ -229,7 +240,7 @@ export default function DecisionsPage() {
                         ) : (
                           <span
                             className="text-[11px] text-status-red"
-                            title={`Exceeds ${activePersona.name}'s $${activePersona.approvalLimitUsd.toLocaleString()} approval limit`}
+                            title={currentUser ? `Exceeds ${currentUser.displayName}'s $${currentUser.approvalLimitUsd.toLocaleString("en-US")} approval limit` : "Log in to approve"}
                           >
                             Exceeds your limit
                           </span>

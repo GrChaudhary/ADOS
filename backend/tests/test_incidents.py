@@ -41,9 +41,9 @@ async def test_incident_lifecycle_via_api(client, auth_headers):
     status_resp = client.get(f"/incidents/{incident_id}", headers=auth_headers)
     assert status_resp.json()["status"] == "in_progress"
 
-    approve_resp = client.post(
-        f"/incidents/{incident_id}/approve", json={"approved_by": "ops-lead-api"}, headers=auth_headers
-    )
+    # approved_by is no longer client-supplied (backend/app/rbac.py) - it's
+    # derived from the authenticated session, so no request body at all.
+    approve_resp = client.post(f"/incidents/{incident_id}/approve", headers=auth_headers)
     assert approve_resp.status_code == 200
 
     record = None
@@ -57,9 +57,19 @@ async def test_incident_lifecycle_via_api(client, auth_headers):
 
     assert record is not None, "incident never reached a terminal state"
     assert record["finalState"] == "Resolved"
-    assert record["approvedBy"] == "ops-lead-api"
+    # The synthetic test-admin identity from the auth_headers fixture
+    # (backend/tests/conftest.py), not a client-supplied string.
+    assert record["approvedBy"] == "Test Admin (admin)"
 
 
 def test_incidents_requires_auth(client):
     response = client.get("/incidents")
     assert response.status_code == 401
+
+
+def test_briefing_audio_404_when_tts_not_enabled(client, auth_headers):
+    # TTS_INCIDENT_BRIEFING_ENABLED is unset in the test process, so no
+    # incident ever gets a cached briefing (orchestrate/orchestrator.py).
+    incident_id = _start_incident(client, auth_headers, line_id="Line-Briefing-1")
+    response = client.get(f"/incidents/{incident_id}/briefing-audio", headers=auth_headers)
+    assert response.status_code == 404

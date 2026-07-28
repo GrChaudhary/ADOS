@@ -3,6 +3,7 @@ Digital Twin module implementation (knowledge/digital_twin.py).
 Models production line state, active machine parameters, live telemetry, and soft reservations.
 """
 
+import random
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field, ConfigDict
@@ -43,6 +44,13 @@ class DigitalTwinStore:
     def __init__(self):
         self._lines: Dict[str, FactoryLineState] = {}
         self._initialize_seed_lines()
+        # Seeded baseline for each line's numeric telemetry readings, captured
+        # once at init so _jitter_telemetry() has a fixed point to mean-revert
+        # toward instead of a pure random walk that could wander unboundedly.
+        self._telemetry_baseline: Dict[str, Dict[str, float]] = {
+            line_id: {k: v for k, v in line.telemetry.items() if isinstance(v, (int, float))}
+            for line_id, line in self._lines.items()
+        }
 
     def _initialize_seed_lines(self) -> None:
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -73,7 +81,7 @@ class DigitalTwinStore:
         line2 = FactoryLineState(
             line_id="Line 2",
             plant_name="Nova Motors - Plant 04 (Bangalore, Karnataka)",
-            status="DEGRADED",
+            status="OPERATIONAL",
             active_product_sku="EV-POW-800V",
             current_speed_units_per_hr=105,
             parameters={
@@ -157,7 +165,34 @@ class DigitalTwinStore:
         return self._lines.get(line_id)
 
     def get_all_line_states(self) -> List[FactoryLineState]:
+        for line in self._lines.values():
+            self._jitter_telemetry(line)
         return list(self._lines.values())
+
+    def set_status(self, line_id: str, status: str) -> None:
+        """Flips a line's OPERATIONAL/DEGRADED/STOPPED status - called by the
+        orchestrator when an incident starts/resolves on that line, so the
+        Digital Twin reflects real incident lifecycle instead of a static
+        seed value."""
+        line = self._lines.get(line_id)
+        if line:
+            line.status = status
+
+    def _jitter_telemetry(self, line: FactoryLineState) -> None:
+        """Nudges each numeric telemetry reading toward a small amount of
+        fresh noise while mean-reverting toward its seeded baseline, so
+        values visibly drift on every poll without wandering into
+        unrealistic territory over a long-running session."""
+        baseline = self._telemetry_baseline.get(line.line_id, {})
+        for key, value in line.telemetry.items():
+            base = baseline.get(key)
+            if base is None or not isinstance(value, (int, float)):
+                continue
+            reverted = value + (base - value) * 0.2
+            noisy = reverted + base * random.uniform(-0.03, 0.03)
+            floor, ceiling = base * 0.85, base * 1.15
+            line.telemetry[key] = round(max(floor, min(ceiling, noisy)), 2)
+        line.telemetry["last_reading_time"] = datetime.now(timezone.utc).isoformat()
 
     def update_parameter(self, line_id: str, parameter_name: str, new_value: float) -> Optional[MachineParameter]:
         line = self._lines.get(line_id)

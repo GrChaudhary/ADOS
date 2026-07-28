@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, Request
 
 from contracts import CapabilityCall, CapabilityResponse
 
-from ..auth import require_service_auth
+from ..auth import get_current_user
 
 router = APIRouter(
-    prefix="/capabilities", tags=["capabilities"], dependencies=[Depends(require_service_auth)]
+    prefix="/capabilities", tags=["capabilities"], dependencies=[Depends(get_current_user)]
 )
 
 

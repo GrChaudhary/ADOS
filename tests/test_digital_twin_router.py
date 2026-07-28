@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
+from conftest import admin_auth_header
 from knowledge import DigitalTwinStore
 
 
@@ -24,7 +25,7 @@ def test_digital_twin_store_all_lines():
 
     line2 = store.get_line_state("Line 2")
     assert line2 is not None
-    assert line2.status == "DEGRADED"
+    assert line2.status == "OPERATIONAL"
 
 
 def test_get_digital_twin_lines_unauthorized(client):
@@ -33,10 +34,7 @@ def test_get_digital_twin_lines_unauthorized(client):
 
 
 def test_get_digital_twin_lines_success(client):
-    response = client.get(
-        "/digital-twin/lines",
-        headers={"Authorization": "Bearer dev-local-only-token"}
-    )
+    response = client.get("/digital-twin/lines", headers=admin_auth_header())
     assert response.status_code == 200
     data = response.json()
     assert len(data) == 4
@@ -48,4 +46,4 @@ def test_get_digital_twin_lines_success(client):
     assert "Warehouse" in line_ids
 
     line2 = next(item for item in data if item["lineId"] == "Line 2")
-    assert line2["status"] == "DEGRADED"
+    assert line2["status"] == "OPERATIONAL"

@@ -29,10 +29,13 @@ the same incident_id, up to `max_resume_attempts` times before settling
 as Preempted for good. See run_incident's docstring.
 """
 
-from typing import Optional
+import os
+import time
+from typing import Dict, List, Optional
 
 from agents.sdk import IncidentContext, StageInput
 from contracts import (
+    AgentCompletedPayload,
     CallStatus,
     Capability,
     CapabilityCall,
@@ -44,6 +47,7 @@ from contracts import (
     PolicyTier,
 )
 from knowledge import CausalGraph, DigitalTwinStore, KnowledgeGraph
+from knowledge.tts_client import tts_client
 
 from backend.app.eventbus import EventBus
 from integrations import IntegrationHub
@@ -64,6 +68,7 @@ class DecisionOrchestrator:
         knowledge_graph: Optional[KnowledgeGraph] = None,
         causal_graph: Optional[CausalGraph] = None,
         digital_twin: Optional[DigitalTwinStore] = None,
+        seed_records: Optional[List[IncidentRecord]] = None,
     ):
         self._bus = event_bus
         self._hub = integration_hub
@@ -73,9 +78,21 @@ class DecisionOrchestrator:
         self._runner = AgentRunner(
             event_bus, self.knowledge_graph, self.causal_graph, self.digital_twin
         )
-        self.audit_trail = AuditTrail()
+        # seed_records is demo/historical data only (executive/seed_data.py,
+        # main.py's lifespan) - real Cloudant-backed incidents load
+        # separately via hydrate_from_cloudant(), additively (different
+        # incident_id namespace), not instead of this.
+        self.audit_trail = AuditTrail(seed_records=seed_records)
         self.approvals = ApprovalQueue()
         self._preemption = PreemptionEngine()
+        # IBM Watson TTS incident briefings — opt-in (TTS_INCIDENT_BRIEFING_ENABLED,
+        # .env.example) and in-memory only, keyed by incident_id. Not
+        # persisted to Cloudant: audio bytes in a JSON doc would bloat
+        # storage, and briefings are cheap to regenerate on demand.
+        self._audio_briefings: Dict[str, bytes] = {}
+
+    def get_audio_briefing(self, incident_id: str) -> Optional[bytes]:
+        return self._audio_briefings.get(incident_id)
 
     async def run_incident(
         self,
@@ -97,6 +114,7 @@ class DecisionOrchestrator:
         if incident_id is not None:
             context_kwargs["incident_id"] = incident_id
         context = IncidentContext(**context_kwargs)
+        self.digital_twin.set_status(line_id, "DEGRADED")
         sm = IncidentStateMachine()
         priority_score = compute_priority_score(priority)
         causal_chain = []
@@ -187,8 +205,9 @@ class DecisionOrchestrator:
                 sm.transition(IncidentState.AWAITING_APPROVAL)
                 capability = self._capability_for_option(top_opt["option_id"], out4a.result)
                 tier = assign_policy_tier(capability, out5.confidence, top_opt["estimated_cost_usd"])
+                chosen_opt = top_opt
                 approved_by: Optional[str] = None
-                recommendation_accepted: Optional[bool] = None
+                recommendation_accepted: Optional[bool] = True
 
                 if tier != PolicyTier.AUTONOMOUS:
                     if tier == PolicyTier.EXECUTIVE_APPROVAL:
@@ -203,6 +222,7 @@ class DecisionOrchestrator:
                             policy_tier=tier,
                             confidence=out5.confidence,
                             summary=summary,
+                            estimated_cost_usd=top_opt["estimated_cost_usd"],
                         )
                     )
                     decision = await approval.wait()
@@ -218,6 +238,7 @@ class DecisionOrchestrator:
                                 policy_tier=PolicyTier.EXECUTIVE_APPROVAL,
                                 confidence=out5.confidence,
                                 summary=summary,
+                                estimated_cost_usd=top_opt["estimated_cost_usd"],
                             )
                         )
                         decision = await approval2.wait()
@@ -225,7 +246,7 @@ class DecisionOrchestrator:
 
                     if decision != "approved":
                         sm.transition(IncidentState.FAILED)
-                        return self._finalize(
+                        return await self._finalize(
                             context,
                             sm,
                             confidence=out5.confidence,
@@ -238,7 +259,25 @@ class DecisionOrchestrator:
                             estimated_downtime_min=top_opt["downtime_minutes"],
                             alternatives=out5.result["ranked_options"],
                         )
-                    recommendation_accepted = True
+
+                    # Dynamic Option Selection resolution
+                    selected_id = getattr(approval2 if decision == "escalated" else approval, "selected_option_id", None)
+                    if selected_id:
+                        for opt in out5.result["ranked_options"]:
+                            if opt["option_id"] == selected_id:
+                                chosen_opt = opt
+                                break
+
+                    recommendation_accepted = (chosen_opt["option_id"] == top_opt["option_id"])
+                    capability = self._capability_for_option(chosen_opt["option_id"], out4a.result)
+
+                    # Re-run rerouting for selected option if different from pre-calculated default
+                    if chosen_opt["option_id"] != top_opt["option_id"]:
+                        out6, _ = await self._runner.run_stage(
+                            "rerouting",
+                            context,
+                            StageInput(stage_name="Execution", payload={"selected_option": chosen_opt["option_id"]}),
+                        )
 
                 sm.transition(IncidentState.EXECUTING)
                 execution_steps = out6.result["execution_steps"]
@@ -265,7 +304,9 @@ class DecisionOrchestrator:
                     },
                     governance=GovernanceInfo(policy_tier=tier, approved_by=approved_by),
                 )
+                execution_started_at = time.time()
                 response = await self._hub.invoke(call)
+                execution_time_ms = round((time.time() - execution_started_at) * 1000, 2)
 
                 await self._bus.publish(EventEnvelope(
                     event_type="CapabilityInvocationCompleted",
@@ -276,12 +317,41 @@ class DecisionOrchestrator:
                         "status": response.status.value,
                         "executionSteps": execution_steps,
                         "targetLineId": target_line_id,
+                        "connector": response.connector,
+                        "output": response.output,
+                        "error": response.error,
                     },
                 ))
 
+                # Also represents this connector's work as an AgentCompleted
+                # event, same shape agents/sdk/base.py's BaseAgent.run()
+                # produces for the 8 Phase 2 reasoning agents - so the
+                # watsonx-itsm-agent registry entry (backend/app/routers/
+                # agents_registry.py) shows real invocation stats/lineage on
+                # frontend-next/src/app/agents/network/page.tsx's Live Swarm
+                # tab instead of always reading 0. Scoped to the one connector
+                # that has a matching registry entry today; extend this
+                # mapping if/when other connectors (SAP, marketplace) get one.
+                if response.connector == "watsonx_itsm":
+                    await self._bus.publish(EventEnvelope(
+                        event_type="AgentCompleted",
+                        incident_id=context.incident_id,
+                        produced_by="agents/watsonx-itsm-agent",
+                        schema_version="1.0.0",
+                        payload=AgentCompletedPayload(
+                            agent_id="watsonx-itsm-agent",
+                            stage_name="Execution",
+                            execution_time_ms=execution_time_ms,
+                            confidence=out5.confidence,
+                            result={"capability": capability.value, **response.output},
+                            evidence=[],
+                            alternatives=[],
+                        ).model_dump(by_alias=True),
+                    ))
+
                 if response.status != CallStatus.SUCCEEDED:
                     sm.transition(IncidentState.FAILED)
-                    return self._finalize(
+                    return await self._finalize(
                         context,
                         sm,
                         confidence=out5.confidence,
@@ -291,8 +361,8 @@ class DecisionOrchestrator:
                         recommendation_accepted=recommendation_accepted,
                         capability_invoked=capability,
                         capability_status=response.status,
-                        estimated_cost_usd=top_opt["estimated_cost_usd"],
-                        estimated_downtime_min=top_opt["downtime_minutes"],
+                        estimated_cost_usd=chosen_opt["estimated_cost_usd"],
+                        estimated_downtime_min=chosen_opt["downtime_minutes"],
                         alternatives=out5.result["ranked_options"],
                     )
 
@@ -310,7 +380,7 @@ class DecisionOrchestrator:
                 )
 
                 sm.transition(IncidentState.RESOLVED)
-                return self._finalize(
+                return await self._finalize(
                     context,
                     sm,
                     confidence=out5.confidence,
@@ -320,10 +390,10 @@ class DecisionOrchestrator:
                     recommendation_accepted=recommendation_accepted,
                     capability_invoked=capability,
                     capability_status=response.status,
-                    estimated_cost_usd=top_opt["estimated_cost_usd"],
-                    estimated_downtime_min=top_opt["downtime_minutes"],
-                    actual_cost_usd=top_opt["estimated_cost_usd"],
-                    actual_downtime_min=top_opt["downtime_minutes"],
+                    estimated_cost_usd=chosen_opt["estimated_cost_usd"],
+                    estimated_downtime_min=chosen_opt["downtime_minutes"],
+                    actual_cost_usd=chosen_opt["estimated_cost_usd"],
+                    actual_downtime_min=chosen_opt["downtime_minutes"],
                     alternatives=out5.result["ranked_options"],
                 )
             finally:
@@ -331,7 +401,7 @@ class DecisionOrchestrator:
 
         # Bumped max_resume_attempts times in a row — settle as Preempted
         # rather than retrying forever.
-        return self._finalize(
+        return await self._finalize(
             context, sm, confidence=0.0, causal_chain=causal_chain, policy_tier=PolicyTier.AUTONOMOUS
         )
 
@@ -352,7 +422,8 @@ class DecisionOrchestrator:
             return Capability.CREATE_PURCHASE_ORDER
         return Capability.SCHEDULE_MAINTENANCE  # OPT-1-PARAMETER-ADJUST and unrecognized options
 
-    def _finalize(self, context: IncidentContext, sm: IncidentStateMachine, **kwargs) -> IncidentRecord:
+    async def _finalize(self, context: IncidentContext, sm: IncidentStateMachine, **kwargs) -> IncidentRecord:
+        self.digital_twin.set_status(context.line_id, "OPERATIONAL")
         detected_at = sm.history[0][1]
         resolved_at = sm.history[-1][1] if sm.is_terminal() or sm.state == IncidentState.PREEMPTED else None
         record = IncidentRecord(
@@ -364,5 +435,24 @@ class DecisionOrchestrator:
             final_state=sm.state.value,
             **kwargs,
         )
-        self.audit_trail.append(record)
+        if os.environ.get("TTS_INCIDENT_BRIEFING_ENABLED") == "true" and tts_client.is_configured():
+            tts_result = tts_client.synthesize(self._build_briefing_text(record))
+            if tts_result.get("status") == "live":
+                self._audio_briefings[record.incident_id] = tts_result["audio_bytes"]
+
+        await self.audit_trail.append(record)
         return record
+
+    @staticmethod
+    def _build_briefing_text(record: IncidentRecord) -> str:
+        """Plain-language spoken summary for the TTS incident briefing —
+        deliberately built from IncidentRecord fields only, no invented
+        detail, so the audio never says more than the record supports."""
+        cause = record.causal_chain[0].description if record.causal_chain else None
+        parts = [f"Incident on {record.line_id} at {record.plant_id}: {record.final_state}."]
+        if cause:
+            parts.append(f"Root cause: {cause}.")
+        if record.capability_invoked:
+            parts.append(f"Action taken: {record.capability_invoked.value}.")
+        parts.append(f"Decision confidence: {round(record.confidence * 100)} percent.")
+        return " ".join(parts)

@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import NovusLandingPage from "./novus/page";
 
 export default function Home() {
-  redirect("/digital-twin");
+  return <NovusLandingPage />;
 }

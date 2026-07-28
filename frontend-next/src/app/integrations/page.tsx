@@ -1,8 +1,176 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { api, IntegrationConnectorItem } from "@/lib/api";
+import { api, Capability, getStoredUser, IntegrationConnectorItem, PolicyTier } from "@/lib/api";
 import { useHasToken } from "@/lib/useHasToken";
+
+// The 4 capabilities integrations/connectors/watsonx_itsm.py actually
+// fulfills - see its _ITSM_CAPABILITIES set. Only ScheduleMaintenance is
+// ever reached through the normal incident pipeline
+// (orchestrate/orchestrator.py's _capability_for_option); this form is the
+// only way to exercise the other three at all.
+const ITSM_CAPABILITIES: Capability[] = [
+  "CreateIncident",
+  "CreateChangeRequest",
+  "ScheduleMaintenance",
+  "NotifyOperator",
+];
+
+const IMPACT_URGENCY_OPTIONS = ["1 - High", "2 - Medium", "3 - Low"];
+
+function ManualTicketForm() {
+  const user = getStoredUser();
+  const [capability, setCapability] = useState<Capability>("CreateIncident");
+  const [shortDescription, setShortDescription] = useState("");
+  const [description, setDescription] = useState("");
+  const [impact, setImpact] = useState("2 - Medium");
+  const [urgency, setUrgency] = useState("2 - Medium");
+  const [policyTier, setPolicyTier] = useState<PolicyTier>(0);
+
+  const invokeMutation = useMutation({
+    mutationFn: api.invokeCapability,
+  });
+
+  function submit() {
+    if (!shortDescription.trim()) return;
+    const confirmed = window.confirm(
+      `This creates a REAL ServiceNow record via ${capability} — not a simulation. Continue?`
+    );
+    if (!confirmed) return;
+
+    invokeMutation.mutate({
+      capability,
+      incidentId: `manual-${Date.now()}`,
+      requestedBy: user?.displayName ?? "manual-ui",
+      input: { short_description: shortDescription, description, impact, urgency },
+      governance: { policyTier, approvedBy: user?.displayName ?? "manual-ui" },
+    });
+  }
+
+  return (
+    <div className="rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle p-6 space-y-4 shadow-lg">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">🎫</span>
+          <h2 className="text-lg font-semibold text-text-primary">Manually Create Ticket</h2>
+        </div>
+        <span className="text-xs font-mono text-status-red px-2.5 py-1 rounded bg-status-red/10 border border-status-red/20">
+          Creates a real ServiceNow record — bypasses the incident pipeline
+        </span>
+      </div>
+
+      <p className="text-xs text-text-secondary">
+        Calls <code className="text-cobalt">POST /capabilities/invoke</code> directly — no vision/causal/
+        governance stages run. You&apos;re providing the governance decision yourself below.
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-1">
+          <label className="text-xs font-mono text-text-secondary">Capability</label>
+          <select
+            value={capability}
+            onChange={(e) => setCapability(e.target.value as Capability)}
+            className="w-full rounded-md border border-border-subtle bg-glass px-3 py-2 text-sm text-text-primary"
+          >
+            {ITSM_CAPABILITIES.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs font-mono text-text-secondary">Governance Tier</label>
+          <select
+            value={policyTier}
+            onChange={(e) => setPolicyTier(Number(e.target.value) as PolicyTier)}
+            className="w-full rounded-md border border-border-subtle bg-glass px-3 py-2 text-sm text-text-primary"
+          >
+            <option value={0}>Tier 0 — Autonomous</option>
+            <option value={1}>Tier 1 — Engineer Approval</option>
+            <option value={2}>Tier 2 — Executive Approval</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        <label className="text-xs font-mono text-text-secondary">Short Description *</label>
+        <input
+          type="text"
+          value={shortDescription}
+          onChange={(e) => setShortDescription(e.target.value)}
+          placeholder="e.g. Line 2 CNC-102 spindle vibration exceeding threshold"
+          className="w-full rounded-md border border-border-subtle bg-glass px-3 py-2 text-sm text-text-primary placeholder:text-text-secondary/50"
+        />
+      </div>
+
+      <div className="space-y-1">
+        <label className="text-xs font-mono text-text-secondary">Description</label>
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          rows={3}
+          placeholder="Full details for the ticket..."
+          className="w-full rounded-md border border-border-subtle bg-glass px-3 py-2 text-sm text-text-primary placeholder:text-text-secondary/50 resize-none"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="space-y-1">
+          <label className="text-xs font-mono text-text-secondary">Impact</label>
+          <select
+            value={impact}
+            onChange={(e) => setImpact(e.target.value)}
+            className="w-full rounded-md border border-border-subtle bg-glass px-3 py-2 text-sm text-text-primary"
+          >
+            {IMPACT_URGENCY_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-mono text-text-secondary">Urgency</label>
+          <select
+            value={urgency}
+            onChange={(e) => setUrgency(e.target.value)}
+            className="w-full rounded-md border border-border-subtle bg-glass px-3 py-2 text-sm text-text-primary"
+          >
+            {IMPACT_URGENCY_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between pt-2">
+        <button
+          onClick={submit}
+          disabled={!shortDescription.trim() || invokeMutation.isPending}
+          className="rounded-md bg-status-red px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          {invokeMutation.isPending ? "Creating…" : "Create Real Ticket"}
+        </button>
+      </div>
+
+      {invokeMutation.data && (
+        <div
+          className={`p-3 rounded-lg border text-xs font-mono ${
+            invokeMutation.data.status === "succeeded"
+              ? "bg-emerald/10 border-emerald/30 text-emerald"
+              : "bg-status-red/10 border-status-red/30 text-status-red"
+          }`}
+        >
+          {invokeMutation.data.status === "succeeded" ? (
+            <>🟢 Created via {invokeMutation.data.connector} — ticket: {String(invokeMutation.data.output.ticket_id ?? "(no id returned)")}</>
+          ) : (
+            <>🔴 Failed via {invokeMutation.data.connector ?? "no connector selected"}: {invokeMutation.data.error}</>
+          )}
+        </div>
+      )}
+      {invokeMutation.isError && (
+        <div className="p-3 rounded-lg border text-xs font-mono bg-status-red/10 border-status-red/30 text-status-red">
+          {String(invokeMutation.error)}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function badgeClass(c: IntegrationConnectorItem): string {
   // Checked before `connected` - marketplace.py's execute() never makes a
@@ -99,13 +267,13 @@ export default function IntegrationsPage() {
                   <span className="text-text-secondary">Module Source:</span>
                   <span className="text-mono text-text-primary">{c.module}</span>
                 </div>
-                {c.latency_ms !== undefined && (
+                {c.latency_ms != null && (
                   <div className="flex justify-between">
                     <span className="text-text-secondary">Ping Latency:</span>
                     <span className="text-emerald font-bold">{c.latency_ms} ms</span>
                   </div>
                 )}
-                {c.doc_count !== undefined && (
+                {c.doc_count != null && (
                   <div className="flex justify-between">
                     <span className="text-text-secondary">Live Cloudant Doc Count:</span>
                     <span className="text-purple font-bold">{c.doc_count} Documents</span>
@@ -165,6 +333,9 @@ export default function IntegrationsPage() {
           );
         })}
       </div>
+
+      {/* Manual Ticket Creation */}
+      {hasToken && <ManualTicketForm />}
 
       {/* Integration Bus Specifications */}
       <div className="rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle p-6 space-y-4 shadow-lg">

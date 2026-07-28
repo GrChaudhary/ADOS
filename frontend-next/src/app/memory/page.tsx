@@ -141,7 +141,7 @@ export default function DecisionMemoryPage() {
                     Plant: {rec.plantId} | Line: {rec.lineId} | Status: {rec.finalState}
                   </div>
                   <div className="text-text-secondary text-[11px]">
-                    Approved By: {rec.approvedBy ?? "Tier 0 Autonomous"} | Cost: ${rec.actualCostUsd?.toLocaleString() ?? "N/A"}
+                    Approved By: {rec.approvedBy ?? "Tier 0 Autonomous"} | Cost: ${rec.actualCostUsd?.toLocaleString("en-US") ?? "N/A"}
                   </div>
                 </div>
               ))}

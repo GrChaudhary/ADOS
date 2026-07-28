@@ -14,6 +14,7 @@ from knowledge import (
     Specification, Part, Product
 )
 from agents.sdk import IncidentContext, StageInput
+from knowledge.nlu_client import nlu_client
 from agents import (
     VisionSpecAgent,
     CausalIsolationAgent,
@@ -100,7 +101,7 @@ def test_causal_graph_recalibration_loop(cg):
 def test_digital_twin_operations(dt):
     line_state = dt.get_line_state("Line 2")
     assert line_state is not None
-    assert line_state.status == "DEGRADED"
+    assert line_state.status == "OPERATIONAL"
 
     res_ok = dt.reserve_line_capacity("Line 2", "INC-TEST-9901", units=100, duration_hrs=2)
     assert res_ok is True
@@ -131,6 +132,42 @@ def test_causal_isolation_agent_end_to_end(context, kg, cg):
     assert "EV-POW-800V" in output.result["affected_products"]
     assert len(output.evidence) >= 2
     assert len(output.alternatives) >= 2
+
+
+def test_causal_isolation_agent_nlu_not_configured_by_default(context, kg, cg):
+    # No NLU_API_KEY/NLU_URL in os.environ in the test process (see
+    # knowledge/nlu_client.py's is_configured()) — proves no live call is
+    # made and the insight fields degrade honestly rather than fabricating.
+    agent = CausalIsolationAgent(causal_graph=cg, knowledge_graph=kg)
+    stage_in = StageInput(stage_name="Reasoning", payload={"defect_type": "dimensional fault"})
+    output, _ = agent.run(context, stage_in)
+
+    assert output.result["nlu_status"] == "not_configured"
+    assert output.result["nlu_sentiment"] is None
+    assert output.result["nlu_keywords"] == []
+    assert output.result["nlu_categories"] == []
+
+
+def test_causal_isolation_agent_nlu_enriches_result_when_live(context, kg, cg, monkeypatch):
+    monkeypatch.setattr(
+        nlu_client,
+        "analyze_text",
+        lambda text, features=None: {
+            "status": "live",
+            "sentiment": {"document": {"score": -0.6, "label": "negative"}},
+            "keywords": [{"text": "spindle vibration", "relevance": 0.9}],
+            "categories": [{"label": "/industrial/manufacturing", "score": 0.8}],
+        },
+    )
+
+    agent = CausalIsolationAgent(causal_graph=cg, knowledge_graph=kg)
+    stage_in = StageInput(stage_name="Reasoning", payload={"defect_type": "dimensional fault"})
+    output, _ = agent.run(context, stage_in)
+
+    assert output.result["nlu_status"] == "live"
+    assert output.result["nlu_sentiment"] == {"score": -0.6, "label": "negative"}
+    assert output.result["nlu_keywords"] == ["spindle vibration"]
+    assert output.result["nlu_categories"] == ["/industrial/manufacturing"]
 
 
 def test_cad_spec_agent(context, kg):

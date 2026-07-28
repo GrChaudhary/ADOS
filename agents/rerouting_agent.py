@@ -39,15 +39,25 @@ class ReroutingAgent(BaseAgent):
             duration_hrs=2
         )
 
-        result = {
-            "selected_option": selected_option,
-            "target_line_id": target_line,
-            "capacity_reserved": reserved,
-            "execution_steps": [
+        if "SUBSTITUTION" in selected_option or "SUBSTITUTE" in selected_option or "PART" in selected_option:
+            execution_steps = [
+                "1. Query local SAP ERP warehouse inventory for substitute part MH-8820-PC",
+                f"2. Reserve 1 unit of MH-8820-PC and dispatch to assembly {target_line}",
+                "3. Perform manual alignment and physical installation on machine spindle",
+                f"4. Resume production on {target_line} with verified substitute parts"
+            ]
+        else:
+            execution_steps = [
                 f"1. Send CNC parameter adjustment (tool_offset_z_mm = -0.035mm) to {target_line} PLC",
                 "2. Perform 5-part sample verification sweep",
                 f"3. Resume full-rate production on {target_line}"
             ]
+
+        result = {
+            "selected_option": selected_option,
+            "target_line_id": target_line,
+            "capacity_reserved": reserved,
+            "execution_steps": execution_steps
         }
 
         evidence = [

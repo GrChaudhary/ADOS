@@ -29,17 +29,21 @@ export function OptionCard({ option, onApprove, approving }: OptionCardProps) {
       </div>
       <div className="mt-2 text-amber">{starString(option.starRating)}</div>
       <div className="mt-2 space-y-1 text-xs text-text-secondary">
-        <div>Cost: ${option.estimatedCostUsd.toLocaleString()}</div>
+        <div>Cost: ${option.estimatedCostUsd.toLocaleString("en-US")}</div>
         <div>Downtime: {option.downtimeMinutes} min</div>
         <div>Quality Risk: {Math.round(option.qualityRiskScore * 100)}%</div>
-        <div>Savings vs. costliest: ${option.savingsUsd.toLocaleString()}</div>
+        <div>Savings vs. costliest: ${option.savingsUsd.toLocaleString("en-US")}</div>
       </div>
-      {option.isRecommended && onApprove && (
+      {onApprove && (
         <button
           type="button"
           onClick={onApprove}
           disabled={approving}
-          className="mt-4 w-full rounded-md bg-cobalt px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+          className={`mt-4 w-full rounded-md px-3 py-2 text-sm font-semibold transition-all disabled:opacity-50 ${
+            option.isRecommended
+              ? "bg-cobalt text-white hover:bg-cobalt/85 shadow-md shadow-cobalt/10"
+              : "border border-cobalt text-cobalt bg-transparent hover:bg-cobalt/10"
+          }`}
         >
           {approving ? "Approving…" : `Approve Option ${option.letter}`}
         </button>

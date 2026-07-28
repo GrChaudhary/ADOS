@@ -109,8 +109,15 @@ registered against the real `br-sao` instance.
 
 See `integrations/connectors/watsonx_itsm.py` for a *separate* effort —
 routing `CreateIncident`/`ScheduleMaintenance`/etc. capability calls
-through a watsonx Orchestrate ITSM agent endpoint. That one is **not**
-verified against a live instance and requires its own explicit opt-in
-(`WO_ITSM_INTEGRATION_ENABLED=true`) precisely because `WO_INSTANCE`/
-`WO_API_KEY` alone (used above for the ADK CLI) aren't sufficient
-evidence that endpoint is real.
+through a watsonx Orchestrate ITSM agent endpoint. Verified live end-to-end
+(a real incident reached `SCHEDULE_MAINTENANCE` and the agent call itself),
+requiring its own explicit opt-ins (`WO_ITSM_INTEGRATION_ENABLED=true` to
+be selected, `WO_ITSM_LIVE_WRITES_ENABLED=true` to actually write) precisely
+because `WO_INSTANCE`/`WO_API_KEY` alone aren't sufficient evidence that
+endpoint can really reach ServiceNow.
+
+Today that endpoint targets `ados_executive_copilot`, a KPI-reporting agent
+later repurposed by hand with 32 ServiceNow tools — its ServiceNow
+connection currently reports unconfigured. **[ITSM_AGENT_SETUP.md](ITSM_AGENT_SETUP.md)**
+is the SOP for replacing it with a small, dedicated `ados_itsm_agent`
+(two tools, one purpose) against a fresh ServiceNow instance.

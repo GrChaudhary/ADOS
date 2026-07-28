@@ -31,6 +31,7 @@ export function FooterStatusBar() {
       <span>8 Specialist Agents</span>
       <span>{connectorLabel(byId.get("watsonx_itsm"), "watsonx ITSM")}</span>
       <span>{connectorLabel(byId.get("sap"), "SAP ERP")}</span>
+      <span>{connectorLabel(byId.get("local_llm"), "Local LLM")}</span>
     </footer>
   );
 }

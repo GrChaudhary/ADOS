@@ -8,9 +8,9 @@ from fastapi import APIRouter, Depends, Request
 
 from knowledge import KnowledgeGraphSnapshot
 
-from ..auth import require_service_auth
+from ..auth import get_current_user
 
-router = APIRouter(prefix="/knowledge", tags=["Knowledge Graph"], dependencies=[Depends(require_service_auth)])
+router = APIRouter(prefix="/knowledge", tags=["Knowledge Graph"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/graph", response_model=KnowledgeGraphSnapshot)

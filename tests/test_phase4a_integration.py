@@ -15,17 +15,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.app.config import settings
 from backend.app.main import app
 from contracts import Capability, CapabilityCall, GovernanceInfo, PolicyTier, CallStatus, DecisionMemoryQuery
 from integrations import default_hub
 from orchestrate.governance import assign_policy_tier, promote_policy_tier, CAPABILITY_RISK_CLASS
+from conftest import admin_auth_header  # sys.path already includes repo root, see above
 
 
 @pytest.fixture
 def client():
     with TestClient(app) as c:
-        c.headers.update({"Authorization": f"Bearer {settings.service_auth_token}"})
+        c.headers.update(admin_auth_header())
         yield c
 
 

@@ -40,9 +40,12 @@ CAPABILITY_RISK_CLASS: Dict[Capability, str] = {
 }
 
 # Financial exposure bands, documentation/05_Product_Bible.md section 5.
-_LOW_EXPOSURE_MAX_USD = 25_000
-_HIGH_EXPOSURE_MIN_USD = 250_000
-_TIER0_CONFIDENCE_THRESHOLD = 0.90
+# Public (no leading underscore) - backend/app/routers/governance.py
+# exposes these via GET /governance/policies, replacing what used to be a
+# hardcoded, partly-fabricated list in the frontend's governance page.
+LOW_EXPOSURE_MAX_USD = 25_000
+HIGH_EXPOSURE_MIN_USD = 250_000
+TIER0_CONFIDENCE_THRESHOLD = 0.90
 
 
 def promote_policy_tier(capability: Capability, target_risk_class: str) -> None:
@@ -52,9 +55,9 @@ def promote_policy_tier(capability: Capability, target_risk_class: str) -> None:
 
 def assign_policy_tier(capability: Capability, confidence: float, estimated_cost_usd: float) -> PolicyTier:
     is_critical = CAPABILITY_RISK_CLASS.get(capability, "high") == "high"  # unknown capability: fail safe
-    if is_critical or estimated_cost_usd > _HIGH_EXPOSURE_MIN_USD:
+    if is_critical or estimated_cost_usd > HIGH_EXPOSURE_MIN_USD:
         return PolicyTier.EXECUTIVE_APPROVAL
-    if estimated_cost_usd < _LOW_EXPOSURE_MAX_USD and confidence > _TIER0_CONFIDENCE_THRESHOLD:
+    if estimated_cost_usd < LOW_EXPOSURE_MAX_USD and confidence > TIER0_CONFIDENCE_THRESHOLD:
         return PolicyTier.AUTONOMOUS
     return PolicyTier.APPROVAL_REQUIRED
 
@@ -66,9 +69,13 @@ class PendingApproval:
     policy_tier: PolicyTier
     confidence: float
     summary: str
+    # RBAC (backend/app/routers/incidents.py) checks the acting user's
+    # approval_limit_usd against this before allowing approve/reject/escalate.
+    estimated_cost_usd: float = 0.0
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     decision: Optional[str] = None  # "approved" | "rejected" | "escalated"
     approved_by: Optional[str] = None
+    selected_option_id: Optional[str] = None
     _event: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def wait(self) -> str:

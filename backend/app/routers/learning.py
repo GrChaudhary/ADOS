@@ -16,10 +16,10 @@ from agents.sdk import IncidentContext, StageInput, StageOutput
 from executive import AutonomyPolicyOptimizer, PolicyPromotionCandidate
 from knowledge import LearningEngine, LearningReplaySummary
 
-from ..auth import require_service_auth
+from ..auth import get_current_user
 from .memory import get_memory_index
 
-router = APIRouter(prefix="/learning", tags=["Self-Learning Engine"], dependencies=[Depends(require_service_auth)])
+router = APIRouter(prefix="/learning", tags=["Self-Learning Engine"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/recalibration", response_model=LearningReplaySummary)

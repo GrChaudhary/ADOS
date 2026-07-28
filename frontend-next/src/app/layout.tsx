@@ -1,15 +1,17 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono, Orbitron, Syne } from "next/font/google";
 import "./globals.css";
 import { AppShell } from "@/components/design-system/AppShell";
 import { QueryProvider } from "@/components/QueryProvider";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 const jetbrainsMono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains-mono" });
+const orbitron = Orbitron({ subsets: ["latin"], variable: "--font-orbitron" });
+const syne = Syne({ subsets: ["latin"], variable: "--font-syne" });
 
 export const metadata: Metadata = {
-  title: "ADOS — Nova Motors Mission Control",
-  description: "Autonomous Defect & Orchestration System",
+  title: "NOVUS ADOS — Enterprise Decision Operating System",
+  description: "Autonomous Defect & Orchestration System for Smart Manufacturing & Supply Chains",
 };
 
 export default function RootLayout({
@@ -18,8 +20,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable} h-full antialiased`}>
-      <body className="min-h-full">
+    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable} ${orbitron.variable} ${syne.variable} h-full antialiased dark`}>
+      <body className="min-h-full bg-[#070514] text-white">
         <QueryProvider>
           <AppShell>{children}</AppShell>
         </QueryProvider>
@@ -27,3 +29,4 @@ export default function RootLayout({
     </html>
   );
 }
+
