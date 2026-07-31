@@ -129,9 +129,9 @@ export default function KnowledgeExplorerPage() {
   }, [graphQuery.data]);
 
   return (
-    <div className="flex flex-col gap-6 pb-8">
+    <div className="space-y-8 pb-12">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 rounded-xl border border-border-subtle bg-card/60 p-5 shadow-lg backdrop-blur-md">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl shadow-2xl">
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-text-primary">Knowledge Explorer</h1>
@@ -168,7 +168,7 @@ export default function KnowledgeExplorerPage() {
 
       {/* Graph canvas + detail panel */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-8 h-[70vh] overflow-hidden rounded-xl border border-border-subtle bg-card/60 shadow-lg">
+        <div className="lg:col-span-8 h-[70vh] overflow-hidden rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl shadow-2xl">
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -186,7 +186,7 @@ export default function KnowledgeExplorerPage() {
         </div>
 
         {/* Detail Panel */}
-        <div className="lg:col-span-4 rounded-xl border border-border-subtle bg-card/60 p-6 shadow-lg backdrop-blur-md">
+        <div className="lg:col-span-4 rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
           {selectedNode ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between border-b border-border-subtle pb-3">

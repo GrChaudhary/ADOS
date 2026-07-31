@@ -40,9 +40,9 @@ export default function IncidentsHubPage() {
   }
 
   return (
-    <div className="space-y-6 pb-8">
+    <div className="space-y-8 pb-12">
       {/* Header Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle shadow-lg">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl shadow-2xl">
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-text-primary">Incident Workspace Hub</h1>
@@ -67,7 +67,7 @@ export default function IncidentsHubPage() {
       </div>
 
       {/* Hero Incidents Quick Selector */}
-      <div className="rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle p-6 space-y-4 shadow-lg">
+      <div className="rounded-3xl jarvis-static-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-lg">🚨</span>
@@ -91,7 +91,7 @@ export default function IncidentsHubPage() {
             return (
               <div
                 key={record.incidentId}
-                className="p-5 rounded-xl bg-dark-900/60 border border-border-subtle hover:border-border-accent transition-all space-y-3 flex flex-col justify-between"
+                className="p-5 rounded-2xl jarvis-glass-card border border-purple-500/30 hover:border-pink-500/60 space-y-3 flex flex-col justify-between shadow-lg"
               >
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">

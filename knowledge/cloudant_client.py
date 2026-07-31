@@ -29,6 +29,7 @@ class CloudantClient:
         self.db_events = settings.cloudant_db_events or "ados_events"
         self.db_agents = "ados_agents"
         self.db_users = settings.cloudant_db_users or "ados_users"
+        self.db_settings = "ados_settings"
         self.client: Optional[CloudantV1] = None
         self._initialized = False
 
@@ -63,6 +64,8 @@ class CloudantClient:
                 print(f"[Cloudant] Created database '{self.db_agents}' for dynamic agent registry.")
             if self.db_users not in all_dbs:
                 self.client.put_database(db=self.db_users)
+            if self.db_settings not in all_dbs:
+                self.client.put_database(db=self.db_settings)
 
             self._initialized = True
             self.seed_initial_data_if_empty()
@@ -345,6 +348,59 @@ class CloudantClient:
         except Exception as e:
             print(f"[Cloudant] Error deleting agent {agent_id}: {e}")
             return False
+
+    # -------------------------------------------------------------------
+    # Platform LLM provider settings (backend/app/routers/settings.py) —
+    # a single fixed-ID document so there's one shared config per
+    # deployment rather than per-user, mirroring how save_agent upserts
+    # by ID. knowledge/local_llm_client.py reads this (short-TTL cached)
+    # and layers it over the .env-based defaults.
+    # -------------------------------------------------------------------
+    _LLM_SETTINGS_DOC_ID = "platform_llm_providers"
+
+    def get_llm_settings(self) -> Dict[str, Any]:
+        """Returns the stored per-provider overrides, or {} if none saved
+        yet / Cloudant unavailable — callers fall back to .env defaults."""
+        if not self.client:
+            return {}
+        try:
+            doc = self.client.get_document(db=self.db_settings, doc_id=self._LLM_SETTINGS_DOC_ID).get_result()
+            return {k: v for k, v in doc.items() if not k.startswith("_")}
+        except Exception:
+            return {}
+
+    def save_llm_provider_setting(self, provider: str, fields: Dict[str, Any]) -> None:
+        """Upserts one provider's fields (e.g. {"apiKey": ..., "model": ...})
+        into the shared settings document, leaving other providers' fields
+        untouched. Mirrors save_agent's upsert-by-_id pattern exactly."""
+        if not self.client:
+            return
+        doc: Dict[str, Any] = {"_id": self._LLM_SETTINGS_DOC_ID}
+        try:
+            existing = self.client.get_document(db=self.db_settings, doc_id=self._LLM_SETTINGS_DOC_ID).get_result()
+            doc = dict(existing)
+        except Exception:
+            pass  # New document
+        doc[provider] = {**doc.get(provider, {}), **fields}
+        try:
+            self.client.post_document(db=self.db_settings, document=doc).get_result()
+        except Exception as e:
+            print(f"[Cloudant] Error saving LLM provider setting '{provider}': {e}")
+
+    def delete_llm_provider_setting(self, provider: str) -> None:
+        """Clears one provider's stored override (falls back to .env again)."""
+        if not self.client:
+            return
+        try:
+            doc = self.client.get_document(db=self.db_settings, doc_id=self._LLM_SETTINGS_DOC_ID).get_result()
+        except Exception:
+            return
+        if provider in doc:
+            del doc[provider]
+            try:
+                self.client.post_document(db=self.db_settings, document=dict(doc)).get_result()
+            except Exception as e:
+                print(f"[Cloudant] Error deleting LLM provider setting '{provider}': {e}")
 
 
 cloudant_db = CloudantClient()

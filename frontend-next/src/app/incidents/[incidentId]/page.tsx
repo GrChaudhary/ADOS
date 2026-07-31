@@ -6,13 +6,14 @@
 // cards, approval, live execution checklist, recovery banner), translated
 // to React/TanStack Query.
 
-import { use, useEffect, useRef, useState } from "react";
+import { use, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { OptionCard } from "@/components/design-system/OptionCard";
 import { api, openIncidentEventStream, type EventEnvelope, type IncidentOption, type IncidentRecord } from "@/lib/api";
 import { resolveAgentMeta } from "@/lib/agents";
 import { useMissionControlStore } from "@/lib/store";
+import { QUALITY_ALERT_SCENARIOS } from "@/lib/demoScenario";
 
 type TabName = "overview" | "evidence" | "reasoning" | "recommendations" | "execution" | "audit";
 const TABS: TabName[] = ["overview", "evidence", "reasoning", "recommendations", "execution", "audit"];
@@ -25,6 +26,180 @@ interface ChecklistState {
   connector?: string | null;
   output?: Record<string, unknown> | null;
   error?: string | null;
+}
+
+// Pipeline order the orchestrator actually runs stages in
+// (orchestrate/orchestrator.py's run_incident) - drives the Execution tab's
+// live timeline. Governance approval and capability dispatch aren't agents
+// so they're spliced in separately, not listed here.
+const PIPELINE_AGENT_IDS = [
+  "vision-spec-agent",
+  "cad-spec-agent",
+  "causal-isolation-agent",
+  "substitution-agent",
+  "parameter-adjustment-agent",
+  "impact-simulation-agent",
+  "rerouting-agent",
+] as const;
+const LEARNING_AGENT_ID = "feedback-calibration-agent";
+
+// Only these finalState values mean the incident is actually done
+// (contracts/incident_state.py's IncidentState). Everything else —
+// Detected/Diagnosing/CandidateGeneration/Reserving/AwaitingApproval/
+// Executing — is still in flight, even though the Cloudant restart-
+// recovery snapshot (backend/app/routers/incidents.py's _snapshot_pending)
+// always carries a finalState key regardless of which of these it's at.
+const TERMINAL_STATES = new Set(["Resolved", "Failed", "Escalated", "Preempted"]);
+
+type StageStatus = "pending" | "running" | "done";
+
+interface StageRow {
+  agentId: string;
+  status: StageStatus;
+  requestedAt?: string;
+  completedAt?: string;
+  executionTimeMs?: number;
+  confidence?: number;
+  result?: Record<string, unknown>;
+}
+
+function eventAgentId(envelope: EventEnvelope): string {
+  const payload = envelope.payload as { agentId?: string; agent_id?: string };
+  return String(payload.agentId ?? payload.agent_id ?? envelope.producedBy ?? "").toLowerCase();
+}
+
+/** Derives a pending/running/done row per pipeline agent from the raw event
+ * log, so the Execution tab reflects what's actually happening right now
+ * instead of only lighting up during the final capability-dispatch window. */
+function deriveStageRows(agentIds: readonly string[], auditLog: EventEnvelope[]): StageRow[] {
+  return agentIds.map((agentId) => {
+    // auditLog is newest-first (prepended in handleEvent)
+    const completed = auditLog.find((e) => e.eventType === "AgentCompleted" && eventAgentId(e).includes(agentId.replace("-agent", "")));
+    const requested = auditLog.find((e) => e.eventType === "StageRequested" && eventAgentId(e).includes(agentId.replace("-agent", "")));
+    if (completed) {
+      const payload = completed.payload as { executionTimeMs?: number; execution_time_ms?: number; confidence?: number; result?: Record<string, unknown> };
+      return {
+        agentId,
+        status: "done" as const,
+        requestedAt: requested?.occurredAt,
+        completedAt: completed.occurredAt,
+        executionTimeMs: payload.executionTimeMs ?? payload.execution_time_ms,
+        confidence: payload.confidence,
+        result: payload.result,
+      };
+    }
+    if (requested) {
+      return { agentId, status: "running" as const, requestedAt: requested.occurredAt };
+    }
+    return { agentId, status: "pending" as const };
+  });
+}
+
+/** One human-readable line summarizing what a completed stage actually
+ * found, pulled from that agent's real result shape (agents/*.py) rather
+ * than a generic "done" label. */
+function describeStageResult(agentId: string, result?: Record<string, unknown>): string | null {
+  if (!result) return null;
+  switch (agentId) {
+    case "vision-spec-agent": {
+      const dim = String(result.dimension ?? "measurement");
+      const unit = String(result.unit ?? "mm");
+      return result.defect_detected
+        ? `Defect detected — ${dim}: ${result.measured_value}${unit} vs nominal ${result.nominal_target}${unit}`
+        : `No defect — ${dim} within tolerance`;
+    }
+    case "cad-spec-agent":
+      return result.is_violation
+        ? `Spec violation (${result.violation_direction}) against ${result.spec_id ?? "governing spec"}`
+        : `Within spec (${result.spec_id ?? "governing spec"})`;
+    case "causal-isolation-agent":
+      return `Primary cause: ${result.primary_root_cause} (${Math.round(Number(result.root_cause_confidence ?? 0) * 100)}% weight)`;
+    case "substitution-agent": {
+      const candidate = result.top_candidate as { target_part_number?: string } | null | undefined;
+      return result.has_approved_substitute
+        ? `Approved substitute found: ${candidate?.target_part_number}`
+        : "No approved substitute registered for this part";
+    }
+    case "parameter-adjustment-agent":
+      return `${result.parameter_to_adjust} → ${result.target_value}${result.unit} on ${result.line_id}`;
+    case "impact-simulation-agent": {
+      const top = result.top_recommendation as { name?: string; estimated_cost_usd?: number; downtime_minutes?: number } | undefined;
+      return top ? `Top pick: ${top.name} ($${top.estimated_cost_usd}, ${top.downtime_minutes}min)` : null;
+    }
+    case "rerouting-agent": {
+      const steps = result.execution_steps as unknown[] | undefined;
+      return `${steps?.length ?? 0} execution step(s) planned for ${result.target_line_id}`;
+    }
+    case "feedback-calibration-agent":
+      return "Causal graph edge weights recalibrated from this outcome";
+    default:
+      return null;
+  }
+}
+
+const STAGE_LABELS: Record<StageStatus, string> = { pending: "Pending", running: "In Progress", done: "Complete" };
+const STAGE_COLOR: Record<StageStatus, string> = {
+  pending: "text-text-secondary",
+  running: "text-amber animate-pulse",
+  done: "text-emerald",
+};
+const STAGE_DOT: Record<StageStatus, string> = { pending: "○", running: "●", done: "✓" };
+
+/** Turns one raw event envelope into an audit-log line a human can actually
+ * read - what stage/agent it concerns and what it found, not just the
+ * event type and producer string. */
+function describeEvent(e: EventEnvelope): { icon?: string; title: string; detail?: string } {
+  const payload = e.payload as {
+    agentId?: string;
+    agent_id?: string;
+    stageName?: string;
+    result?: Record<string, unknown>;
+    confidence?: number;
+    executionTimeMs?: number;
+    execution_time_ms?: number;
+    capability?: string;
+    executionSteps?: string[];
+    status?: string;
+    connector?: string | null;
+    error?: string | null;
+  };
+  const agentId = eventAgentId(e);
+  const meta = agentId ? resolveAgentMeta(agentId) : null;
+
+  if (e.eventType === "StageRequested") {
+    return {
+      icon: "▶",
+      title: `${meta?.label ?? payload.stageName ?? "Stage"} started`,
+      detail: meta ? `${meta.label} (${payload.stageName}) is now running.` : undefined,
+    };
+  }
+  if (e.eventType === "AgentCompleted") {
+    const ms = payload.executionTimeMs ?? payload.execution_time_ms;
+    const summary = agentId ? describeStageResult(agentId, payload.result) : null;
+    return {
+      icon: meta?.icon ?? "✓",
+      title: `${meta?.label ?? "Agent"} completed${ms !== undefined ? ` in ${ms}ms` : ""}`,
+      detail:
+        summary ??
+        (payload.confidence !== undefined ? `Confidence ${Math.round(payload.confidence * 100)}%` : undefined),
+    };
+  }
+  if (e.eventType === "CapabilityInvocationStarted") {
+    return {
+      icon: "⚙",
+      title: `Dispatching ${payload.capability ?? "capability"}`,
+      detail: payload.executionSteps ? `${payload.executionSteps.length} step(s) queued` : undefined,
+    };
+  }
+  if (e.eventType === "CapabilityInvocationCompleted") {
+    const ok = payload.status === "succeeded";
+    return {
+      icon: ok ? "✓" : "✗",
+      title: `${payload.capability ?? "Capability"} ${ok ? "succeeded" : "failed"} via ${payload.connector ?? "connector"}`,
+      detail: ok ? undefined : (payload.error ?? undefined),
+    };
+  }
+  return { title: `${e.eventType} (${e.producedBy})` };
 }
 
 export default function IncidentWorkspacePage(props: PageProps<"/incidents/[incidentId]">) {
@@ -47,19 +222,40 @@ function IncidentWorkspaceContent({ incidentId }: { incidentId: string }) {
   const [auditLog, setAuditLog] = useState<EventEnvelope[]>([]);
   const seenEventIds = useRef<Set<string>>(new Set());
 
+  const stageRows = useMemo(() => deriveStageRows(PIPELINE_AGENT_IDS, auditLog), [auditLog]);
+  const learningRow = useMemo(() => deriveStageRows([LEARNING_AGENT_ID], auditLog)[0], [auditLog]);
+
   const incidentQuery = useQuery({
     queryKey: ["incident", incidentId],
     queryFn: () => api.getIncident(incidentId),
     refetchInterval: (query) => {
       const data = query.state.data as IncidentRecord | undefined;
-      return data?.finalState ? false : 1000;
+      return data?.finalState && TERMINAL_STATES.has(data.finalState) ? false : 1000;
     },
   });
 
   const record = incidentQuery.data;
-  const isResolved = record && "finalState" in record;
-  const finalState = isResolved ? (record as IncidentRecord).finalState : undefined;
-  const awaitingApproval = record && "awaitingApproval" in record && record.awaitingApproval;
+  // finalState reflects the raw value whenever the response carries the
+  // key at all — both the live in-progress shape (never has this key) and
+  // the Cloudant restart-recovery snapshot (always has it, but the value
+  // is frequently a non-terminal state like "AwaitingApproval") carry it
+  // differently. isResolved has to check the *value* against
+  // TERMINAL_STATES, not just whether the key is present, or a restarted
+  // backend's still-pending incident renders as if it had finished.
+  const finalState = record && "finalState" in record ? (record as IncidentRecord).finalState : undefined;
+  const isResolved = Boolean(finalState && TERMINAL_STATES.has(finalState));
+  // The live in-progress response shape carries an explicit awaitingApproval
+  // boolean; the Cloudant snapshot shape doesn't have that key at all, only
+  // finalState — so a restart-recovered "AwaitingApproval" incident needs
+  // to fall back to reading it off finalState instead of silently reading
+  // as false (which previously made the Execution tab's approval gate show
+  // "done / Auto-approved" for an incident still genuinely waiting on a
+  // human decision).
+  const awaitingApproval = Boolean(
+    record &&
+      (("awaitingApproval" in record && record.awaitingApproval) ||
+        (!isResolved && finalState === "AwaitingApproval"))
+  );
   const approvalSummary = record && "approvalSummary" in record ? (record.approvalSummary as string) : null;
 
   const optionsQuery = useQuery({
@@ -182,7 +378,7 @@ function IncidentWorkspaceContent({ incidentId }: { incidentId: string }) {
 
   const activeVision = visionResult ?? (record && "visionResult" in record ? (record.visionResult as Record<string, unknown>) : null);
   const activeCad = cadResult ?? (record && "cadResult" in record ? (record.cadResult as Record<string, unknown>) : null);
-  const activeReasoning = reasoningResult ?? (record && "reasoningResult" in record ? (record.reasoningResult as Record<string, unknown>) : null);
+  const activeReasoning = reasoningResult ?? (record && "reasoningResult" in record ? (record.reasoningResult as unknown as Record<string, unknown>) : null);
 
   if (incidentQuery.isError || (!incidentQuery.isLoading && !record && auditLog.length === 0)) {
     return (
@@ -206,13 +402,8 @@ function IncidentWorkspaceContent({ incidentId }: { incidentId: string }) {
           </button>
           <button
             onClick={async () => {
-              const res = await api.startIncident({
-                plant_id: "PLANT-04-BANGALORE",
-                line_id: "LINE-02",
-                part_number: "MH-8820",
-                vision_data: { defect_type: "dimensional fault", severity: 0.88 },
-                priority: { safety_impact: 0.1, customer_impact: 0.9, line_down_cost_per_hour_usd: 12000, production_priority: 0.8, is_systemic: false },
-              });
+              const scenario = QUALITY_ALERT_SCENARIOS.find((s) => s.lineId === "Line 2") ?? QUALITY_ALERT_SCENARIOS[0];
+              const res = await api.startIncident(scenario.request);
               router.push(`/incidents/${res.incident_id}`);
             }}
             className="px-4 py-2 rounded-lg text-xs font-mono font-semibold bg-emerald text-white hover:bg-emerald/90 transition-all"
@@ -397,38 +588,68 @@ function IncidentWorkspaceContent({ incidentId }: { incidentId: string }) {
         )}
 
         {activeTab === "execution" && (
-          <div className="space-y-2 text-sm">
-            {!checklist && <Empty text="Nothing executing yet. Pending operator approval." />}
-            {checklist && (
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="font-semibold">{checklist.capability}</span>
-                  <span className={checklist.phase === "started" ? "text-amber" : checklist.succeeded ? "text-emerald" : "text-status-red"}>
-                    {checklist.phase === "started" ? "In Progress" : checklist.succeeded ? "Completed" : "Failed"}
-                  </span>
+          <div className="space-y-1">
+            {stageRows.map((row) => (
+              <StageTimelineRow key={row.agentId} row={row} />
+            ))}
+
+            {/* Governance gate - not an agent, so it's spliced into the
+                timeline from awaitingApproval/record state rather than an
+                AgentCompleted event. */}
+            <TimelineRow
+              icon="⚖️"
+              label="Operator Approval Gate"
+              status={awaitingApproval ? "running" : isResolved || checklist ? "done" : "pending"}
+              detail={
+                awaitingApproval
+                  ? approvalSummary ?? "Awaiting human governance decision"
+                  : isResolved && (record as IncidentRecord)?.approvedBy
+                    ? `Approved by ${(record as IncidentRecord).approvedBy}`
+                    : isResolved || checklist
+                      ? "Auto-approved — Tier 0 autonomous"
+                      : undefined
+              }
+            />
+
+            {/* Capability dispatch - the real ERP/ITSM/watsonx write, from
+                CapabilityInvocationStarted/Completed. */}
+            <TimelineRow
+              icon="🎫"
+              label={checklist?.capability ?? "Capability Dispatch"}
+              status={!checklist ? "pending" : checklist.phase === "started" ? "running" : "done"}
+              detail={
+                !checklist
+                  ? undefined
+                  : checklist.phase === "started"
+                    ? `Dispatching ${checklist.steps.length} step(s)…`
+                    : checklist.succeeded
+                      ? `Fulfilled by ${checklist.connector ?? "connector"}`
+                      : (checklist.error ?? "Failed")
+              }
+            >
+              {checklist && (
+                <div className="mt-1.5 space-y-1 pl-6">
+                  {checklist.steps.map((step) => (
+                    <div key={step} className="flex items-center gap-2 py-0.5 text-xs text-text-secondary">
+                      <span className={checklist.phase === "started" ? "text-amber" : checklist.succeeded ? "text-emerald" : "text-status-red"}>
+                        {checklist.phase === "started" ? "●" : checklist.succeeded ? "✓" : "✗"}
+                      </span>
+                      <span>{step}</span>
+                    </div>
+                  ))}
+                  {checklist.phase === "completed" && checklist.connector && (
+                    <div className="mt-2 pt-2 border-t border-border-subtle text-xs font-mono space-y-1">
+                      {checklist.output &&
+                        Object.entries(checklist.output).map(([key, value]) => (
+                          <Row key={key} k={key} v={String(value)} />
+                        ))}
+                    </div>
+                  )}
                 </div>
-                {checklist.steps.map((step) => (
-                  <div key={step} className="flex items-center gap-2 py-1">
-                    <span className={checklist.phase === "started" ? "text-amber" : checklist.succeeded ? "text-emerald" : "text-status-red"}>
-                      {checklist.phase === "started" ? "●" : checklist.succeeded ? "✓" : "✗"}
-                    </span>
-                    <span>{step}</span>
-                  </div>
-                ))}
-                {checklist.phase === "completed" && checklist.connector && (
-                  <div className="mt-3 pt-3 border-t border-border-subtle text-xs font-mono space-y-1">
-                    <Row k="Fulfilled by" v={checklist.connector} />
-                    {checklist.output &&
-                      Object.entries(checklist.output).map(([key, value]) => (
-                        <Row key={key} k={key} v={String(value)} />
-                      ))}
-                    {!checklist.succeeded && checklist.error && (
-                      <p className="text-status-red pt-1">{checklist.error}</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+              )}
+            </TimelineRow>
+
+            <StageTimelineRow row={learningRow} />
           </div>
         )}
 
@@ -436,17 +657,23 @@ function IncidentWorkspaceContent({ incidentId }: { incidentId: string }) {
           <div className="space-y-2">
             {auditLog.length === 0 && <Empty text="No events recorded yet." />}
             {auditLog.map((e) => {
-              const payload = e.payload as { agentId?: string; agent_id?: string };
-              const agentId = payload.agentId ?? payload.agent_id ?? e.producedBy;
+              const agentId = eventAgentId(e);
               const meta = agentId ? resolveAgentMeta(agentId) : null;
+              const desc = describeEvent(e);
               return (
-                <div key={e.eventId} className="flex items-center justify-between rounded-md border border-border-subtle bg-glass px-3 py-2 text-xs font-mono">
-                  <span>
-                    {meta && <span className="mr-1">{meta.icon}</span>}
-                    {e.eventType} ({e.producedBy})
-                  </span>
-                  <span className="text-text-secondary">{new Date(e.occurredAt).toLocaleTimeString()}</span>
-                </div>
+                <details key={e.eventId} className="rounded-md border border-border-subtle bg-glass px-3 py-2 text-xs font-mono open:bg-card/60">
+                  <summary className="flex cursor-pointer items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span>{desc.icon ?? meta?.icon ?? "•"}</span>
+                      <span className="font-semibold text-text-primary">{desc.title}</span>
+                    </span>
+                    <span className="shrink-0 text-text-secondary">{new Date(e.occurredAt).toLocaleTimeString()}</span>
+                  </summary>
+                  {desc.detail && <p className="mt-1.5 pl-5 text-text-secondary font-sans">{desc.detail}</p>}
+                  <p className="mt-1.5 pl-5 text-[10px] text-text-secondary/70">
+                    {e.eventType} · {e.producedBy}
+                  </p>
+                </details>
               );
             })}
           </div>
@@ -544,6 +771,59 @@ function Row({ k, v }: { k: string; v: string }) {
       <span className="text-text-secondary">{k}</span>
       <span>{v}</span>
     </div>
+  );
+}
+
+function TimelineRow({
+  icon,
+  label,
+  status,
+  detail,
+  children,
+}: {
+  icon: string;
+  label: string;
+  status: StageStatus;
+  detail?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-md border border-border-subtle bg-glass px-3 py-2">
+      <div className="flex items-center gap-2 text-sm">
+        <span className={STAGE_COLOR[status]}>{STAGE_DOT[status]}</span>
+        <span>{icon}</span>
+        <span className={status === "pending" ? "text-text-secondary" : "font-semibold"}>{label}</span>
+        <span className={`ml-auto text-[10px] font-mono uppercase ${STAGE_COLOR[status]}`}>{STAGE_LABELS[status]}</span>
+      </div>
+      {detail && <p className="mt-1 pl-6 text-xs text-text-secondary">{detail}</p>}
+      {children}
+    </div>
+  );
+}
+
+function StageTimelineRow({ row }: { row: StageRow }) {
+  const meta = resolveAgentMeta(row.agentId);
+  const detail = describeStageResult(row.agentId, row.result);
+  // Explicitly surface what generated the root-cause explanation - a live
+  // local LLM call vs. the honest rule-based fallback (agents/causal_isolation_agent.py) -
+  // since "what's actually doing the reasoning right now" is exactly what
+  // this tab exists to answer.
+  const llmNote =
+    row.agentId === "causal-isolation-agent" && row.result
+      ? row.result.llm_status === "live_llm_generated"
+        ? `🤖 Local LLM (${row.result.model_used ?? "configured model"}) generated this explanation live`
+        : `🤖 ${row.result.model_used ?? "Rule-based synthesis"} — no live LLM configured`
+      : null;
+
+  return (
+    <TimelineRow icon={meta.icon} label={meta.label} status={row.status} detail={detail ?? undefined}>
+      {llmNote && <p className="mt-1 pl-6 text-[11px] text-cobalt">{llmNote}</p>}
+      {row.status === "done" && row.executionTimeMs !== undefined && (
+        <p className="mt-0.5 pl-6 text-[10px] text-text-secondary/70">
+          {row.executionTimeMs}ms · confidence {Math.round((row.confidence ?? 0) * 100)}%
+        </p>
+      )}
+    </TimelineRow>
   );
 }
 

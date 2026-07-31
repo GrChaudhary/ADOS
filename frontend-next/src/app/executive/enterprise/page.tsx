@@ -122,6 +122,33 @@ export default function ExecutiveEnterprisePage() {
         />
       </div>
 
+      {/* Operational KPI Cards — same three metrics /digital-twin's Twin
+          Room header shows, backed by the same api.getKpis() totals rather
+          than the session-local incident store, so this reflects the
+          plant-wide count regardless of what this browser tab has seen. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        <KpiCard
+          label="Production Health"
+          value={kpis && kpis.totalIncidents > 0 ? `${Math.round((kpis.resolvedIncidents / kpis.totalIncidents) * 100)}%` : "100%"}
+          trend="Resolved vs total incidents"
+          accentColor="emerald"
+        />
+
+        <KpiCard
+          label="Open Incidents"
+          value={kpis ? String(Math.max(0, kpis.totalIncidents - kpis.resolvedIncidents - kpis.failedIncidents)) : "—"}
+          trend="Not yet in a terminal state"
+          accentColor={kpis && kpis.totalIncidents - kpis.resolvedIncidents - kpis.failedIncidents > 0 ? "status-red" : "emerald"}
+        />
+
+        <KpiCard
+          label="Autonomous Decisions"
+          value={String(kpis?.tierDistribution?.["Tier 0 (Autonomous)"] ?? 0)}
+          trend="Tier 0 — no human in the loop"
+          accentColor="purple"
+        />
+      </div>
+
       {/* What-If Autonomy Simulator & Risk Signals Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         {/* What-If Autonomy Simulator */}

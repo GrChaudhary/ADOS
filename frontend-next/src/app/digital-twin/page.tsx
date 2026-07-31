@@ -14,6 +14,7 @@ import { api } from "@/lib/api";
 import { useMissionControlStore } from "@/lib/store";
 import { useHasToken } from "@/lib/useHasToken";
 import { QUALITY_ALERT_SCENARIOS } from "@/lib/demoScenario";
+import studioStyles from "../novus-studio/studio.module.css";
 
 // "vibration_rms_mm_s" -> "Vibration Rms Mm S" — good enough for a compact
 // live-telemetry readout without needing a per-key label/unit lookup table.
@@ -66,10 +67,21 @@ export default function DigitalTwinPage() {
   }
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="text-center">
-        <h1 className="text-2xl font-bold">Nova Motors — Production Command Center</h1>
-        <p className="mt-1 text-sm text-text-secondary">When a factory doesn&apos;t know what to do next, ADOS does.</p>
+    <div className="space-y-8 pb-12">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl shadow-2xl">
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl sm:text-3xl font-orbitron font-extrabold text-white tracking-wide">
+              Nova Motors — Production Command Center
+            </h1>
+            <span className="px-3 py-1 rounded-full text-xs font-mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-[0_0_12px_rgba(16,185,129,0.3)]">
+              Digital Twin Active
+            </span>
+          </div>
+          <p className="text-xs sm:text-sm text-purple-200/70 mt-2 font-sans">
+            When a factory doesn&apos;t know what to do next, ADOS does.
+          </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -79,36 +91,82 @@ export default function DigitalTwinPage() {
         <KpiCard label="Revenue Protected" value={revenueProtected} accentColor="cobalt" />
       </div>
 
-      <div className="rounded-lg border border-border-subtle bg-card p-6">
+      <div className="rounded-3xl jarvis-static-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
         <h2 className="mb-4 text-sm font-semibold text-text-secondary">Live Digital Twin</h2>
         {linesQuery.isLoading && <p className="text-sm text-text-secondary">Loading production lines…</p>}
         {linesQuery.isError && <p className="text-sm text-status-red">Could not load digital twin (check token).</p>}
-        <div className="flex flex-wrap gap-4">
+        <div
+          className={studioStyles.twinGrid}
+          style={{
+            ["--bg-raised" as any]: "var(--bg-glass)",
+            ["--line" as any]: "var(--border-subtle)",
+            ["--border-hover" as any]: "#38bdf8",
+            ["--shadow-hover" as any]: "0 0 20px rgba(56, 189, 248, 0.45)",
+            ["--muted" as any]: "var(--text-secondary)",
+            ["--paper" as any]: "var(--text-primary)",
+            ["--accent-cyan" as any]: "#00f0ff",
+            ["--accent-lime" as any]: "#d7ff3e",
+            ["--accent-orange" as any]: "#ff4b1f",
+            ["--font-mono" as any]: "var(--font-jetbrains-mono), monospace",
+            ["--font-display" as any]: "var(--font-orbitron), sans-serif",
+          }}
+        >
           {linesQuery.data?.map((line) => {
             const overridden = activeIncidentLines.has(line.lineId);
             const status = overridden ? "DEGRADED" : line.status;
             const readings = Object.entries(line.telemetry)
               .filter((entry): entry is [string, number] => entry[0] !== "last_reading_time" && typeof entry[1] === "number")
               .slice(0, 2);
+
+            const shorthandId = line.lineId === "Warehouse" ? "WH" : line.lineId.replace("Line ", "L");
+
+            let statusLabel = "NORMAL";
+            let statusColor = "#00f0ff";
+            if (status === "DEGRADED") {
+              statusLabel = "ANOMALY";
+              statusColor = "#ff4b1f";
+            } else if (status === "STOPPED") {
+              statusLabel = "WARNING";
+              statusColor = "#d7ff3e";
+            }
+
             return (
-              <div key={line.lineId} className="rounded-md border border-border-subtle bg-glass px-4 py-2">
-                <StatusPulse status={status === "OPERATIONAL" ? "healthy" : "critical"} label={line.lineId} />
-                {readings.length > 0 && (
-                  <div className="mt-1 flex flex-col gap-0.5">
-                    {readings.map(([key, value]) => (
-                      <span key={key} className="text-xs text-text-secondary">
-                        {formatTelemetryLabel(key)}: {value}
-                      </span>
-                    ))}
-                  </div>
-                )}
+              <div key={line.lineId} className={studioStyles.lineCard}>
+                <div className={studioStyles.cardTop}>
+                  <span className={studioStyles.lineId}>{shorthandId}</span>
+                  <span
+                    className={studioStyles.statusBadge}
+                    style={{
+                      color: statusColor,
+                      borderColor: statusColor
+                    }}
+                  >
+                    ● {statusLabel}
+                  </span>
+                </div>
+                <h3 className="font-orbitron font-bold text-white mb-1" style={{ fontSize: "1.15rem" }}>
+                  {line.lineId}
+                </h3>
+                <p className={studioStyles.partLabel} style={{ marginBottom: "1.2rem" }}>
+                  Part / SKU: {line.activeProductSku || "None"}
+                </p>
+                <div className={studioStyles.telemetryMetrics}>
+                  {readings.map(([key, value]) => (
+                    <div key={key}>
+                      <span>{formatTelemetryLabel(key)}</span>
+                      <strong style={{ color: status === "DEGRADED" ? "#ff4b1f" : "inherit" }}>
+                        {typeof value === "number" ? value.toFixed(2) : String(value)}
+                      </strong>
+                    </div>
+                  ))}
+                </div>
               </div>
             );
           })}
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-border-subtle bg-card p-6">
+      <div className="flex flex-wrap items-center justify-between gap-4 p-6 rounded-3xl jarvis-static-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl shadow-2xl">
         <div>
           <h2 className="text-sm font-semibold text-text-primary">Quality Inspection</h2>
           <p className="mt-1 text-sm text-text-secondary">
@@ -140,7 +198,7 @@ export default function DigitalTwinPage() {
         </div>
       </div>
 
-      <div className="rounded-lg border border-border-subtle bg-card p-6">
+      <div className="rounded-3xl jarvis-static-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
         <h2 className="mb-4 text-sm font-semibold text-text-secondary">Recent Incidents</h2>
         {recentIncidents.length === 0 && <p className="text-sm text-text-secondary">No incidents yet this session.</p>}
         <div className="flex flex-col gap-2">
@@ -161,8 +219,8 @@ export default function DigitalTwinPage() {
       </div>
 
       {qualityAlert && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="max-w-sm rounded-xl border border-status-red bg-card p-6 text-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md">
+          <div className="max-w-sm rounded-3xl jarvis-glass-card border border-status-red bg-[#0d0926]/95 p-6 text-center shadow-2xl animate-fade-in">
             <div className="text-lg font-bold text-status-red">⚠ Quality Alert — Motor Housing</div>
             <p className="mt-2 text-sm text-text-secondary">
               Tolerance exceeded on {qualityAlert.lineId}. ADOS has started an investigation.

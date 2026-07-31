@@ -29,6 +29,8 @@ orchestrate-cache/
 # Vendored Claude Code skills (antigravity-awesome-skills) — reinstall via
 # scripts/install-skills.sh rather than committing 50MB of third-party content.
 .claude/skills/
+.agents/
+agent/
 
 # OS / editor
 .DS_Store

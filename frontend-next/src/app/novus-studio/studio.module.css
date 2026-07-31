@@ -1,0 +1,787 @@
+/* Novus Studio — Applied-AI Dashboard Design System */
+
+.dashboardRoot {
+  --bg: #07070a;
+  --bg-raised: #0f111a;
+  --bg-card: #151824;
+  --paper: #f3f1ea;
+  --muted: #8a8d9b;
+  --line: rgba(243, 241, 234, 0.12);
+  --accent-cyan: #00f0ff;
+  --accent-lime: #d7ff3e;
+  --accent-orange: #ff4b1f;
+  --accent-purple: #a855f7;
+  --accent-pink: #ec4899;
+
+  --font-display: var(--font-studio-display), "Arial Black", sans-serif;
+  --font-body: var(--font-studio-body), "Helvetica Neue", sans-serif;
+  --font-mono: var(--font-jetbrains-mono), "Courier New", monospace;
+
+  position: relative;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--paper);
+  font-family: var(--font-body);
+  padding: 1.2rem 2rem 4rem;
+  overflow-x: hidden;
+}
+
+/* Custom Cursor */
+.cursorDot,
+.cursorRing {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  border-radius: 50%;
+  z-index: 999;
+  mix-blend-mode: difference;
+}
+
+.cursorDot {
+  width: 6px;
+  height: 6px;
+  background: var(--paper);
+}
+
+.cursorRing {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--paper);
+}
+
+/* Single-Row Inline Header (Item 2 Requirement) */
+.dashHeaderInline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 1.8rem;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.headerLeftBrand {
+  display: flex;
+  align-items: center;
+  gap: 1.2rem;
+  white-space: nowrap;
+}
+
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+  color: var(--paper);
+}
+
+.wordmark span {
+  color: var(--accent-orange);
+}
+
+.liveBadge {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  color: var(--accent-cyan);
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  padding: 0.3em 0.8em;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pulseDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.4); opacity: 1; }
+}
+
+.tabBar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+}
+
+.tabBtn {
+  background: none;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  padding: 0.5em 0.95em;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  white-space: nowrap;
+}
+
+.tabBtn:hover {
+  color: var(--paper);
+}
+
+.tabActive {
+  background: var(--paper);
+  color: var(--bg);
+  font-weight: 700;
+}
+
+/* Main Content Views */
+.dashMain {
+  width: 100%;
+}
+
+.tabView {
+  display: flex;
+  flex-direction: column;
+  gap: 1.6rem;
+  animation: fadeIn 0.35s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.viewHeader h2 {
+  font-family: var(--font-display);
+  font-weight: 900;
+  font-size: 1.7rem;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.3rem;
+}
+
+.viewHeader p {
+  color: var(--muted);
+  font-size: 0.88rem;
+  margin: 0;
+}
+
+/* Line card grid — shared with the main dashboard's Twin Room
+   (digital-twin/page.tsx imports this module directly for these classes). */
+.twinGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.2rem;
+}
+
+.lineCard {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 1.4rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.lineCard:hover {
+  border-color: var(--border-hover, rgba(243, 241, 234, 0.3));
+  box-shadow: var(--shadow-hover, none);
+  transform: translateY(-2px);
+}
+
+.cardTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.8rem;
+}
+
+.lineId {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.statusBadge {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  border: 1px solid;
+  border-radius: 999px;
+  padding: 0.25em 0.65em;
+  font-weight: 700;
+}
+
+.lineCard h3 {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  margin: 0 0 0.3rem;
+}
+
+.partLabel {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 0 0 1.2rem;
+}
+
+.telemetryMetrics {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.telemetryMetrics div {
+  display: flex;
+  justify-content: space-between;
+}
+
+.telemetryMetrics span {
+  color: var(--muted);
+}
+
+/* Recent Incidents list (used by TAB 1: REASONING's incident picker) */
+.incidentsCard {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 1.6rem;
+}
+
+.incidentsTitle {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  color: var(--paper);
+  margin: 0 0 1rem;
+}
+
+.incidentsList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.incidentRow {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.8rem 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.incLine {
+  color: var(--paper);
+}
+
+.incBadge {
+  font-size: 0.68rem;
+  padding: 0.25em 0.75em;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+.badgeProgress {
+  color: var(--accent-orange);
+  background: rgba(255, 75, 31, 0.12);
+  border: 1px solid rgba(255, 75, 31, 0.3);
+}
+
+.badgeResolved {
+  color: var(--accent-lime);
+  background: rgba(215, 255, 62, 0.12);
+  border: 1px solid rgba(215, 255, 62, 0.3);
+}
+
+.incidentRowClickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.incidentRowClickable:hover {
+  border-color: rgba(215, 255, 62, 0.4);
+}
+
+.incidentRowActive {
+  border-color: var(--accent-lime);
+  background: rgba(215, 255, 62, 0.06);
+}
+
+.embeddedSectionLabel {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin: 2rem 0 1rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--line);
+}
+
+.embeddedPage {
+  color-scheme: dark;
+  --bg-app: #07070a;
+  --bg-card: #151824;
+  --bg-glass: #0f111a;
+  --border-subtle: rgba(243, 241, 234, 0.12);
+  --border-accent: rgba(243, 241, 234, 0.2);
+  --text-secondary: #8a8d9b;
+}
+
+.embeddedPage :global(.bg-\[\#0c0824\]\/90),
+.embeddedPage :global(.bg-\[\#0c0824\]\/95),
+.embeddedPage :global(.bg-\[\#0c0824\]) {
+  background-color: #151824 !important;
+}
+
+.embeddedPage :global(.border-purple-500\/30),
+.embeddedPage :global(.border-purple-500\/20),
+.embeddedPage :global(.border-purple-500\/40) {
+  border-color: rgba(243, 241, 234, 0.12) !important;
+}
+
+.embeddedPage :global(.jarvis-glass-card),
+.embeddedPage :global(.jarvis-static-glass-card) {
+  background: #151824 !important;
+  border-color: rgba(243, 241, 234, 0.12) !important;
+}
+
+.embeddedPage :global(.jarvis-glass-card):hover {
+  border-color: rgba(243, 241, 234, 0.2) !important;
+  box-shadow: none !important;
+}
+
+.synthesisStatus {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  padding: 0.2em 0.7em;
+  border-radius: 999px;
+  font-weight: 700;
+}
+
+/* TAB 2: REASONING (CAUSAL DAG) */
+.causalLayout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+.dagBox {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 1.8rem;
+}
+
+.dagHeader {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin-bottom: 1.5rem;
+}
+
+.dagNodes {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: center;
+}
+
+.dagNode {
+  width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.dagNode span {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.dagNode strong {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+}
+
+.dagNode small {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.nodeSymptom {
+  border-color: rgba(0, 240, 255, 0.4);
+}
+
+.nodeIntermediate {
+  border-color: rgba(215, 255, 62, 0.4);
+}
+
+.nodeRoot {
+  border-color: rgba(255, 75, 31, 0.6);
+  background: #1e1115;
+}
+
+.dagConnector {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.synthesisBox {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 1.8rem;
+}
+
+.synthesisBox h3 {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  color: var(--accent-lime);
+  margin: 0 0 1rem;
+}
+
+.llmText {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.65;
+  color: var(--paper);
+  background: var(--bg);
+  border-left: 3px solid var(--accent-lime);
+  padding: 1rem;
+  border-radius: 0 10px 10px 0;
+  margin: 0 0 1.5rem;
+}
+
+.evidenceChain span {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.evidenceChain ul {
+  list-style: none;
+  padding: 0;
+  margin: 0.6rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  color: var(--paper);
+}
+
+/* TAB 3: GOVERNANCE */
+.rulesTable {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.tableHeader {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 2.5fr 1.2fr;
+  padding: 1.2rem;
+  background: var(--bg-card);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.tableRow {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr 2.5fr 1.2fr;
+  padding: 1.2rem;
+  border-top: 1px solid var(--line);
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.tierName {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+}
+
+.actionDesc {
+  color: var(--muted);
+}
+
+.tierStatus {
+  font-weight: 700;
+}
+
+.simulatorBox {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 1.8rem;
+}
+
+.simulatorBox h3 {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+  margin: 0 0 1.2rem;
+}
+
+.simControls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  margin-bottom: 1.5rem;
+}
+
+.simControls div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.simControls input[type="range"] {
+  accent-color: var(--accent-cyan);
+}
+
+.simResult {
+  background: var(--bg);
+  border: 1px solid;
+  border-radius: 14px;
+  padding: 1.2rem;
+  font-family: var(--font-mono);
+}
+
+.simResult span {
+  font-size: 0.65rem;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.simResult h4 {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  margin: 0.4rem 0 0;
+}
+
+/* TAB 4: EXECUTION STREAM */
+.streamList {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.streamItem {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.2rem 1.6rem;
+  display: grid;
+  grid-template-columns: 100px 200px 140px 140px 1fr 120px;
+  align-items: center;
+  gap: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.streamTime {
+  color: var(--muted);
+}
+
+.streamSystem {
+  font-weight: 700;
+  color: var(--accent-cyan);
+}
+
+.streamBadge {
+  background: rgba(243, 241, 234, 0.08);
+  border: 1px solid var(--line);
+  padding: 0.2em 0.6em;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  text-align: center;
+}
+
+.streamRef {
+  color: var(--accent-lime);
+}
+
+.streamDesc {
+  color: var(--paper);
+}
+
+.streamStatus {
+  color: var(--accent-cyan);
+  font-weight: 700;
+  text-align: right;
+}
+
+/* TAB 5: COPILOT */
+.chatContainer {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 1.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  height: 520px;
+}
+
+.messagesBox {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.chatMsg {
+  max-width: 80%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.msgAi {
+  align-self: flex-start;
+}
+
+.msgUser {
+  align-self: flex-end;
+}
+
+.msgSender {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.chatMsg p {
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  padding: 1rem 1.4rem;
+  border-radius: 16px;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.msgUser p {
+  background: var(--paper);
+  color: var(--bg);
+  font-weight: 700;
+}
+
+.chatForm {
+  display: flex;
+  gap: 0.8rem;
+}
+
+.chatForm input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.8rem 1.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--paper);
+  outline: none;
+}
+
+.chatForm button {
+  background: var(--accent-cyan);
+  border: none;
+  border-radius: 999px;
+  padding: 0.8rem 1.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--bg);
+  cursor: pointer;
+}
+
+/* TAB 6: AUDIT TABLE */
+.auditTable {
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.auditHeader {
+  display: grid;
+  grid-template-columns: 140px 160px 140px 1fr 120px;
+  padding: 1.2rem;
+  background: var(--bg-card);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.auditRow {
+  display: grid;
+  grid-template-columns: 140px 160px 140px 1fr 120px;
+  padding: 1.2rem;
+  border-top: 1px solid var(--line);
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.traceCode {
+  color: var(--accent-cyan);
+}
+
+.layerBadge {
+  background: rgba(243, 241, 234, 0.08);
+  border: 1px solid var(--line);
+  padding: 0.2em 0.6em;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  width: fit-content;
+}
+
+.hashCode {
+  color: var(--accent-lime);
+}
+
+@media (max-width: 1024px) {
+  .twinGrid { grid-template-columns: repeat(2, 1fr); }
+  .dashHeaderInline { flex-wrap: wrap; }
+  .causalLayout { grid-template-columns: 1fr; }
+  .tableHeader, .tableRow { grid-template-columns: 1fr; gap: 0.5rem; }
+  .streamItem { grid-template-columns: 1fr; }
+  .auditHeader, .auditRow { grid-template-columns: 1fr; }
+}

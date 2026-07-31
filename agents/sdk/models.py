@@ -14,6 +14,7 @@ class IncidentContext(BaseModel):
     incident_id: str = Field(default_factory=lambda: str(uuid.uuid4()), alias="incidentId")
     plant_id: str = Field(..., alias="plantId")
     line_id: str = Field(..., alias="lineId")
+    part_number: str = Field(default="", alias="partNumber")
     severity: str = Field(default="HIGH")
     timestamp: Optional[str] = None
 

@@ -67,6 +67,17 @@ class IncidentRecord(BaseModel):
     capability_status: Optional[CallStatus] = Field(default=None, alias="capabilityStatus")
     supplier_id: Optional[str] = Field(default=None, alias="supplierId")
 
+    # Captured at AwaitingApproval time (orchestrate/orchestrator.py's
+    # _snapshot_pending) so a restart-reconstituted PendingApproval
+    # (governance.py's resume_context) can dispatch exactly what was
+    # actually proposed, instead of only being readable-but-unresumable.
+    # Not re-derived at resume time on purpose: re-running the pipeline
+    # against whatever the digital twin's live state happens to be *now*
+    # would silently substitute a different decision than the one a human
+    # is actually approving.
+    execution_steps: Optional[List[str]] = Field(default=None, alias="executionSteps")
+    target_line_id: Optional[str] = Field(default=None, alias="targetLineId")
+
     estimated_cost_usd: Optional[float] = Field(default=None, alias="estimatedCostUsd")
     actual_cost_usd: Optional[float] = Field(default=None, alias="actualCostUsd")
     estimated_downtime_min: Optional[float] = Field(default=None, alias="estimatedDowntimeMin")

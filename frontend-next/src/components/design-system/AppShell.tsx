@@ -8,7 +8,8 @@ import { FooterStatusBar } from "./FooterStatusBar";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const isLandingPage = pathname === "/" || pathname === "/novus" || pathname === "/jarvis" || pathname === "/login";
+  const isLandingPage =
+    pathname === "/" || pathname === "/novus" || pathname === "/jarvis" || pathname === "/login" || pathname === "/novus-studio";
 
   if (isLandingPage) {
     return <>{children}</>;

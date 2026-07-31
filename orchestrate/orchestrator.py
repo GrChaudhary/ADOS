@@ -29,8 +29,10 @@ the same incident_id, up to `max_resume_attempts` times before settling
 as Preempted for good. See run_incident's docstring.
 """
 
+import asyncio
 import os
 import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from agents.sdk import IncidentContext, StageInput
@@ -47,6 +49,7 @@ from contracts import (
     PolicyTier,
 )
 from knowledge import CausalGraph, DigitalTwinStore, KnowledgeGraph
+from knowledge.cloudant_client import cloudant_db
 from knowledge.tts_client import tts_client
 
 from backend.app.eventbus import EventBus
@@ -94,6 +97,200 @@ class DecisionOrchestrator:
     def get_audio_briefing(self, incident_id: str) -> Optional[bytes]:
         return self._audio_briefings.get(incident_id)
 
+    async def resume_pending_approvals(self) -> int:
+        """Reconstitutes a PendingApproval for every incident left sitting
+        at AwaitingApproval when the process last stopped, so
+        /incidents/{id}/approve doesn't 404 just because a restart happened
+        mid-decision. Call once at startup, after audit_trail has already
+        been hydrated from Cloudant (backend/app/main.py's lifespan) — this
+        reads from that in-memory collection rather than querying Cloudant
+        again itself. Each reconstituted approval carries resume_context
+        instead of a live run_incident() coroutine; resume_after_decision()
+        is what actually acts on it once a human decides. Returns how many
+        were reconstituted."""
+        count = 0
+        for record in self.audit_trail.all():
+            if record.final_state != "AwaitingApproval":
+                continue
+            if self.approvals.get(record.incident_id) is not None:
+                continue
+            if not record.capability_invoked or not record.execution_steps or not record.target_line_id:
+                # Snapshot predates execution_steps/target_line_id being
+                # saved, or never reached a clean AwaitingApproval snapshot.
+                # Nothing safe to resume — stays orphaned rather than
+                # guessing at what to dispatch.
+                continue
+
+            top_option = next(
+                (o for o in record.alternatives if o.get("recommendation") == "TOP_PICK"),
+                record.alternatives[0] if record.alternatives else {},
+            )
+            primary_condition_id = record.causal_chain[0].condition_id if record.causal_chain else None
+
+            self.approvals.enqueue(
+                PendingApproval(
+                    incident_id=record.incident_id,
+                    capability=record.capability_invoked,
+                    policy_tier=record.policy_tier,
+                    confidence=record.confidence,
+                    summary=(
+                        f"{top_option.get('name', 'Recommended option')} "
+                        f"(${record.estimated_cost_usd}, {record.estimated_downtime_min}min) "
+                        f"— recovered after a backend restart"
+                    ),
+                    estimated_cost_usd=record.estimated_cost_usd or 0.0,
+                    resume_context={
+                        "plant_id": record.plant_id,
+                        "line_id": record.line_id,
+                        "detected_at": record.detected_at,
+                        "causal_chain": record.causal_chain,
+                        "confidence": record.confidence,
+                        "alternatives": record.alternatives,
+                        "chosen_opt": top_option,
+                        "execution_steps": record.execution_steps,
+                        "target_line_id": record.target_line_id,
+                        "primary_condition_id": primary_condition_id,
+                    },
+                )
+            )
+            count += 1
+        return count
+
+    async def resume_after_decision(self, pending: PendingApproval) -> Optional[IncidentRecord]:
+        """Carries out a decision made on a restart-reconstituted
+        PendingApproval (pending.resume_context is not None). There's no
+        live run_incident() coroutine behind these to react to
+        approval.resolve() the way the normal flow does, so
+        backend/app/routers/incidents.py's _decide() calls this directly
+        instead. Mirrors run_incident's post-approval tail, but builds the
+        IncidentRecord straight from the saved snapshot rather than a live
+        IncidentStateMachine — that object doesn't survive a restart either.
+        Deliberately does not re-run diagnosis/candidate-generation stages:
+        dispatches exactly what was already proposed (see IncidentRecord's
+        execution_steps/target_line_id docstring)."""
+        ctx = pending.resume_context
+        if ctx is None or pending.decision is None:
+            return None
+
+        if pending.decision == "escalated":
+            # Mirrors run_incident's live escalation path (a second,
+            # Tier 2 PendingApproval) rather than finalizing anything —
+            # nothing to execute yet until *that* one is also decided.
+            self.approvals.enqueue(
+                PendingApproval(
+                    incident_id=pending.incident_id,
+                    capability=pending.capability,
+                    policy_tier=PolicyTier.EXECUTIVE_APPROVAL,
+                    confidence=pending.confidence,
+                    summary=pending.summary,
+                    estimated_cost_usd=pending.estimated_cost_usd,
+                    resume_context=ctx,
+                )
+            )
+            return None
+
+        base_kwargs = dict(
+            incident_id=pending.incident_id,
+            plant_id=ctx["plant_id"],
+            line_id=ctx["line_id"],
+            detected_at=ctx["detected_at"],
+            causal_chain=ctx["causal_chain"],
+            confidence=ctx["confidence"],
+            alternatives=ctx["alternatives"],
+            policy_tier=pending.policy_tier,
+            approved_by=pending.approved_by,
+            capability_invoked=pending.capability,
+            estimated_cost_usd=pending.estimated_cost_usd,
+            estimated_downtime_min=ctx["chosen_opt"].get("downtime_minutes"),
+        )
+
+        if pending.decision != "approved":
+            record = IncidentRecord(
+                resolved_at=datetime.now(timezone.utc).isoformat(),
+                final_state="Failed",
+                recommendation_accepted=False,
+                **base_kwargs,
+            )
+            return await self.audit_trail.append(record)
+
+        self.digital_twin.set_status(ctx["line_id"], "DEGRADED")
+
+        await self._bus.publish(EventEnvelope(
+            event_type="CapabilityInvocationStarted",
+            incident_id=pending.incident_id,
+            produced_by="orchestrate/decision-orchestrator",
+            payload={
+                "capability": pending.capability.value,
+                "executionSteps": ctx["execution_steps"],
+                "targetLineId": ctx["target_line_id"],
+            },
+        ))
+
+        call = CapabilityCall(
+            capability=pending.capability,
+            incident_id=pending.incident_id,
+            requested_by="orchestrate/decision-orchestrator",
+            input={"execution_steps": ctx["execution_steps"], "target_line_id": ctx["target_line_id"]},
+            governance=GovernanceInfo(policy_tier=pending.policy_tier, approved_by=pending.approved_by),
+        )
+        response = await self._hub.invoke(call)
+
+        await self._bus.publish(EventEnvelope(
+            event_type="CapabilityInvocationCompleted",
+            incident_id=pending.incident_id,
+            produced_by="orchestrate/decision-orchestrator",
+            payload={
+                "capability": pending.capability.value,
+                "status": response.status.value,
+                "executionSteps": ctx["execution_steps"],
+                "targetLineId": ctx["target_line_id"],
+                "connector": response.connector,
+                "output": response.output,
+                "error": response.error,
+            },
+        ))
+
+        self.digital_twin.set_status(ctx["line_id"], "OPERATIONAL")
+
+        if response.status != CallStatus.SUCCEEDED:
+            record = IncidentRecord(
+                resolved_at=datetime.now(timezone.utc).isoformat(),
+                final_state="Failed",
+                recommendation_accepted=True,
+                capability_status=response.status,
+                **base_kwargs,
+            )
+            return await self.audit_trail.append(record)
+
+        if ctx.get("primary_condition_id"):
+            await self._runner.run_stage(
+                "feedback_calibration",
+                IncidentContext(
+                    incident_id=pending.incident_id,
+                    plant_id=ctx["plant_id"],
+                    line_id=ctx["line_id"],
+                ),
+                StageInput(
+                    stage_name="Learning",
+                    payload={
+                        "condition_id": ctx["primary_condition_id"],
+                        "outcome_id": "OUT-DIMENSIONAL-FAULT",
+                        "outcome_verified": True,
+                    },
+                ),
+            )
+
+        record = IncidentRecord(
+            resolved_at=datetime.now(timezone.utc).isoformat(),
+            final_state="Resolved",
+            recommendation_accepted=True,
+            capability_status=response.status,
+            actual_cost_usd=pending.estimated_cost_usd,
+            actual_downtime_min=ctx["chosen_opt"].get("downtime_minutes"),
+            **base_kwargs,
+        )
+        return await self.audit_trail.append(record)
+
     async def run_incident(
         self,
         plant_id: str,
@@ -110,7 +307,7 @@ class DecisionOrchestrator:
         (docs/005-decision-orchestrator.md's Preempted -> Diagnosing edge):
         the same incident_id waits for the line to free, then restarts
         diagnosis from scratch — it does not pick up mid-stage."""
-        context_kwargs = {"plant_id": plant_id, "line_id": line_id}
+        context_kwargs = {"plant_id": plant_id, "line_id": line_id, "part_number": part_number}
         if incident_id is not None:
             context_kwargs["incident_id"] = incident_id
         context = IncidentContext(**context_kwargs)
@@ -139,7 +336,7 @@ class DecisionOrchestrator:
                 out1, _ = await self._runner.run_stage(
                     "vision_spec",
                     context,
-                    StageInput(stage_name="Perception", payload={"vision_data": vision_data}),
+                    StageInput(stage_name="Perception", payload={"vision_data": vision_data, "part_number": part_number}),
                 )
                 out2, _ = await self._runner.run_stage(
                     "cad_spec",
@@ -181,7 +378,9 @@ class DecisionOrchestrator:
                     StageInput(stage_name="CandidateGeneration", payload={"deviation_mm": out1.result["deviation_mm"]}),
                 )
                 out5, _ = await self._runner.run_stage(
-                    "impact_simulation", context, StageInput(stage_name="Evaluation", payload={})
+                    "impact_simulation",
+                    context,
+                    StageInput(stage_name="Evaluation", payload={"substitution_result": out4a.result}),
                 )
                 top_opt = out5.result["top_recommendation"]
 
@@ -194,7 +393,13 @@ class DecisionOrchestrator:
                 out6, _ = await self._runner.run_stage(
                     "rerouting",
                     context,
-                    StageInput(stage_name="Execution", payload={"selected_option": top_opt["option_id"]}),
+                    StageInput(
+                        stage_name="Execution",
+                        payload={
+                            "selected_option": top_opt["option_id"],
+                            "substitute_part_number": (out4a.result.get("top_candidate") or {}).get("target_part_number"),
+                        },
+                    ),
                 )
 
                 if occupant.preempt_event.is_set():
@@ -224,6 +429,23 @@ class DecisionOrchestrator:
                             summary=summary,
                             estimated_cost_usd=top_opt["estimated_cost_usd"],
                         )
+                    )
+                    await self._snapshot_pending(
+                        context,
+                        sm,
+                        confidence=out5.confidence,
+                        causal_chain=causal_chain,
+                        policy_tier=tier,
+                        capability_invoked=capability,
+                        estimated_cost_usd=top_opt["estimated_cost_usd"],
+                        estimated_downtime_min=top_opt["downtime_minutes"],
+                        alternatives=out5.result["ranked_options"],
+                        # So a restart that loses this coroutine can still
+                        # dispatch exactly what was proposed —
+                        # resume_pending_approvals()/resume_after_decision()
+                        # below.
+                        execution_steps=out6.result["execution_steps"],
+                        target_line_id=out6.result["target_line_id"],
                     )
                     decision = await approval.wait()
                     approved_by = approval.approved_by
@@ -276,7 +498,13 @@ class DecisionOrchestrator:
                         out6, _ = await self._runner.run_stage(
                             "rerouting",
                             context,
-                            StageInput(stage_name="Execution", payload={"selected_option": chosen_opt["option_id"]}),
+                            StageInput(
+                                stage_name="Execution",
+                                payload={
+                                    "selected_option": chosen_opt["option_id"],
+                                    "substitute_part_number": (out4a.result.get("top_candidate") or {}).get("target_part_number"),
+                                },
+                            ),
                         )
 
                 sm.transition(IncidentState.EXECUTING)
@@ -421,6 +649,35 @@ class DecisionOrchestrator:
                 return Capability.RESERVE_INVENTORY
             return Capability.CREATE_PURCHASE_ORDER
         return Capability.SCHEDULE_MAINTENANCE  # OPT-1-PARAMETER-ADJUST and unrecognized options
+
+    async def _snapshot_pending(self, context: IncidentContext, sm: IncidentStateMachine, **kwargs) -> None:
+        """Best-effort Cloudant write while an incident sits at
+        AwaitingApproval, so a backend restart doesn't strand it as an
+        unrecoverable 404 (previously only _finalize wrote through to
+        Cloudant, so anything still mid-pipeline at restart time vanished
+        with the in-memory audit_trail/approvals/event_bus state). Purely
+        additive: GET /incidents/{id} already falls back to Cloudant when
+        the in-memory lookup misses (backend/app/routers/incidents.py), so
+        this just gives that fallback something real to find. It's
+        read-only after a restart — there's no live PendingApproval to
+        resume, so /incidents/{id}/approve still 404s honestly rather than
+        pretending to resume mid-flight orchestration."""
+        if not cloudant_db.is_configured():
+            return
+        detected_at = sm.history[0][1]
+        record = IncidentRecord(
+            incident_id=context.incident_id,
+            plant_id=context.plant_id,
+            line_id=context.line_id,
+            detected_at=detected_at,
+            resolved_at=None,
+            final_state="AwaitingApproval",
+            **kwargs,
+        )
+        try:
+            await asyncio.to_thread(cloudant_db.save_incident, record.model_dump(by_alias=True))
+        except Exception as e:
+            print(f"[DecisionOrchestrator] Cloudant pending-snapshot write failed for {context.incident_id}: {e}")
 
     async def _finalize(self, context: IncidentContext, sm: IncidentStateMachine, **kwargs) -> IncidentRecord:
         self.digital_twin.set_status(context.line_id, "OPERATIONAL")

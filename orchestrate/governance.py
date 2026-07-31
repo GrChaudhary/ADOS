@@ -22,7 +22,7 @@ MVP starting policy, not a final one.
 import asyncio
 import uuid
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from contracts import Capability, PolicyTier
 
@@ -76,6 +76,16 @@ class PendingApproval:
     decision: Optional[str] = None  # "approved" | "rejected" | "escalated"
     approved_by: Optional[str] = None
     selected_option_id: Optional[str] = None
+    # Set only when this PendingApproval was reconstituted from a Cloudant
+    # snapshot at startup (orchestrator.py's resume_pending_approvals)
+    # instead of created by a live run_incident() coroutine. None means a
+    # real coroutine is blocked on .wait() and will act on the decision
+    # itself; a dict here means nothing is listening for _event.set() at
+    # all — the approve/reject/escalate endpoint must call
+    # DecisionOrchestrator.resume_after_decision() itself, since the
+    # original task that would otherwise carry out the decision no longer
+    # exists (see docs on _snapshot_pending for why this can happen).
+    resume_context: Optional[Dict[str, Any]] = None
     _event: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def wait(self) -> str:

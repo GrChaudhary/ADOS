@@ -24,9 +24,9 @@ export default function GovernancePolicyPage() {
   const tier0ConfidenceThreshold = policies?.financialExposureBands.tier0ConfidenceThreshold ?? 0;
 
   return (
-    <div className="space-y-6 pb-8">
+    <div className="space-y-8 pb-12">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle shadow-lg">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl shadow-2xl">
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-text-primary">Governance Policy &amp; Autonomy Administration</h1>
@@ -45,7 +45,7 @@ export default function GovernancePolicyPage() {
       {hasToken && policiesQuery.isError && <p className="text-sm text-status-red">Could not load governance policies.</p>}
 
       {/* Dollar-Threshold Tier Matrix */}
-      <div className="rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle p-6 space-y-4 shadow-lg">
+      <div className="rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-lg">⚖️</span>
@@ -62,7 +62,7 @@ export default function GovernancePolicyPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
           {/* Tier 0 Card */}
-          <div className="p-4 rounded-xl bg-dark-900/60 border border-emerald/30 space-y-3">
+          <div className="p-5 rounded-2xl jarvis-glass-card border border-emerald-500/30 hover:border-emerald-500/60 space-y-3 shadow-lg">
             <div className="flex items-center justify-between">
               <span className="px-2.5 py-0.5 rounded text-xs font-mono font-bold bg-emerald/20 text-emerald border border-emerald/40">
                 TIER 0
@@ -79,7 +79,7 @@ export default function GovernancePolicyPage() {
           </div>
 
           {/* Tier 1 Card */}
-          <div className="p-4 rounded-xl bg-dark-900/60 border border-cobalt/30 space-y-3">
+          <div className="p-5 rounded-2xl jarvis-glass-card border border-cyan-500/30 hover:border-cyan-500/60 space-y-3 shadow-lg">
             <div className="flex items-center justify-between">
               <span className="px-2.5 py-0.5 rounded text-xs font-mono font-bold bg-cobalt/20 text-cobalt border border-cobalt/40">
                 TIER 1
@@ -96,7 +96,7 @@ export default function GovernancePolicyPage() {
           </div>
 
           {/* Tier 2 Card */}
-          <div className="p-4 rounded-xl bg-dark-900/60 border border-purple/30 space-y-3">
+          <div className="p-5 rounded-2xl jarvis-glass-card border border-pink-500/30 hover:border-pink-500/60 space-y-3 shadow-lg">
             <div className="flex items-center justify-between">
               <span className="px-2.5 py-0.5 rounded text-xs font-mono font-bold bg-purple/20 text-purple border border-purple/40">
                 TIER 2
@@ -115,7 +115,7 @@ export default function GovernancePolicyPage() {
       </div>
 
       {/* Real RBAC + Governance Rule Enforcements */}
-      <div className="rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle p-6 space-y-4 shadow-lg">
+      <div className="rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-lg">📋</span>
@@ -128,7 +128,7 @@ export default function GovernancePolicyPage() {
 
         <div className="space-y-2 text-xs font-mono">
           {(policies?.rbacApprovalRules ?? []).map((rule, idx) => (
-            <div key={idx} className="p-3 rounded-lg bg-dark-900/60 border border-border-subtle flex items-center justify-between gap-4">
+            <div key={idx} className="p-3 rounded-xl jarvis-glass-card border border-purple-500/20 hover:border-pink-500/40 flex items-center justify-between gap-4 shadow-sm">
               <span className="text-text-primary">{rule}</span>
               <span className="px-2 py-0.5 rounded text-[10px] bg-emerald/20 text-emerald font-bold">ACTIVE</span>
             </div>

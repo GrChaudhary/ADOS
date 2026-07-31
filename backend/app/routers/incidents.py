@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from contracts import IncidentRecord, PolicyTier
+from knowledge.local_llm_client import local_llm_client
 from orchestrate import PriorityInputs
 from orchestrate.governance import PendingApproval
 
@@ -76,17 +77,25 @@ async def get_incident(incident_id: str, request: Request):
     if record is not None:
         return record
 
-    if cloudant_db.is_configured():
-        doc = cloudant_db.get_incident(incident_id)
-        if doc:
-            clean_d = {k: v for k, v in doc.items() if not k.startswith("_")}
-            return clean_d
-
     task: Optional[asyncio.Task] = request.app.state.incident_tasks.get(incident_id)
     pending = orchestrator.approvals.get(incident_id)
     events = await request.app.state.event_bus.recent(incident_id=incident_id, limit=50)
 
+    # Cloudant is only consulted once this process has no live trace of the
+    # incident at all (task/pending/events all empty) - a genuine
+    # backend-restart recovery case (orchestrate/orchestrator.py's
+    # _snapshot_pending). While the process is still alive, in-memory state
+    # is always more current/authoritative than a point-in-time snapshot:
+    # checking Cloudant first would make a still-live, still-awaiting-
+    # approval incident look like an inert historical record (no
+    # awaitingApproval/approvalSummary fields, "finalState" present) even
+    # though it's actually still progressing right now.
     if task is None and pending is None and len(events) == 0:
+        if cloudant_db.is_configured():
+            doc = cloudant_db.get_incident(incident_id)
+            if doc:
+                clean_d = {k: v for k, v in doc.items() if not k.startswith("_")}
+                return clean_d
         raise HTTPException(status_code=404, detail="unknown incident")
 
     causal_chain = []
@@ -147,6 +156,38 @@ async def get_incident_briefing_audio(incident_id: str, request: Request):
     return Response(content=audio, media_type="audio/mpeg")
 
 
+@router.get("/incidents/{incident_id}/causal-synthesis")
+async def get_incident_causal_synthesis(incident_id: str, request: Request):
+    """On-demand LLM root-cause synthesis for a given incident's causal
+    chain (knowledge/local_llm_client.py). Deliberately separate from
+    GET /incidents/{id}: that endpoint only carries reasoningResult (with
+    its own live LLM explanation) while the incident is still in-flight —
+    once it lands in audit_trail, the raw causal_chain persists but the
+    narrative text doesn't. Generating it here from the stored causal_chain
+    means it works for resolved incidents too, not just active ones.
+    Status/model_used are passed through as-is from the client: never
+    fabricated as "live" when generation didn't actually happen.
+    """
+    incident_data = await get_incident(incident_id, request)
+
+    if isinstance(incident_data, IncidentRecord):
+        causal_chain = [c.model_dump(by_alias=True) for c in incident_data.causal_chain]
+    else:
+        causal_chain = incident_data.get("causalChain", [])
+
+    if not causal_chain:
+        return {"status": "no_causal_chain", "model_used": None, "explanation": None, "causalChain": []}
+
+    primary = causal_chain[0]
+    llm_result = local_llm_client.generate_root_cause_explanation(
+        defect_type=primary.get("description", "unspecified defect"),
+        primary_cause=primary.get("description", "Unknown"),
+        confidence=primary.get("weight", 0.0),
+        evidence_paths=primary.get("evidencePath") or primary.get("evidence_path") or [],
+    )
+    return {**llm_result, "causalChain": causal_chain}
+
+
 @router.get("/incidents", response_model=list[IncidentRecord])
 async def list_incidents(request: Request, limit: int = 100):
     return request.app.state.orchestrator.audit_trail.recent(limit=limit)
@@ -199,13 +240,21 @@ class ApproveRequest(BaseModel):
     selected_option_id: Optional[str] = None
 
 
-def _decide(request: Request, incident_id: str, action: str, current_user: User, body: Optional[ApproveRequest] = None) -> dict:
+async def _decide(request: Request, incident_id: str, action: str, current_user: User, body: Optional[ApproveRequest] = None) -> dict:
     orchestrator = request.app.state.orchestrator
     pending = _get_pending_or_404(orchestrator, incident_id)
     _authorize_decision(current_user, pending)
     if action == "approve" and body and body.selected_option_id:
         pending.selected_option_id = body.selected_option_id
     getattr(orchestrator.approvals, action)(incident_id, f"{current_user.display_name} ({current_user.role.value})")
+    if pending.resume_context is not None:
+        # No live run_incident() coroutine is awaiting pending.wait() for
+        # this one (it was reconstituted from a Cloudant snapshot at
+        # startup — orchestrator.py's resume_pending_approvals, for an
+        # incident whose original process restarted mid-decision).
+        # Nothing will act on .resolve() above on its own, so carry out
+        # the decision here instead of just recording it.
+        await orchestrator.resume_after_decision(pending)
     return {"incidentId": incident_id, "decision": pending.decision}
 
 
@@ -216,14 +265,14 @@ async def approve_incident(
     body: ApproveRequest = ApproveRequest(),
     current_user: User = Depends(get_current_user)
 ):
-    return _decide(request, incident_id, "approve", current_user, body)
+    return await _decide(request, incident_id, "approve", current_user, body)
 
 
 @router.post("/incidents/{incident_id}/reject")
 async def reject_incident(incident_id: str, request: Request, current_user: User = Depends(get_current_user)):
-    return _decide(request, incident_id, "reject", current_user)
+    return await _decide(request, incident_id, "reject", current_user)
 
 
 @router.post("/incidents/{incident_id}/escalate")
 async def escalate_incident(incident_id: str, request: Request, current_user: User = Depends(get_current_user)):
-    return _decide(request, incident_id, "escalate", current_user)
+    return await _decide(request, incident_id, "escalate", current_user)

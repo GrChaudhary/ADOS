@@ -1,15 +1,42 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { NovusParticleOrb } from "@/components/novus/NovusParticleOrb";
-import { NovusLabModal } from "@/components/novus/NovusLabModal";
 import { NovusHeaderIcon } from "@/components/design-system/NovusHeaderIcon";
 import { ActiveTheoryFeaturesShowcase } from "@/components/novus/ActiveTheoryFeaturesShowcase";
 import { Cylinder3DArchitectureCarousel } from "@/components/novus/Cylinder3DArchitectureCarousel";
+import portalStyles from "@/components/design-system/PortalTransition.module.css";
+
+const NOVUS_STUDIO_DEST = "/novus-studio#signal";
 
 export default function NovusLandingPage() {
-  const [isSecretLabOpen, setIsSecretLabOpen] = useState(false);
+  const router = useRouter();
+
+  const [rippling, setRippling] = useState(false);
+  const [portalOpen, setPortalOpen] = useState(false);
+  const [flashVisible, setFlashVisible] = useState(false);
+  const [integrationsOpen, setIntegrationsOpen] = useState(false);
+  const navigateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function openNovusStudioPortal() {
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) {
+      router.push(NOVUS_STUDIO_DEST);
+      return;
+    }
+
+    setRippling(true);
+    setTimeout(() => setRippling(false), 600);
+
+    setPortalOpen(true);
+    setTimeout(() => setFlashVisible(true), 180);
+
+    navigateTimer.current = setTimeout(() => {
+      router.push(NOVUS_STUDIO_DEST);
+    }, 650);
+  }
 
   // Calculator State for MTTR & Cost Savings Impact
   const [monthlyIncidents, setMonthlyIncidents] = useState<number>(45);
@@ -30,9 +57,6 @@ export default function NovusLandingPage() {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[600px] bg-gradient-to-b from-purple-900/30 via-pink-600/15 to-transparent blur-[120px] pointer-events-none rounded-full" />
       <div className="absolute top-[800px] left-[-200px] w-[600px] h-[600px] bg-gradient-to-tr from-cyan-600/15 to-purple-800/15 blur-[140px] pointer-events-none rounded-full" />
       <div className="absolute top-[1600px] right-[-200px] w-[700px] h-[700px] bg-gradient-to-bl from-pink-600/15 to-indigo-800/15 blur-[150px] pointer-events-none rounded-full" />
-
-      {/* Secret Lab Modal */}
-      <NovusLabModal isOpen={isSecretLabOpen} onClose={() => setIsSecretLabOpen(false)} />
 
       {/* ==================== 1. HEADER ==================== */}
       <header className="relative z-30 max-w-7xl mx-auto px-6 py-6 flex items-center justify-between">
@@ -60,10 +84,12 @@ export default function NovusLandingPage() {
             EXECUTIVE DASHBOARD
           </Link>
           <button
-            onClick={() => setIsSecretLabOpen(true)}
-            className="px-6 py-2.5 rounded-xl font-orbitron font-bold text-xs tracking-wider transition-all novus-tab-active flex items-center gap-2"
+            type="button"
+            onClick={openNovusStudioPortal}
+            className={`${portalStyles.rippleWrap} px-6 py-2.5 rounded-xl font-orbitron font-bold text-xs tracking-wider transition-all novus-tab-active flex items-center gap-2 cursor-pointer`}
           >
-            <span>NOVUS LAB</span>
+            <span className={`${portalStyles.ripple} ${rippling ? portalStyles.rippleActive : ""}`} aria-hidden="true" />
+            <span>NOVUS STUDIO</span>
             <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
           </button>
         </div>
@@ -79,11 +105,91 @@ export default function NovusLandingPage() {
           <a href="#architecture" className="hover:text-white transition-colors">
             Architecture
           </a>
-          <Link href="/integrations" className="hover:text-white transition-colors">
+          <button
+            type="button"
+            onClick={() => setIntegrationsOpen(true)}
+            className="hover:text-white transition-colors cursor-pointer bg-none border-none text-xs font-mono text-purple-200/70"
+          >
             Integrations
-          </Link>
+          </button>
         </nav>
       </header>
+
+      {/* Glassmorphic Integrations Pop-Up Modal (Item 3 Requirement) */}
+      {integrationsOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-black/80 backdrop-blur-2xl animate-fade-in">
+          <div className="w-full max-w-2xl bg-[#0d0926]/95 border border-cyan-500/40 rounded-3xl p-8 shadow-2xl relative">
+            <div className="flex items-center justify-between mb-6 pb-4 border-b border-white/10 font-mono">
+              <div className="flex items-center gap-3">
+                <span className="text-cyan-400 font-bold text-sm">CONNECTED ENTERPRISE INTEGRATIONS</span>
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold">
+                  ● 4 SYSTEMS ACTIVE
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIntegrationsOpen(false)}
+                className="w-8 h-8 rounded-full border border-white/20 text-white/70 hover:text-white hover:border-white transition-all flex items-center justify-center text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs mb-6">
+              <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex flex-col gap-2">
+                <div className="flex justify-between items-center text-cyan-300 font-bold">
+                  <span>ServiceNow Table API</span>
+                  <span className="text-[10px] text-emerald-400">● OAuth2</span>
+                </div>
+                <p className="text-purple-200/70 text-[11px]">Direct automated Incident & Change Request creation (INC0094821)</p>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex flex-col gap-2">
+                <div className="flex justify-between items-center text-amber-300 font-bold">
+                  <span>SAP ERP RFC Adapter</span>
+                  <span className="text-[10px] text-emerald-400">● RFC Conn</span>
+                </div>
+                <p className="text-purple-200/70 text-[11px]">Real-time inventory reservation & spindle part hold (SAP-RES-9912)</p>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex flex-col gap-2">
+                <div className="flex justify-between items-center text-purple-300 font-bold">
+                  <span>IBM watsonx ADK</span>
+                  <span className="text-[10px] text-emerald-400">● gRPC</span>
+                </div>
+                <p className="text-purple-200/70 text-[11px]">Orchestrate agent tool binding stream & causal reasoning DAG</p>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-white/5 border border-white/10 flex flex-col gap-2">
+                <div className="flex justify-between items-center text-pink-300 font-bold">
+                  <span>Kafka Telemetry Stream</span>
+                  <span className="text-[10px] text-emerald-400">● 14K msg/s</span>
+                </div>
+                <p className="text-purple-200/70 text-[11px]">Low-latency optical displacement & micrometer sensor stream</p>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setIntegrationsOpen(false)}
+                className="px-6 py-2 rounded-full bg-cyan-500 text-black font-mono text-xs font-bold hover:bg-cyan-400 transition-all"
+              >
+                CLOSE OVERLAY ↗
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Kinetic opening portal — button ripple already fires inline above;
+          this is the glass curtain + telemetry flash before navigating to
+          /novus-studio#signal. */}
+      <div className={`${portalStyles.overlay} ${portalOpen ? portalStyles.overlayOpen : ""}`} aria-hidden="true">
+        <span className={`${portalStyles.flash} ${flashVisible ? portalStyles.flashVisible : ""}`}>
+          INITIALIZING NOVUS APPLIED-AI STUDIO // 01 SENSING STREAM ACTIVE
+        </span>
+      </div>
 
       {/* ==================== 2. HERO SECTION ==================== */}
       <section className="relative z-20 max-w-7xl mx-auto px-6 pt-8 pb-16 text-center">
@@ -114,6 +220,7 @@ export default function NovusLandingPage() {
           <NovusParticleOrb />
         </div>
       </section>
+
 
       {/* ==================== 3. CONNECTORS & INTEGRATION HUB ==================== */}
       <section id="integrations" className="relative z-20 border-y border-purple-500/20 bg-purple-950/20 backdrop-blur-md py-8">

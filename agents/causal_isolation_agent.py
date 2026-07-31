@@ -30,13 +30,18 @@ class CausalIsolationAgent(BaseAgent):
     def process(self, context: IncidentContext, stage_input: StageInput) -> StageOutput:
         defect_type = stage_input.payload.get("defect_type", "dimensional fault")
         telemetry = stage_input.payload.get("telemetry", {})
+        part_number = stage_input.payload.get("part_number") or context.part_number or "MH-8820"
 
-        # Query 1: Causal Graph root cause ranking
-        ranked_causes = self.causal_graph.rankCandidateCauses(defect_type, evidence=telemetry)
+        # Query 1: Causal Graph root cause ranking, scoped to this incident's
+        # plant/line - conditions are tagged with the line they actually
+        # occur on (knowledge/causal_graph.py), so a Line 1 rotor-shaft
+        # incident surfaces Line 1 causes instead of Line 2's CNC-102
+        # tolerance-drift narrative regardless of which line triggered it.
+        ranked_causes = self.causal_graph.rankCandidateCauses(defect_type, evidence=telemetry, plant_id=context.plant_id)
 
         # Query 2: Knowledge Graph for affected products & specifications
-        affected_products = self.knowledge_graph.findAffectedProducts(defect_spec="SP-8820")
-        spec = self.knowledge_graph.getSpecification(part_number="MH-8820")
+        spec = self.knowledge_graph.getSpecification(part_number=part_number)
+        affected_products = self.knowledge_graph.findAffectedProducts(defect_spec=spec.spec_id if spec else part_number)
 
         primary_cause = ranked_causes[0] if ranked_causes else None
 
@@ -49,7 +54,7 @@ class CausalIsolationAgent(BaseAgent):
             primary_cause=primary_cause.condition.name if primary_cause else "Unknown",
             confidence=primary_cause.weight if primary_cause else 0.0,
             evidence_paths=primary_cause.evidence_path if primary_cause else [],
-            part_number="MH-8820",
+            part_number=part_number,
         )
         if llm_reasoning.get("status") != "live_llm_generated":
             # Honest, clearly-labeled rule-based synthesis - never claims

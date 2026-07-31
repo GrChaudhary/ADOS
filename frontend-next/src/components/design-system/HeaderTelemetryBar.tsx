@@ -1,10 +1,14 @@
 "use client";
 
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { clearSession } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
 import { NovusHeaderIcon } from "./NovusHeaderIcon";
+import portalStyles from "./PortalTransition.module.css";
+
+const NOVUS_STUDIO_DEST = "/novus-studio#signal";
 
 export function HeaderTelemetryBar() {
   const currentUser = useCurrentUser();
@@ -12,7 +16,31 @@ export function HeaderTelemetryBar() {
   const router = useRouter();
 
   const isExecutive = pathname?.startsWith("/executive");
-  const isNovusLab = pathname === "/" || pathname === "/novus" || pathname === "/digital-twin";
+  const isNovusLab =
+    pathname === "/" || pathname === "/novus" || pathname === "/digital-twin" || pathname?.startsWith("/novus-studio");
+
+  const [rippling, setRippling] = useState(false);
+  const [portalOpen, setPortalOpen] = useState(false);
+  const [flashVisible, setFlashVisible] = useState(false);
+  const navigateTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function openNovusStudioPortal() {
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) {
+      router.push(NOVUS_STUDIO_DEST);
+      return;
+    }
+
+    setRippling(true);
+    setTimeout(() => setRippling(false), 600);
+
+    setPortalOpen(true);
+    setTimeout(() => setFlashVisible(true), 180);
+
+    navigateTimer.current = setTimeout(() => {
+      router.push(NOVUS_STUDIO_DEST);
+    }, 650);
+  }
 
   return (
     <header className="relative z-30 border-b border-purple-500/20 bg-[#08051a]/80 backdrop-blur-xl px-6 py-3 flex items-center justify-between shadow-2xl">
@@ -42,15 +70,17 @@ export function HeaderTelemetryBar() {
           <span>EXECUTIVE DASHBOARD</span>
           {isExecutive && <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />}
         </Link>
-        <Link
-          href="/"
-          className={`px-5 py-2 rounded-xl font-orbitron font-bold text-xs tracking-wider transition-all flex items-center gap-2 ${
+        <button
+          type="button"
+          onClick={openNovusStudioPortal}
+          className={`${portalStyles.rippleWrap} px-5 py-2 rounded-xl font-orbitron font-bold text-xs tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
             isNovusLab ? "novus-tab-active" : "novus-tab-inactive"
           }`}
         >
-          <span>NOVUS LAB</span>
+          <span className={`${portalStyles.ripple} ${rippling ? portalStyles.rippleActive : ""}`} aria-hidden="true" />
+          <span>NOVUS STUDIO</span>
           {isNovusLab && <span className="w-1.5 h-1.5 rounded-full bg-pink-300 animate-pulse" />}
-        </Link>
+        </button>
       </div>
 
       {/* Plant Telemetry & Session Identity */}
@@ -82,6 +112,16 @@ export function HeaderTelemetryBar() {
             Log in
           </Link>
         )}
+      </div>
+
+      {/* Kinetic opening portal — button ripple already fires inline above;
+          this is the glass curtain + telemetry flash before navigating to
+          /novus-studio#signal. Unmounts on route change along with the
+          rest of the page, so no cleanup is needed on success. */}
+      <div className={`${portalStyles.overlay} ${portalOpen ? portalStyles.overlayOpen : ""}`} aria-hidden="true">
+        <span className={`${portalStyles.flash} ${flashVisible ? portalStyles.flashVisible : ""}`}>
+          INITIALIZING NOVUS APPLIED-AI STUDIO // 01 SENSING STREAM ACTIVE
+        </span>
       </div>
     </header>
   );

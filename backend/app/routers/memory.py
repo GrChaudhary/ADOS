@@ -3,7 +3,6 @@ Decision Memory router (backend/app/routers/memory.py).
 Provides REST endpoints for searching and managing historical IncidentRecord audit trails.
 """
 
-from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from contracts import IncidentRecord, DecisionMemoryQuery, DecisionMemorySearchResult
 from knowledge import DecisionMemoryIndex
@@ -26,27 +25,12 @@ def get_memory_index() -> DecisionMemoryIndex:
 async def search_decision_memory(query: DecisionMemoryQuery):
     """
     Search historical Decision Memory audit records by similarity, plant, defect type, or supplier.
-    Queries IBM Cloudant NoSQL database when configured.
+    Queries IBM Cloudant NoSQL database when configured, falling back to the
+    static seed set otherwise (knowledge/decision_memory_index.py's
+    DecisionMemoryIndex.search — the same method Causal Isolation's
+    precedent-retrieval RAG now calls too, so this endpoint and the agent's
+    reasoning always see the same history).
     """
-    if cloudant_db.is_configured():
-        search_text = query.defect_type or query.condition_id or query.line_id or query.plant_id or ""
-        docs = cloudant_db.search_incidents(search_text, limit=query.limit or 50)
-        records: List[IncidentRecord] = []
-        for d in docs:
-            try:
-                # Clean up CouchDB internal fields before parsing into pydantic
-                clean_d = {k: v for k, v in d.items() if not k.startswith("_")}
-                records.append(IncidentRecord.model_validate(clean_d))
-            except Exception:
-                pass
-
-        if len(records) > 0:
-            return DecisionMemorySearchResult(
-                total_matches=len(records),
-                records=records,
-                relevance_scores=[0.95] * len(records),
-            )
-
     idx = get_memory_index()
     return idx.search(query)
 

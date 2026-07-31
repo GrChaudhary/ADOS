@@ -11,7 +11,7 @@ from orchestrate import DecisionOrchestrator
 from . import user_store
 from .config import settings
 from .eventbus import get_event_bus
-from .routers import ai_services, agents_registry, auth, capabilities, digital_twin, events, events_stream, executive, governance, health, incidents, integrations, knowledge_graph, learning, memory
+from .routers import ai_services, agents_registry, auth, capabilities, copilot, digital_twin, events, events_stream, executive, governance, health, incidents, integrations, knowledge_graph, learning, memory, settings as settings_router
 
 _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
@@ -43,6 +43,9 @@ async def lifespan(app: FastAPI):
         cloudant_db.initialize()
         loaded = await app.state.orchestrator.audit_trail.hydrate_from_cloudant()
         print(f"[Startup] Hydrated {loaded} incident(s) from Cloudant into the audit trail")
+        resumed = await app.state.orchestrator.resume_pending_approvals()
+        if resumed:
+            print(f"[Startup] Reconstituted {resumed} pending approval(s) stranded by the last restart")
 
     # RBAC (backend/app/user_store.py) - seeds the 5 demo accounts only if
     # the user store is empty; never resets existing accounts/passwords.
@@ -75,6 +78,7 @@ _ROUTERS = (
     executive.router, memory.router, learning.router, digital_twin.router,
     events_stream.router, knowledge_graph.router, integrations.router,
     ai_services.router, agents_registry.router, governance.router,
+    settings_router.router, copilot.router,
 )
 
 for _router in _ROUTERS:

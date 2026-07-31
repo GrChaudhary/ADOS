@@ -1,0 +1,81 @@
+/* Kinetic opening transition for the "Novus Studio" header button —
+   button ripple -> glassmorphic curtain -> telemetry flash -> navigate.
+   The destination page's own staggered entrance (novus-studio's
+   studio.module.css) picks up once /novus-studio mounts. */
+
+.rippleWrap {
+  position: relative;
+  overflow: visible;
+}
+
+.ripple {
+  position: absolute;
+  inset: -18px;
+  border-radius: 999px;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(0, 240, 255, 0.5) 0%, rgba(168, 85, 247, 0.4) 45%, transparent 72%);
+  opacity: 0;
+  transform: scale(0.55);
+  z-index: -1;
+}
+
+.rippleActive {
+  animation: rippleExpand 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes rippleExpand {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.55);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(7, 7, 10, 0.85);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.overlayOpen {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.flash {
+  font-family: var(--font-jetbrains-mono), "Courier New", monospace;
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+  color: #00f0ff;
+  text-align: center;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  text-shadow: 0 0 18px rgba(0, 240, 255, 0.5);
+}
+
+.flashVisible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ripple,
+  .overlay,
+  .flash {
+    transition-duration: 0.001ms !important;
+    animation-duration: 0.001ms !important;
+  }
+}

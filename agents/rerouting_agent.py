@@ -29,6 +29,7 @@ class ReroutingAgent(BaseAgent):
 
     def process(self, context: IncidentContext, stage_input: StageInput) -> StageOutput:
         selected_option = stage_input.payload.get("selected_option", "OPT-1-PARAMETER-ADJUST")
+        substitute_part_number = stage_input.payload.get("substitute_part_number") or "the approved substitute part"
         target_line = context.line_id
 
         # Make soft reservation on digital twin
@@ -41,8 +42,8 @@ class ReroutingAgent(BaseAgent):
 
         if "SUBSTITUTION" in selected_option or "SUBSTITUTE" in selected_option or "PART" in selected_option:
             execution_steps = [
-                "1. Query local SAP ERP warehouse inventory for substitute part MH-8820-PC",
-                f"2. Reserve 1 unit of MH-8820-PC and dispatch to assembly {target_line}",
+                f"1. Query local SAP ERP warehouse inventory for substitute part {substitute_part_number}",
+                f"2. Reserve 1 unit of {substitute_part_number} and dispatch to assembly {target_line}",
                 "3. Perform manual alignment and physical installation on machine spindle",
                 f"4. Resume production on {target_line} with verified substitute parts"
             ]

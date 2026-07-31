@@ -199,11 +199,65 @@ export interface IncidentRecord {
   createdAt: string;
 }
 
+export interface ReasoningResult {
+  defect_type: string;
+  primary_root_cause: string;
+  primary_condition_id: string | null;
+  root_cause_confidence: number;
+  llm_status: string;
+  llm_explanation: string | null;
+  model_used: string | null;
+  nlu_status: string;
+  nlu_sentiment: string | null;
+  nlu_keywords: string[];
+  nlu_categories: string[];
+  ranked_causes: Array<{
+    rank: number;
+    condition_id: string;
+    name: string;
+    weight: number;
+    evidence_path: string[];
+  }>;
+  affected_products: string[];
+  governing_spec: string | null;
+}
+
 export interface IncidentInProgress {
   incidentId: string;
   status: "in_progress";
   awaitingApproval: boolean;
   approvalSummary: unknown | null;
+  causalChain: CausalChainEntry[];
+  alternatives: Record<string, unknown>[];
+  confidence: number;
+  policyTier: 0 | 1 | 2;
+  reasoningResult: ReasoningResult | null;
+  visionResult: Record<string, unknown> | null;
+  cadResult: Record<string, unknown> | null;
+}
+
+export interface CausalSynthesisResult {
+  status: string;
+  model_used: string | null;
+  explanation: string | null;
+  error?: string;
+  causalChain: CausalChainEntry[];
+}
+
+// Snake_case throughout - hand-built dict response from
+// knowledge/policy_docs_qa.py:answer_question, no pydantic aliasing.
+export interface CopilotSource {
+  doc: string;
+  heading: string;
+}
+
+export interface CopilotAskResult {
+  status: string;
+  model_used: string | null;
+  answer: string | null;
+  sources: CopilotSource[];
+  error?: string;
+  llm_error?: string;
 }
 
 // StartIncidentRequest/Response are the one clear outlier: no aliases
@@ -359,6 +413,37 @@ export interface IntegrationConnectorItem {
   database_name?: string;
 }
 
+// LLM provider settings (backend/app/routers/settings.py) — self-service
+// replacement for hand-editing .env's NEMOTRON_API_KEY / OPENAI_API_KEY /
+// ANTHROPIC_API_KEY. One shared key per provider for the whole deployment,
+// admin-managed. api_key/model here are always write-only inputs — the
+// backend never echoes a saved key back, only a maskedKey preview.
+export interface LLMProviderStatus {
+  provider: "nemotron" | "openai" | "anthropic";
+  configured: boolean;
+  model: string;
+  masked_key: string | null;
+  role: string;
+  name: string;
+  auth: string;
+  description: string;
+  host?: string;
+  status: string;
+  connected: boolean;
+}
+
+export interface LLMProvidersResponse {
+  providers: LLMProviderStatus[];
+  ollama: Omit<LLMProviderStatus, "provider" | "masked_key"> & { host?: string };
+}
+
+export interface LLMProviderTestResult {
+  success: boolean;
+  message: string;
+  model_used?: string | null;
+  latency_ms?: number | null;
+}
+
 // Manual capability invocation (backend/app/routers/capabilities.py's
 // POST /capabilities/invoke) - bypasses the whole incident pipeline
 // (vision/causal/governance stages); the caller supplies the governance
@@ -489,6 +574,8 @@ export const api = {
   startIncident: (body: StartIncidentRequest) =>
     apiFetch<StartIncidentResponse>("/incidents", { method: "POST", body: JSON.stringify(body) }),
   getIncident: (id: string) => apiFetch<IncidentRecord | IncidentInProgress>(`/incidents/${id}`),
+  listIncidents: (limit = 100) => apiFetch<IncidentRecord[]>(`/incidents?limit=${limit}`),
+  getCausalSynthesis: (id: string) => apiFetch<CausalSynthesisResult>(`/incidents/${id}/causal-synthesis`),
   listIncidentEvents: (incidentId: string) => apiFetch<EventEnvelope[]>(`/events?incident_id=${incidentId}`),
   listAllEvents: (limit = 200) => apiFetch<EventEnvelope[]>(`/events?limit=${limit}`),
   // approved_by is no longer client-supplied - the backend derives it from
@@ -506,6 +593,14 @@ export const api = {
   getPromotionCandidates: () => apiFetch<PolicyPromotionCandidate[]>("/learning/promotion-candidates"),
   getKnowledgeGraph: () => apiFetch<KnowledgeGraphSnapshot>("/knowledge/graph"),
   getIntegrationsStatus: () => apiFetch<IntegrationConnectorItem[]>("/integrations/status"),
+  // LLM provider settings — Settings page
+  getLLMProviders: () => apiFetch<LLMProvidersResponse>("/settings/llm-providers"),
+  saveLLMProviderKey: (provider: string, body: { apiKey: string; model?: string }) =>
+    apiFetch<LLMProviderStatus>(`/settings/llm-providers/${provider}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteLLMProviderKey: (provider: string) =>
+    apiFetch<LLMProviderStatus>(`/settings/llm-providers/${provider}`, { method: "DELETE" }),
+  testLLMProvider: (provider: string) =>
+    apiFetch<LLMProviderTestResult>(`/settings/llm-providers/${provider}/test`, { method: "POST" }),
   testWatsonxConnection: () =>
     apiFetch<WatsonxConnectionTestResult>("/integrations/watsonx/test-connection", { method: "POST" }),
   invokeCapability: (body: CapabilityCallRequest) =>
@@ -535,6 +630,8 @@ export const api = {
   createUser: (body: { username: string; password: string; display_name: string; role: Role; approval_limit_usd: number }) =>
     apiFetch<AuthUser>("/auth/users", { method: "POST", body: JSON.stringify(body) }),
   getGovernancePolicies: () => apiFetch<GovernancePolicies>("/governance/policies"),
+  askCopilot: (question: string) =>
+    apiFetch<CopilotAskResult>("/copilot/ask", { method: "POST", body: JSON.stringify({ question }) }),
 };
 
 /**

@@ -4,17 +4,21 @@
     "type": "split",
     "children": [
       {
-        "id": "8753601f2b608ed3",
+        "id": "e7f7318ee3ac1cdd",
         "type": "tabs",
         "children": [
           {
-            "id": "bfcd50c1ac2cc872",
+            "id": "068b218f2b9ea827",
             "type": "leaf",
             "state": {
-              "type": "empty",
-              "state": {},
+              "type": "markdown",
+              "state": {
+                "file": "Changes 31 july.md",
+                "mode": "source",
+                "source": false
+              },
               "icon": "lucide-file",
-              "title": "New tab"
+              "title": "Changes 31 july"
             }
           }
         ]
@@ -90,6 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
+                "file": "Changes 31 july.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -99,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks"
+              "title": "Backlinks for Changes 31 july"
             }
           },
           {
@@ -162,8 +167,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300,
-    "collapsed": true
+    "width": 300
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -176,8 +180,22 @@
       "bases:Create new base": false
     }
   },
-  "active": "d5190ee6f6f27237",
+  "active": "068b218f2b9ea827",
   "lastOpenFiles": [
+    "IMG_3759.jpeg",
+    "IMG_3758.jpeg",
+    "IMG_3757.jpeg",
+    "IMG_3756.jpeg",
+    "IMG_3755.jpeg",
+    "IMG_3754.jpeg",
+    "IMG_3753.jpeg",
+    "IMG_3752.jpeg",
+    "IMG_3751.jpeg",
+    "IMG_3750.jpeg",
+    "IMG_3749.jpeg",
+    "Untitled 1.canvas",
+    "Untitled",
+    "Changes 31 july.md",
     "Welcome.md",
     "Untitled.canvas"
   ]

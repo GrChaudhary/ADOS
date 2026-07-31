@@ -6,6 +6,7 @@ Queries Knowledge Graph for approved part/supplier substitutes.
 from typing import Optional, List
 from agents.sdk import BaseAgent, IncidentContext, StageInput, StageOutput, EvidenceItem, AlternativeOption
 from knowledge import KnowledgeGraph
+from knowledge.local_llm_client import local_llm_client
 
 
 class SubstitutionAgent(BaseAgent):
@@ -36,13 +37,34 @@ class SubstitutionAgent(BaseAgent):
                 "approval_status": matched_rule.approval_status if matched_rule else "PRE_APPROVED"
             })
 
+        # Deterministic default: first approved candidate from the
+        # knowledge-graph query above. The LLM judgment below can only
+        # override this with a pick that's actually in candidate_substitutions
+        # — an unparseable or hallucinated part number never gets trusted,
+        # since this choice can drive a real inventory reservation or
+        # purchase order (orchestrate/orchestrator.py's _capability_for_option).
         top_pick = candidate_substitutions[0] if candidate_substitutions else None
+
+        llm_result = local_llm_client.generate_substitution_reasoning(
+            source_part_number=source_part_number,
+            candidates=candidate_substitutions,
+        )
+        if llm_result.get("status") == "live_llm_generated" and llm_result.get("pick"):
+            matched = next(
+                (c for c in candidate_substitutions if c["target_part_number"] == llm_result["pick"]),
+                None,
+            )
+            if matched:
+                top_pick = matched
 
         result = {
             "source_part_number": source_part_number,
             "has_approved_substitute": len(candidate_substitutions) > 0,
             "top_candidate": top_pick,
-            "candidate_substitutions": candidate_substitutions
+            "candidate_substitutions": candidate_substitutions,
+            "llm_status": llm_result.get("status"),
+            "llm_justification": llm_result.get("justification"),
+            "model_used": llm_result.get("model_used"),
         }
 
         evidence = []
@@ -55,7 +77,9 @@ class SubstitutionAgent(BaseAgent):
             ))
 
         alternatives = []
-        for sub in candidate_substitutions[1:]:
+        for sub in candidate_substitutions:
+            if sub is top_pick:
+                continue
             alternatives.append(AlternativeOption(
                 option_id=f"SUB-ALT-{sub['target_part_number']}",
                 description=f"Substitute with {sub['target_part_number']}",

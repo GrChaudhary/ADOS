@@ -105,9 +105,9 @@ export default function DecisionsPage() {
   const approvableCount = realDecisions.filter((d) => d.status === "AWAITING_APPROVAL" && canApprove(d.exposureUsd)).length;
 
   return (
-    <div className="space-y-6 pb-8">
+    <div className="space-y-8 pb-12">
       {/* Header Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle shadow-lg">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl shadow-2xl">
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-text-primary">Global Decision Center</h1>
@@ -153,7 +153,7 @@ export default function DecisionsPage() {
       )}
 
       {/* Filter Tabs */}
-      <div className="flex flex-wrap items-center gap-2 p-1.5 rounded-xl bg-card/60 border border-border-subtle font-mono text-xs shadow">
+      <div className="flex flex-wrap items-center gap-2 p-2 rounded-2xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl font-mono text-xs shadow-lg">
         {[
           { id: "ALL", label: `All Decisions (${realDecisions.length})` },
           { id: "AWAITING_APPROVAL", label: `Awaiting Approval (${pendingCount})` },
@@ -176,7 +176,7 @@ export default function DecisionsPage() {
       </div>
 
       {/* Cross-Incident Decision Table */}
-      <div className="rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle p-6 space-y-4 shadow-lg">
+      <div className="rounded-3xl jarvis-static-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-lg">⚖️</span>

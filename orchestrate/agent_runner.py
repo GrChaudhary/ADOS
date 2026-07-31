@@ -47,7 +47,7 @@ class AgentRunner:
         self._cg = causal_graph
         self._dt = digital_twin
         self._agents = {
-            "vision_spec": VisionSpecAgent(),
+            "vision_spec": VisionSpecAgent(knowledge_graph=self._kg),
             "cad_spec": CADSpecAgent(knowledge_graph=self._kg),
             "causal_isolation": CausalIsolationAgent(
                 causal_graph=self._cg, knowledge_graph=self._kg

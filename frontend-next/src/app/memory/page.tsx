@@ -46,9 +46,9 @@ export default function DecisionMemoryPage() {
   const candidates = promotionQuery.data ?? [];
 
   return (
-    <div className="space-y-6 pb-8">
+    <div className="space-y-8 pb-12">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-5 rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle shadow-lg">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl shadow-2xl">
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-text-primary">Decision Memory &amp; Causal Learning Hub</h1>
@@ -63,14 +63,14 @@ export default function DecisionMemoryPage() {
       </div>
 
       {/* Precedent Search Bar */}
-      <div className="rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle p-6 space-y-4 shadow-lg">
+      <div className="rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
         <div className="flex items-center gap-2">
           <span className="text-lg">🔍</span>
           <h2 className="text-lg font-semibold text-text-primary">Vector Precedent Similarity Search</h2>
         </div>
 
         <form onSubmit={handleSearch} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1">
-          <div>
+          <div className="relative">
             <label className="block text-xs font-mono text-text-secondary mb-1">Defect Type Filter</label>
             <input
               type="text"
@@ -79,6 +79,31 @@ export default function DecisionMemoryPage() {
               onChange={(e) => setSearchParams({ ...searchParams, defectType: e.target.value })}
               className="w-full px-3 py-2 text-xs font-mono rounded-lg bg-dark-900/60 border border-border-subtle text-text-primary focus:border-cobalt focus:outline-none"
             />
+            {/* Real-Time Autocomplete Suggestion Popover (Item 5 Requirement) */}
+            {searchParams.defectType && searchParams.defectType.length > 0 && (
+              <div className="absolute left-0 right-0 top-full mt-1 z-30 bg-[#0c0824] border border-cobalt/40 rounded-lg shadow-2xl p-1 max-h-48 overflow-y-auto font-mono text-[11px]">
+                {[
+                  "BORE_TOLERANCE_EXCEEDED",
+                  "Spindle Bore Tolerance Breach (MH-8820)",
+                  "Housing Bore Misalignment",
+                  "Bore Surface Roughness Anomaly",
+                  "Bearing Race Thermal Expansion",
+                  "Stator Winding Resistance Spike"
+                ]
+                  .filter((item) => item.toLowerCase().includes((searchParams.defectType ?? "").toLowerCase()))
+                  .map((item) => (
+                    <button
+                      key={item}
+                      type="button"
+                      onClick={() => setSearchParams({ ...searchParams, defectType: item })}
+                      className="w-full text-left px-3 py-1.5 rounded hover:bg-cobalt/20 text-purple-200 hover:text-white transition-colors flex items-center justify-between"
+                    >
+                      <span>{item}</span>
+                      <span className="text-[9px] text-cobalt font-bold">MATCH ↗</span>
+                    </button>
+                  ))}
+              </div>
+            )}
           </div>
 
           <div>
@@ -130,7 +155,7 @@ export default function DecisionMemoryPage() {
 
             <div className="space-y-2">
               {searchResults.records.map((rec, idx) => (
-                <div key={rec.incidentId || idx} className="p-3.5 rounded-lg bg-dark-900/60 border border-border-subtle text-xs font-mono space-y-1">
+                <div key={rec.incidentId || idx} className="p-3.5 rounded-xl jarvis-glass-card border border-purple-500/20 hover:border-pink-500/40 transition-all text-xs font-mono space-y-1 shadow-sm">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-cobalt">{rec.incidentId}</span>
                     <span className="px-2 py-0.5 rounded bg-emerald/20 text-emerald text-[10px]">
@@ -153,7 +178,7 @@ export default function DecisionMemoryPage() {
       {/* Causal Edge Recalibration & Autonomy Candidates */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Causal Recalibration Log */}
-        <div className="lg:col-span-6 rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle p-6 space-y-4 shadow-lg">
+        <div className="lg:col-span-6 rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="text-lg">🔄</span>
@@ -171,7 +196,7 @@ export default function DecisionMemoryPage() {
             )}
             {recalibration && (
               <>
-                <div className="p-3 rounded-lg bg-dark-900/60 border border-border-subtle space-y-1">
+                <div className="p-3.5 rounded-xl jarvis-glass-card border border-purple-500/20 hover:border-pink-500/40 transition-all space-y-1 shadow-sm">
                   <div>Records Processed: <span className="text-text-primary font-bold">{recalibration.recordsProcessed}</span></div>
                   <div>Causal Edges Updated: <span className="text-emerald font-bold">{recalibration.edgesUpdated}</span></div>
                   <div className="text-[11px] text-text-secondary">Last Replay: {recalibration.timestamp}</div>
@@ -182,7 +207,7 @@ export default function DecisionMemoryPage() {
                     <div className="text-center py-4">No edge weight adjustments in this replay.</div>
                   ) : (
                     recalibration.weightAdjustments.map((adj, i) => (
-                      <div key={i} className="p-2.5 rounded bg-dark-900/40 border border-border-subtle flex items-center justify-between text-[11px]">
+                      <div key={i} className="p-2.5 rounded-xl jarvis-glass-card border border-purple-500/10 hover:border-pink-500/30 transition-all flex items-center justify-between text-[11px] shadow-sm">
                         <span>{(adj.edge_id as string) ?? (adj.condition_id as string) ?? `Edge #${i + 1}`}</span>
                         {typeof adj.delta === "number" && typeof adj.new_weight === "number" && (
                           <span className="text-emerald font-bold">
@@ -199,7 +224,7 @@ export default function DecisionMemoryPage() {
         </div>
 
         {/* Tier 0 Autonomy Promotion Candidates */}
-        <div className="lg:col-span-6 rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle p-6 space-y-4 shadow-lg">
+        <div className="lg:col-span-6 rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <span className="text-lg">🚀</span>
@@ -216,7 +241,7 @@ export default function DecisionMemoryPage() {
               <div className="text-xs text-status-red py-6 text-center">Could not load candidates (check token).</div>
             )}
             {candidates.map((cand) => (
-              <div key={cand.candidateId} className="p-3.5 rounded-lg bg-dark-900/60 border border-border-subtle space-y-2 text-xs font-mono">
+              <div key={cand.candidateId} className="p-3.5 rounded-xl jarvis-glass-card border border-purple-500/20 hover:border-pink-500/40 transition-all space-y-2 text-xs font-mono shadow-sm">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-text-primary">{cand.decisionClassName}</span>
                   <span

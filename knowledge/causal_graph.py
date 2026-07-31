@@ -86,6 +86,34 @@ class CausalGraph:
             description="Carrier-reported delay on inbound supplier shipment to Central Warehouse",
             plant_id="FAC-P04-WH"
         )
+        c9 = ConditionNode(
+            condition_id="COND-TESTBENCH-MISALIGN",
+            name="TEST-BENCH-01 fixture misalignment (Final Drive Test Bench)",
+            condition_type="EQUIPMENT",
+            description="Bearing seat fixture on the final-drive test bench drifted out of registration, offsetting outer-diameter readings",
+            plant_id="FAC-P04-L3"
+        )
+        c10 = ConditionNode(
+            condition_id="COND-BEARING-LOT-VARIANCE",
+            name="Ceramic bearing supplier lot variance (PrecisionCast GmbH)",
+            condition_type="SUPPLIER",
+            description="Incoming Si3N4 ceramic bearing lot shows outer-diameter grinding variance above historical baseline",
+            plant_id="FAC-P04-L3"
+        )
+        c11 = ConditionNode(
+            condition_id="COND-ASRS-THERMAL-WARP",
+            name="ASRS-01 staging bay thermal cycling warp",
+            condition_type="ENVIRONMENT",
+            description="Cooling plate held in an Automated Storage & Retrieval bay near a loading-dock door shows brazed-joint warp from repeated thermal cycling",
+            plant_id="FAC-P04-WH"
+        )
+        c12 = ConditionNode(
+            condition_id="COND-OUTBOUND-HANDLING-STRESS",
+            name="Outbound handling stress deformation",
+            condition_type="PROCESS_PARAMETER",
+            description="Pack-out crating pressure applied to stacked cooling plates exceeds the flatness-preserving load limit",
+            plant_id="FAC-P04-WH"
+        )
 
         o1 = OutcomeNode(
             outcome_id="OUT-DIMENSIONAL-FAULT",
@@ -98,7 +126,7 @@ class CausalGraph:
             description="Production input unavailable or delayed at the point of need"
         )
 
-        for c in (c1, c2, c3, c4, c5, c6, c7, c8):
+        for c in (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12):
             self.add_condition(c)
         self.add_outcome(o1)
         self.add_outcome(o2)
@@ -176,6 +204,42 @@ class CausalGraph:
             last_updated=datetime.now(timezone.utc).isoformat()
         ))
 
+        self.add_causal_edge(CausalEdge(
+            condition_id=c9.condition_id,
+            outcome_id=o1.outcome_id,
+            weight=0.68,
+            evidence_count=11,
+            evidence_paths=["Test Bench Fixture Encoder -> Registration Drift Log"],
+            last_updated=datetime.now(timezone.utc).isoformat()
+        ))
+
+        self.add_causal_edge(CausalEdge(
+            condition_id=c10.condition_id,
+            outcome_id=o1.outcome_id,
+            weight=0.39,
+            evidence_count=5,
+            evidence_paths=["Incoming QA -> Bearing Lot Grinding Variance Report"],
+            last_updated=datetime.now(timezone.utc).isoformat()
+        ))
+
+        self.add_causal_edge(CausalEdge(
+            condition_id=c11.condition_id,
+            outcome_id=o1.outcome_id,
+            weight=0.61,
+            evidence_count=8,
+            evidence_paths=["ASRS Bay Thermal Log -> Cycling Count Threshold Exceeded"],
+            last_updated=datetime.now(timezone.utc).isoformat()
+        ))
+
+        self.add_causal_edge(CausalEdge(
+            condition_id=c12.condition_id,
+            outcome_id=o1.outcome_id,
+            weight=0.33,
+            evidence_count=4,
+            evidence_paths=["Pack-Out Load Cell -> Crating Pressure Exceedance"],
+            last_updated=datetime.now(timezone.utc).isoformat()
+        ))
+
     def add_condition(self, condition: ConditionNode) -> None:
         self._conditions[condition.condition_id] = condition
 
@@ -189,10 +253,19 @@ class CausalGraph:
 
     # --- Mandatory Query Surface per docs/003-causal-graph.md ---
 
-    def rankCandidateCauses(self, defect_type: str, evidence: Optional[Dict[str, Any]] = None) -> List[CausalRankResult]:
+    def rankCandidateCauses(
+        self, defect_type: str, evidence: Optional[Dict[str, Any]] = None, plant_id: Optional[str] = None
+    ) -> List[CausalRankResult]:
         """
         Given an observed defect and associated telemetry evidence,
         returns a ranked list of candidate root causes with confidence weights & evidence paths.
+
+        `plant_id` scopes the result to the line the defect actually occurred
+        on (each ConditionNode carries the plant/line it applies to) so a
+        Line 1 rotor-shaft incident doesn't surface Line 2's CNC-102
+        tolerance-drift narrative. Falls back to the full candidate set for
+        that outcome when no condition is tagged for the given plant_id, so
+        a still-sparse line degrades to "less specific" rather than "empty".
         """
         outcome = self._outcomes.get(defect_type.lower())
         if not outcome:
@@ -211,6 +284,11 @@ class CausalGraph:
                 cond = self._conditions.get(cond_id)
                 if cond:
                     candidates.append((cond, edge))
+
+        if plant_id:
+            scoped = [(cond, edge) for cond, edge in candidates if cond.plant_id == plant_id]
+            if scoped:
+                candidates = scoped
 
         # Adjust weights slightly if evidence matches specific condition hints
         ranked_items = []

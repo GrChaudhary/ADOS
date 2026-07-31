@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, AgentRegistryEntry, AgentStage, AgentTier, CreateAgentRequest, EventEnvelope } from "@/lib/api";
 import { AGENTS, BUILTIN_AGENT_IDS, resolveAgentMeta } from "@/lib/agents";
+import { useHasToken } from "@/lib/useHasToken";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -385,6 +386,7 @@ function AddAgentModal({ onClose, onCreated }: AddAgentModalProps) {
 // ---------------------------------------------------------------------------
 
 export default function AgentNetworkPage() {
+  const hasToken = useHasToken();
   const [activeTab, setActiveTab] = useState<"lineage" | "registry">("registry");
   const [selectedAgent, setSelectedAgent] = useState<AgentRegistryEntry | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -415,6 +417,7 @@ export default function AgentNetworkPage() {
     queryFn: api.listAgents,
     staleTime: 30_000,
     retry: 1,
+    enabled: hasToken,
   });
 
   // Use backend data when available; fall back to static list on error or while loading
@@ -438,6 +441,7 @@ export default function AgentNetworkPage() {
     queryKey: ["all-events-agent-swarm"],
     queryFn: () => api.listAllEvents(200),
     refetchInterval: 5000,
+    enabled: hasToken,
   });
   const events = eventsQuery.data ?? [];
 
@@ -458,7 +462,7 @@ export default function AgentNetworkPage() {
     }
     const stats = agentStats[normalizedId];
     stats.count += 1;
-    stats.totalLatencyMs += typeof payload.latencyMs === "number" ? payload.latencyMs : 120;
+    stats.totalLatencyMs += typeof payload.executionTimeMs === "number" ? payload.executionTimeMs : 120;
     stats.totalConfidence += typeof payload.confidence === "number" ? payload.confidence : 0.92;
     stats.recentEvents.push(evt);
   });

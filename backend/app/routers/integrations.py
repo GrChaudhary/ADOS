@@ -137,25 +137,29 @@ async def get_connector_status():
         )
     )
 
-    # 2. Add Local LLM (Ollama) status — actually pings the server rather
-    # than trusting the enabled flag alone, since a local process (unlike
-    # a cloud service) can silently be down.
-    llm_health = local_llm_client.get_health_status()
-    result.append(
-        ConnectorStatusResponse(
-            name="Local LLM (Ollama)",
-            id="local_llm",
-            configured=local_llm_client.is_configured(),
-            kind="real",
-            status=llm_health.get("status", "Not Configured"),
-            auth="None (local HTTP, no auth)",
-            module="knowledge/local_llm_client.py",
-            description=f"Live root-cause reasoning generation via a self-hosted Ollama model ({local_llm_client.model}) — used by the Reasoning stage instead of a managed cloud LLM.",
-            capabilities=["GenerateRootCauseExplanation"],
-            connected=llm_health.get("connected", False),
-            host=llm_health.get("host"),
+    # 2. Add LLM provider status — one row per backend, since
+    # knowledge/local_llm_client.py does automatic failover across all of
+    # them (Nemotron, OpenAI, Anthropic, then Ollama) rather than a single
+    # active one; showing only "whichever is primary" would hide that the
+    # others are standing by. role text on each makes the actual failover
+    # order visible instead of identical-looking rows. API keys for the
+    # first three are managed from the Settings page, not just .env.
+    for status in [*local_llm_client.list_provider_statuses(), local_llm_client.get_ollama_status()]:
+        result.append(
+            ConnectorStatusResponse(
+                name=f"{status.get('name', 'LLM Provider')} — {status.get('role', '')}".rstrip(" —"),
+                id=f"local_llm_{status.get('provider', 'ollama')}",
+                configured=status.get("configured", False),
+                kind="real",
+                status=status.get("status", "Not Configured"),
+                auth=status.get("auth", "Unknown"),
+                module="knowledge/local_llm_client.py",
+                description=status.get("description", "Root-cause reasoning generation used by the Reasoning stage."),
+                capabilities=["GenerateRootCauseExplanation"],
+                connected=status.get("connected", False),
+                host=status.get("host"),
+            )
         )
-    )
 
     # 3. Add standard connectors checking real environment configuration state
     for meta in connectors_meta:
