@@ -83,3 +83,27 @@ def test_put_requires_admin_role(client):
     headers = {"Authorization": f"Bearer {create_access_token(manager)}"}
     resp = client.put("/settings/llm-providers/openai", json={"apiKey": "sk-test-key-123456"}, headers=headers)
     assert resp.status_code == 403
+
+
+def test_get_llm_providers_defaults_thinking_mode_off(client, auth_headers):
+    resp = client.get("/settings/llm-providers", headers=auth_headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "ollama" in body
+    assert body["ollama"]["thinkingEnabled"] is False
+
+
+def test_toggle_ollama_thinking_mode(client, auth_headers):
+    # Enable thinking mode
+    resp = client.put("/settings/llm-providers/ollama/thinking", json={"thinkingEnabled": True}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["thinkingEnabled"] is True
+
+    # Verify reflected in list endpoint
+    resp = client.get("/settings/llm-providers", headers=auth_headers)
+    assert resp.json()["ollama"]["thinkingEnabled"] is True
+
+    # Disable thinking mode again
+    resp = client.put("/settings/llm-providers/ollama/thinking", json={"thinkingEnabled": False}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["thinkingEnabled"] is False

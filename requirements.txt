@@ -30,6 +30,22 @@ sqlalchemy[asyncio]==2.0.51
 asyncpg==0.31.0
 alembic==1.18.5
 
+# Durable LangGraph checkpoints — what makes a paused MOA/ITSM approval
+# survive a restart and be resumable from a different replica. See
+# docs/DESIGN_DURABLE_MOA_STATE.md for why the official implementation was
+# chosen over hand-rolling BaseCheckpointSaver.
+#
+# This is the second Postgres driver in the tree, which the note above
+# deliberately avoided. The distinction that makes it acceptable: that note
+# was guarding against a second *sync* driver added for Alembic's
+# convenience; psycopg 3 is async-native, and this is the maintained
+# implementation of the most safety-critical store in the system. psycopg
+# needs a libpq — [binary] ships prebuilt wheels so no system libpq is
+# required. db/checkpointer.py opens a fresh connection per use (no pool),
+# for exactly the event-loop-binding reason db/engine.py uses NullPool.
+langgraph-checkpoint-postgres==3.1.1
+psycopg[binary]==3.3.4
+
 # Capability onboarding (orchestrate/onboarding/, integrations/connectors/
 # dynamic.py) — MCP-native capability inspection/sandbox-testing client.
 # Pinned to the 2.x line deliberately, NOT the newer 3.x (latest stable
