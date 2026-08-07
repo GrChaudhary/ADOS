@@ -18,7 +18,7 @@ export default function LoginPage() {
     try {
       await api.login(username, password);
       router.push("/novus");
-    } catch (err) {
+    } catch {
       setError("Invalid username or password.");
     } finally {
       setLoading(false);

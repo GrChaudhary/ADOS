@@ -41,7 +41,7 @@ export default function AdminPage() {
   if (!isAdmin) {
     return (
       <div className="p-5 rounded-xl bg-card/60 border border-status-red/40 text-sm text-status-red">
-        User management is restricted to the <code>admin</code> role. You're signed in as{" "}
+        User management is restricted to the <code>admin</code> role. You&apos;re signed in as{" "}
         <span className="font-semibold">{currentUser.displayName}</span> ({currentUser.role}).
       </div>
     );

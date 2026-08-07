@@ -129,10 +129,10 @@ export function NovusParticleOrb() {
         // 3D Rotation
         // Rotate around Y axis
         let x1 = node.x * cosY - node.z * sinY;
-        let z1 = node.z * cosY + node.x * sinY;
+        const z1 = node.z * cosY + node.x * sinY;
         // Rotate around X axis
         let y2 = node.y * cosX - z1 * sinX;
-        let z2 = z1 * cosX + node.y * sinX;
+        const z2 = z1 * cosX + node.y * sinX;
 
         // Mouse gravity pull (push points slightly away or pull them)
         if (isHovered) {

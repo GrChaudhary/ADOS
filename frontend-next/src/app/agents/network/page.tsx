@@ -10,15 +10,6 @@ import { useHasToken } from "@/lib/useHasToken";
 // Helpers
 // ---------------------------------------------------------------------------
 
-const STAGE_COLORS: Record<AgentStage, string> = {
-  Perception: "emerald",
-  Reasoning: "purple",
-  CandidateGen: "amber",
-  Evaluation: "pink",
-  Execution: "teal",
-  Learning: "indigo",
-};
-
 const STAGE_ICONS: Record<AgentStage, string> = {
   Perception: "👁️",
   Reasoning: "🧠",
@@ -42,12 +33,6 @@ const TIER_OPTIONS: AgentTier[] = [
   "Tier 1 (Engineer Approval)",
   "Tier 2 (Multi-Executive)",
 ];
-
-const TIER_COLORS: Record<AgentTier, string> = {
-  "Tier 0 (Autonomous)": "emerald",
-  "Tier 1 (Engineer Approval)": "amber",
-  "Tier 2 (Multi-Executive)": "red",
-};
 
 const DEFAULT_TEMPLATES: Record<AgentStage, Partial<CreateAgentRequest>> = {
   Perception: {
@@ -164,8 +149,6 @@ function AddAgentModal({ onClose, onCreated }: AddAgentModalProps) {
     if (!validate() || !form) return;
     createMutation.mutate(form);
   }
-
-  const stageColor = selectedStage ? STAGE_COLORS[selectedStage] : "cobalt";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(4px)" }}>
@@ -335,7 +318,7 @@ function AddAgentModal({ onClose, onCreated }: AddAgentModalProps) {
             {/* Instructions (for ADK) */}
             <div className="space-y-1">
               <label className="text-xs font-mono text-text-secondary">
-                System Instructions <span className="text-cobalt">(used by watsonx Orchestrate ADK)</span>
+                System Instructions <span className="text-cobalt">(used by MOA &amp; LangGraph Agent Engine)</span>
               </label>
               <textarea
                 id="add-agent-instructions"
@@ -833,7 +816,7 @@ export default function AgentNetworkPage() {
                             </span>
                           </div>
                           <div className="text-[11px] text-text-secondary mt-0.5">
-                            Incident: <span className="text-mono">{evt.incidentId}</span> | Produced by: {evt.producedBy}
+                            Incident: <span className="text-mono">{evt.correlationId}</span> | Produced by: {evt.producedBy}
                           </div>
                         </div>
                       </div>

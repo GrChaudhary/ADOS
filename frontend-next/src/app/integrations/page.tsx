@@ -1,9 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { api, Capability, getStoredUser, IntegrationConnectorItem, PolicyTier } from "@/lib/api";
+import Link from "next/link";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { api, Capability, CapabilityManifest, getStoredUser, IntegrationConnectorItem, PolicyTier } from "@/lib/api";
 import { useHasToken } from "@/lib/useHasToken";
+import { useCurrentUser } from "@/lib/useCurrentUser";
 
 // The 4 capabilities integrations/connectors/watsonx_itsm.py actually
 // fulfills - see its _ITSM_CAPABILITIES set. Only ScheduleMaintenance is
@@ -337,29 +339,188 @@ export default function IntegrationsPage() {
       {/* Manual Ticket Creation */}
       {hasToken && <ManualTicketForm />}
 
+      {/* Capability Manifest Registry Manager (§8) */}
+      <CapabilityManifestRegistryPanel />
+
       {/* Integration Bus Specifications */}
       <div className="rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-lg">⚙️</span>
-            <h2 className="text-lg font-semibold text-text-primary">Integration Bus &amp; Routing Specs</h2>
+            <h2 className="text-lg font-semibold text-text-primary">Integration Bus &amp; Substrate Specs</h2>
           </div>
-          <span className="text-xs font-mono text-cobalt px-2.5 py-1 rounded bg-cobalt/10 border border-cobalt/20">
-            Cloudant NoSQL Event Bus Active
+          <span className="text-xs font-mono text-emerald px-2.5 py-1 rounded bg-emerald/10 border border-emerald/20">
+            PostgreSQL &amp; Apache Kafka Active
           </span>
         </div>
 
         <div className="space-y-2 text-xs font-mono text-text-secondary">
           <p>
-            All backend integration services are exposed under both unprefixed and <code className="text-emerald">/api/v1/...</code> alias routes with CORS support for <code className="text-cobalt">http://localhost:3000</code>.
+            All backend integration services execute against <code className="text-emerald">PostgreSQL 16</code> and <code className="text-cobalt">Apache Kafka (aiokafka)</code> for durable storage and EventEnvelope v2 delivery.
           </p>
           <div className="p-3 rounded-lg bg-glass border border-border-subtle space-y-1">
-            <div className="text-text-primary">Cloudant Database: <code className="text-purple">ados_incidents</code> &amp; <code className="text-purple">ados_events</code></div>
-            <div className="text-text-primary">Primary Authorization Header: <code className="text-cobalt">Authorization: Bearer dev-local-only-token</code></div>
-            <div className="text-text-primary">SSE Event Bus Endpoint: <code className="text-emerald">GET /api/v1/events/stream?token=...</code></div>
+            <div className="text-text-primary">Primary Persistence Engine: <code className="text-purple">PostgreSQL 16 (db/ + Alembic migrations)</code></div>
+            <div className="text-text-primary">Event Bus Substrate: <code className="text-cobalt">Apache Kafka (KRaft mode) / Redis Streams</code></div>
+            <div className="text-text-primary">SSE Event Stream Endpoint: <code className="text-emerald">GET /api/v1/events/stream?token=...&amp;correlation_id=...</code></div>
           </div>
         </div>
       </div>
     </div>
   );
 }
+
+const LIFECYCLE_STAGES = [
+  { name: "Proposed", badge: "PROPOSED", desc: "Tool or MCP repo declared; pending automated sandbox execution." },
+  { name: "Sandbox Tested", badge: "SANDBOX_TESTED", desc: "Mock payloads executed; tamper-evident test evidence verified." },
+  { name: "Active", badge: "ACTIVE", desc: "Promoted to active execution hub; gated by action-level governance." },
+  { name: "Hot Disabled", badge: "HOT_DISABLED", desc: "Hot-switched off by administrator; blocked at Integration Hub." },
+] as const;
+
+// Literal class strings only (no `text-${color}` interpolation) - Tailwind's
+// scanner needs the full class name to appear verbatim in source, see this
+// file's own STAGES rewrite where `bg-red/20` (not a real design token,
+// "status-red" is) silently generated no CSS at all.
+const STATUS_BADGE_CLASS: Record<CapabilityManifest["status"], string> = {
+  proposed: "bg-amber/20 text-amber border-amber/30",
+  sandbox_tested: "bg-cyan/20 text-cyan border-cyan/30",
+  active: "bg-emerald/20 text-emerald border-emerald/30",
+  deprecated: "bg-glass text-text-secondary border-border-subtle",
+  hot_disabled: "bg-status-red/20 text-status-red border-status-red/30",
+};
+
+const RISK_BADGE_CLASS: Record<CapabilityManifest["risk_level"], string> = {
+  LOW: "bg-emerald/20 text-emerald border-emerald/30",
+  MEDIUM: "bg-amber/20 text-amber border-amber/30",
+  HIGH: "bg-status-red/20 text-status-red border-status-red/30",
+};
+
+function CapabilityManifestRegistryPanel() {
+  const hasToken = useHasToken();
+  const currentUser = useCurrentUser();
+  const queryClient = useQueryClient();
+  const canGovern = currentUser?.role === "admin" || currentUser?.role === "executive";
+
+  const manifestsQuery = useQuery<CapabilityManifest[]>({
+    queryKey: ["capability-manifests"],
+    queryFn: api.getCapabilityManifests,
+    enabled: hasToken,
+    refetchInterval: 10000,
+  });
+  const manifests = manifestsQuery.data ?? [];
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["capability-manifests"] });
+  const promoteMutation = useMutation({ mutationFn: api.promoteCapabilityManifest, onSuccess: invalidate });
+  const disableMutation = useMutation({ mutationFn: api.disableCapabilityManifest, onSuccess: invalidate });
+
+  return (
+    <div className="rounded-3xl jarvis-glass-card border border-purple-500/30 bg-[#0c0824]/90 backdrop-blur-xl p-6 sm:p-8 space-y-6 shadow-2xl">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">📜</span>
+          <h2 className="text-lg font-semibold text-text-primary">Capability Onboarding Lifecycle (§8)</h2>
+        </div>
+        <div className="flex items-center gap-3">
+          <Link
+            href="/capability-onboarding"
+            className="px-3.5 py-1.5 rounded-xl text-xs font-mono font-semibold bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white shadow-md shadow-purple-500/20 transition-all"
+          >
+            🚀 Launch BYOC Studio →
+          </Link>
+          <span className="text-xs font-mono text-purple px-2.5 py-1 rounded bg-purple/10 border border-purple/20">
+            CapabilityManifestRegistry Model
+          </span>
+        </div>
+      </div>
+
+      <p className="text-xs text-text-secondary">
+        Backend substrate capability lifecycle implemented in <code className="text-cobalt">integrations/capability_manifest.py</code>. External GitHub repos and MCP tools transition through 4 governance states before execution.
+      </p>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {LIFECYCLE_STAGES.map((s) => (
+          <div key={s.badge} className="p-4 rounded-2xl jarvis-glass-card border border-purple-500/20 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-sm text-text-primary">{s.name}</span>
+              <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${STATUS_BADGE_CLASS[s.badge.toLowerCase() as CapabilityManifest["status"]]}`}>
+                {s.badge}
+              </span>
+            </div>
+            <p className="text-xs text-text-secondary">{s.desc}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="pt-2 border-t border-border-subtle space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-text-primary">Registered Capabilities</h3>
+          <span className="text-xs font-mono text-text-secondary">{hasToken && manifestsQuery.data ? `${manifests.length} registered` : "—"}</span>
+        </div>
+
+        {!hasToken && <p className="text-sm text-status-red">Enter a service token above to load the manifest registry.</p>}
+        {hasToken && manifestsQuery.isLoading && <p className="text-sm text-text-secondary">Loading capability manifests…</p>}
+        {hasToken && manifestsQuery.isError && <p className="text-sm text-status-red">Could not load capability manifests (check backend &amp; service token).</p>}
+        {hasToken && manifestsQuery.data && manifests.length === 0 && (
+          <p className="text-xs text-text-secondary">
+            No capabilities proposed yet. Proposals come from an onboarding agent, not an admin form (§8.3: the agent proposes, it never self-approves) — this list populates once something calls <code className="text-cobalt">registry.propose()</code>.
+          </p>
+        )}
+
+        {manifests.map((m) => (
+          <div key={m.capability_id} className="p-4 rounded-2xl jarvis-glass-card border border-purple-500/20 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm text-text-primary">{m.display_name}</span>
+                <span className="text-[11px] font-mono text-text-secondary">{m.capability_id}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${STATUS_BADGE_CLASS[m.status]}`}>
+                  {m.status.toUpperCase()}
+                </span>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${RISK_BADGE_CLASS[m.risk_level]}`}>
+                  {m.risk_level}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono text-text-secondary">
+              <div>Domain: <span className="text-text-primary">{m.domain}</span></div>
+              <div>Version: <span className="text-text-primary">{m.version}</span></div>
+              <div>Proposed by: <span className="text-text-primary">{m.proposed_by}</span></div>
+              <div>Usage count: <span className="text-text-primary">{m.usage_count}</span></div>
+            </div>
+            <div className="text-[11px] font-mono text-text-secondary">Source: <span className="text-text-primary">{m.source}</span></div>
+            <div className="text-[11px] font-mono text-text-secondary">
+              Sandbox evidence: <span className="text-text-primary">{m.sandbox_evidence ?? "not yet tested"}</span>
+            </div>
+            <div className="text-[11px] font-mono text-text-secondary">Registered: {new Date(m.registered_at).toLocaleString()}</div>
+
+            {canGovern && (m.status === "sandbox_tested" || m.status === "hot_disabled" || m.status === "active") && (
+              <div className="pt-2 flex gap-2">
+                {(m.status === "sandbox_tested" || m.status === "hot_disabled") && (
+                  <button
+                    onClick={() => promoteMutation.mutate(m.capability_id)}
+                    disabled={promoteMutation.isPending}
+                    className="px-3 py-1.5 rounded-lg text-xs font-mono bg-emerald/10 text-emerald border border-emerald/30 hover:bg-emerald/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {m.status === "hot_disabled" ? "Resume" : "Activate"}
+                  </button>
+                )}
+                {m.status === "active" && (
+                  <button
+                    onClick={() => disableMutation.mutate(m.capability_id)}
+                    disabled={disableMutation.isPending}
+                    className="px-3 py-1.5 rounded-lg text-xs font-mono bg-status-red/10 text-status-red border border-status-red/30 hover:bg-status-red/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Hot-Disable
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+

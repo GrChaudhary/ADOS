@@ -26,7 +26,7 @@ export default function DecisionReplayPage() {
 
   // Extract unique incident IDs published on backend event bus
   const incidentIds = Array.from(
-    new Set(allEvents.map((evt) => evt.incidentId).filter(Boolean))
+    new Set(allEvents.map((evt) => evt.correlationId).filter(Boolean))
   );
 
   const selectedIncidentId = explicitIncidentId || incidentIds[0] || "";
@@ -243,7 +243,7 @@ export default function DecisionReplayPage() {
             <div className="p-4 rounded-lg bg-glass border border-border-subtle text-xs text-text-primary space-y-2 font-mono">
               <div>Event ID: <span className="text-cobalt">{activeEvent.eventId}</span></div>
               <div>Schema Version: <span className="text-text-secondary">{activeEvent.schemaVersion}</span></div>
-              <div>Incident ID: <span className="text-emerald">{activeEvent.incidentId}</span></div>
+              <div>Incident ID: <span className="text-emerald">{activeEvent.correlationId}</span></div>
             </div>
           </div>
 

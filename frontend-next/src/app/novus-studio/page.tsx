@@ -76,7 +76,7 @@ function CustomCursor() {
 
   useEffect(() => {
     let raw = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-    let ring = { ...raw };
+    const ring = { ...raw };
     let frame = 0;
 
     const onMove = (e: MouseEvent) => {

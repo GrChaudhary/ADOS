@@ -5,11 +5,10 @@
 // verified behavior from frontend/demo.js's home screen directly - same
 // interaction model, translated to React/TanStack Query/Zustand.
 
-import { useState } from "react";
+import { useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { KpiCard } from "@/components/design-system/KpiCard";
-import { StatusPulse } from "@/components/design-system/StatusPulse";
 import { api } from "@/lib/api";
 import { useMissionControlStore } from "@/lib/store";
 import { useHasToken } from "@/lib/useHasToken";
@@ -98,18 +97,18 @@ export default function DigitalTwinPage() {
         <div
           className={studioStyles.twinGrid}
           style={{
-            ["--bg-raised" as any]: "var(--bg-glass)",
-            ["--line" as any]: "var(--border-subtle)",
-            ["--border-hover" as any]: "#38bdf8",
-            ["--shadow-hover" as any]: "0 0 20px rgba(56, 189, 248, 0.45)",
-            ["--muted" as any]: "var(--text-secondary)",
-            ["--paper" as any]: "var(--text-primary)",
-            ["--accent-cyan" as any]: "#00f0ff",
-            ["--accent-lime" as any]: "#d7ff3e",
-            ["--accent-orange" as any]: "#ff4b1f",
-            ["--font-mono" as any]: "var(--font-jetbrains-mono), monospace",
-            ["--font-display" as any]: "var(--font-orbitron), sans-serif",
-          }}
+            "--bg-raised": "var(--bg-glass)",
+            "--line": "var(--border-subtle)",
+            "--border-hover": "#38bdf8",
+            "--shadow-hover": "0 0 20px rgba(56, 189, 248, 0.45)",
+            "--muted": "var(--text-secondary)",
+            "--paper": "var(--text-primary)",
+            "--accent-cyan": "#00f0ff",
+            "--accent-lime": "#d7ff3e",
+            "--accent-orange": "#ff4b1f",
+            "--font-mono": "var(--font-jetbrains-mono), monospace",
+            "--font-display": "var(--font-orbitron), sans-serif",
+          } as CSSProperties}
         >
           {linesQuery.data?.map((line) => {
             const overridden = activeIncidentLines.has(line.lineId);

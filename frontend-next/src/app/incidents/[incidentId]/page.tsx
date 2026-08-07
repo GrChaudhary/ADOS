@@ -272,7 +272,7 @@ function IncidentWorkspaceContent({ incidentId }: { incidentId: string }) {
 
   useEffect(() => {
     function handleEvent(envelope: EventEnvelope) {
-      if (envelope.incidentId !== incidentId) return;
+      if (envelope.correlationId !== incidentId) return;
       if (seenEventIds.current.has(envelope.eventId)) return;
       seenEventIds.current.add(envelope.eventId);
 
@@ -744,13 +744,16 @@ function IncidentBriefingPlayer({ incidentId, enabled }: { incidentId: string; e
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!audioQuery.data) {
-      setAudioUrl(null);
-      return;
-    }
-    const url = URL.createObjectURL(audioQuery.data);
+    // URL.createObjectURL allocates a real browser resource that must be
+    // paired with revokeObjectURL on cleanup - it can't be computed during
+    // render, so this can't be replaced with derived state despite what
+    // react-hooks/set-state-in-effect's heuristic assumes.
+    const url = audioQuery.data ? URL.createObjectURL(audioQuery.data) : null;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAudioUrl(url);
-    return () => URL.revokeObjectURL(url);
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
   }, [audioQuery.data]);
 
   if (!audioUrl) return null;
@@ -758,7 +761,7 @@ function IncidentBriefingPlayer({ incidentId, enabled }: { incidentId: string; e
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-purple/30 bg-purple/10 px-5 py-3">
       <span className="font-bold text-purple text-sm">🔊 Spoken Briefing</span>
-      {/* eslint-disable-next-line jsx-a11y/media-has-caption -- synthesized speech, no source track to caption */}
+      { }
       <audio controls src={audioUrl} className="h-8 flex-1 min-w-[220px]" />
       <span className="text-[10px] font-mono text-text-secondary">IBM Watson Text to Speech</span>
     </div>

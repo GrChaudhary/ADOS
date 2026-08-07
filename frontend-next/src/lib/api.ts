@@ -284,10 +284,12 @@ export interface StartIncidentResponse {
 export interface EventEnvelope<TPayload = Record<string, unknown>> {
   eventId: string;
   eventType: string;
-  incidentId: string;
+  correlationId: string;
   occurredAt: string;
   producedBy: string;
   schemaVersion: string;
+  traceId?: string | null;
+  idempotencyKey?: string | null;
   payload: TPayload;
 }
 
@@ -576,7 +578,7 @@ export const api = {
   getIncident: (id: string) => apiFetch<IncidentRecord | IncidentInProgress>(`/incidents/${id}`),
   listIncidents: (limit = 100) => apiFetch<IncidentRecord[]>(`/incidents?limit=${limit}`),
   getCausalSynthesis: (id: string) => apiFetch<CausalSynthesisResult>(`/incidents/${id}/causal-synthesis`),
-  listIncidentEvents: (incidentId: string) => apiFetch<EventEnvelope[]>(`/events?incident_id=${incidentId}`),
+  listIncidentEvents: (incidentId: string) => apiFetch<EventEnvelope[]>(`/events?correlation_id=${incidentId}`),
   listAllEvents: (limit = 200) => apiFetch<EventEnvelope[]>(`/events?limit=${limit}`),
   // approved_by is no longer client-supplied - the backend derives it from
   // the caller's session (backend/app/rbac.py), so this takes no identity
@@ -632,7 +634,156 @@ export const api = {
   getGovernancePolicies: () => apiFetch<GovernancePolicies>("/governance/policies"),
   askCopilot: (question: string) =>
     apiFetch<CopilotAskResult>("/copilot/ask", { method: "POST", body: JSON.stringify({ question }) }),
+  // MOA (Main Orchestrating Agent)
+  createMOATask: (body: MOATaskRequest) =>
+    apiFetch<MOATaskResponse>("/moa/tasks", { method: "POST", body: JSON.stringify(body) }),
+  approveMOATask: (args: { taskId: string; editedArguments?: Record<string, unknown> } | string) => {
+    const taskId = typeof args === "string" ? args : args.taskId;
+    const editedArguments = typeof args === "string" ? undefined : args.editedArguments;
+    return apiFetch<MOATaskResponse>(`/moa/tasks/${taskId}/approve`, {
+      method: "POST",
+      body: JSON.stringify(editedArguments ? { edited_arguments: editedArguments } : {}),
+    });
+  },
+  rejectMOATask: (taskId: string) =>
+    apiFetch<MOATaskResponse>(`/moa/tasks/${taskId}/reject`, { method: "POST" }),
+  // LangGraph Agents
+  askExecutiveCopilotLangGraph: (query: string) =>
+    apiFetch<ExecutiveCopilotAskResponse>("/agents/executive-copilot/ask", { method: "POST", body: JSON.stringify({ query }) }),
+  askITSMAgent: (query: string) =>
+    apiFetch<ITSMAskResponse>("/agents/itsm/ask", { method: "POST", body: JSON.stringify({ query }) }),
+  approveITSMAgentAction: (requestId: string) =>
+    apiFetch<ITSMAskResponse>(`/agents/itsm/${requestId}/approve`, { method: "POST" }),
+  rejectITSMAgentAction: (requestId: string) =>
+    apiFetch<ITSMAskResponse>(`/agents/itsm/${requestId}/reject`, { method: "POST" }),
+  // Capability Manifest Registry & Circuit Breaker
+  getCapabilityManifests: () => apiFetch<CapabilityManifest[]>("/capabilities/manifests"),
+  promoteCapabilityManifest: (id: string) =>
+    apiFetch<{ status: string }>(`/capabilities/manifests/${id}/promote`, { method: "POST" }),
+  disableCapabilityManifest: (id: string) =>
+    apiFetch<{ status: string }>(`/capabilities/manifests/${id}/disable`, { method: "POST" }),
+  getCircuitBreakerStatus: () => apiFetch<CircuitBreakerStatus>("/governance/circuit-breaker"),
+  clearCircuitBreaker: () => apiFetch<{ status: string }>("/governance/circuit-breaker/clear", { method: "POST" }),
+  generateObsidianProjection: () =>
+    apiFetch<{ status: string; target_dir: string; generated_notes_count: number }>("/governance/obsidian-projection", { method: "POST" }),
+  getObsidianProjectionStatus: () => apiFetch<ObsidianProjectionStatusResponse>("/governance/obsidian-projection/status"),
+  syncObsidianVault: () =>
+    apiFetch<{ status: string; target_dir: string; reconciled_files_count: number; total_vault_notes: number }>("/governance/obsidian-projection/sync", { method: "POST" }),
+  // Capability Onboarding (Phase 7 — BYOC Studio)
+  getOnboardingSessions: () => apiFetch<OnboardingSession[]>("/capability-onboarding/sessions"),
+  getOnboardingSession: (id: string) => apiFetch<OnboardingSession>(`/capability-onboarding/sessions/${id}`),
+  startOnboardingSession: (body: StartOnboardingPayload) =>
+    apiFetch<StartOnboardingResponse>("/capability-onboarding/sessions", { method: "POST", body: JSON.stringify(body) }),
+  synthesizeOnboardingSession: (args: { id: string; payload: SynthesizeSessionPayload }) =>
+    apiFetch<SynthesizeSessionResponse>(`/capability-onboarding/sessions/${args.id}/synthesize`, {
+      method: "POST",
+      body: JSON.stringify(args.payload),
+    }),
+  proposeRiskOnboardingSession: (id: string) =>
+    apiFetch<RiskProposalResponse>(`/capability-onboarding/sessions/${id}/risk-proposal`, { method: "POST", body: JSON.stringify({}) }),
+  sandboxTestOnboardingSession: (args: { id: string; payload: SandboxTestPayload }) =>
+    apiFetch<SandboxTestResponse>(`/capability-onboarding/sessions/${args.id}/sandbox-test`, {
+      method: "POST",
+      body: JSON.stringify(args.payload),
+    }),
+  activateOnboardingSession: (id: string) =>
+    apiFetch<ActivateSessionResponse>(`/capability-onboarding/sessions/${id}/activate`, { method: "POST", body: JSON.stringify({}) }),
 };
+
+// ---------------------------------------------------------------------
+// MOA & LangGraph Agent Interfaces
+// ---------------------------------------------------------------------
+
+export interface MOATaskRequest {
+  domain: string;
+  employee_name: string;
+  instruction: string;
+}
+
+export interface MOATaskResponse {
+  status: "ok" | "pending_approval" | "error" | "not_configured" | string;
+  taskId?: string;
+  answer?: string;
+  toolsCalled?: string[];
+  modelUsed?: string;
+  proposedAction?: {
+    action_key: string;
+    capability: string;
+    summary: string;
+    estimated_cost_usd: number;
+    policy_tier: PolicyTier;
+    arguments?: Record<string, unknown>;
+    input_schema?: Record<string, unknown>;
+  };
+  approvalDecision?: string;
+  trajectoryLog?: Array<{
+    step: number;
+    type: string;
+    thought: string;
+    action?: string;
+    capability?: string;
+    policy_tier?: number;
+    status: string;
+    timestamp: string;
+  }>;
+}
+
+export interface ITSMAskResponse {
+  status: "ok" | "pending_approval" | "not_configured" | "error" | "max_iterations_exceeded" | string;
+  requestId?: string;
+  answer?: string | null;
+  toolsCalled?: string[];
+  modelUsed?: string | null;
+  proposedIncident?: { short_description: string; description: string } | null;
+  approvalDecision?: string;
+}
+
+export interface ExecutiveCopilotAskResponse {
+  status: string;
+  answer: string;
+  toolsCalled?: string[];
+  modelUsed?: string;
+}
+
+// backend/app/routers/capabilities.py's GET /manifests + promote/disable —
+// real endpoints as of this session, backed by
+// integrations/capability_manifest.py's CapabilityManifestRegistry
+// (Postgres-backed). sandbox_evidence is the registry's actual shape: a
+// free-text description of what was run (e.g. "ran 12/12 checks"), NOT a
+// structured {tested_at, passed_checks, total_checks} object — there is
+// no such object anywhere in the backend, don't parse it as one.
+export interface CapabilityManifest {
+  capability_id: string;
+  display_name: string;
+  domain: string;
+  version: string;
+  source: string;
+  proposed_by: string;
+  status: "proposed" | "sandbox_tested" | "active" | "deprecated" | "hot_disabled";
+  risk_level: "LOW" | "MEDIUM" | "HIGH";
+  requires_governance: boolean;
+  sandbox_evidence: string | null;
+  usage_count: number;
+  registered_at: string;
+}
+
+// There is deliberately no single global circuit breaker in ADOS —
+// orchestrate/moa/graph.py creates one CascadeCircuitBreaker PER MOA task
+// (see that module's docstring). This endpoint reports an honest
+// aggregate over the currently-live per-task breakers (only tasks
+// actively paused awaiting a human have a live breaker to count):
+// state/auto_approved_count/threshold describe the most-open case across
+// them (OPEN if ANY task's breaker is open), active_tasks/open_task_ids
+// make that per-task scoping visible instead of hiding it behind a fake
+// single global number.
+export interface CircuitBreakerStatus {
+  state: "CLOSED" | "OPEN";
+  auto_approved_count: number;
+  threshold: number;
+  active_tasks: number;
+  open_task_ids: string[];
+}
+
 
 /**
  * Opens a live SSE connection for one incident's events, filtered
@@ -645,7 +796,7 @@ export function openIncidentEventStream(
   incidentId: string,
   onEvent: (envelope: EventEnvelope) => void
 ): EventSource {
-  const url = `${BACKEND_ORIGIN}/events/stream?token=${encodeURIComponent(getToken())}&incident_id=${encodeURIComponent(incidentId)}`;
+  const url = `${BACKEND_ORIGIN}/events/stream?token=${encodeURIComponent(getToken())}&correlation_id=${encodeURIComponent(incidentId)}`;
   const es = new EventSource(url);
   es.onmessage = (msg) => {
     try {
@@ -655,4 +806,143 @@ export function openIncidentEventStream(
     }
   };
   return es;
+}
+
+// ---------------------------------------------------------------------
+// Capability Onboarding (Phase 7 — BYOC Studio) Interfaces
+// ---------------------------------------------------------------------
+
+export type OnboardingTrack = "mcp_native" | "openapi";
+
+export type OnboardingSessionStatus =
+  | "submitted"
+  | "inspected"
+  | "synthesized"
+  | "risk_reviewed"
+  | "sandbox_tested"
+  | "activated"
+  | "failed"
+  | "aborted";
+
+export interface DiscoveredTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  runtime: Record<string, unknown>;
+}
+
+export interface InspectionReport {
+  source: string;
+  track: OnboardingTrack | null;
+  confidence: "high" | "inferred" | "hinted" | "none";
+  local_path: string | null;
+  resolved_ref: string | null;
+  language: string | null;
+  tools: DiscoveredTool[];
+  warnings: string[];
+  launch_command: string[] | null;
+  openapi_spec_path: string | null;
+}
+
+export interface SynthesizedAction {
+  key: string;
+  description: string;
+  capability_id: string;
+  domain: string;
+  version: string;
+  estimated_cost_usd: number;
+  track: OnboardingTrack;
+  runtime: Record<string, unknown>;
+}
+
+export interface SandboxResult {
+  passed: boolean;
+  evidence_summary: string;
+  raw_output: string;
+  duration_ms: number;
+}
+
+export interface AuditLogEntry {
+  turn: number;
+  actor: string;
+  at: string;
+  detail: string;
+}
+
+export interface OnboardingSession {
+  id: string;
+  track: OnboardingTrack | null;
+  status: OnboardingSessionStatus;
+  source_url: string;
+  domain: string | null;
+  capability_id: string | null;
+  selected_tool_name: string | null;
+  inspection_report: InspectionReport | null;
+  synthesized_manifest: SynthesizedAction | null;
+  sandbox_result: SandboxResult | null;
+  audit_log: AuditLogEntry[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  failure_reason: string | null;
+}
+
+export interface StartOnboardingPayload {
+  source_url: string;
+  track_hint?: OnboardingTrack;
+}
+
+export interface StartOnboardingResponse {
+  id: string;
+  status: OnboardingSessionStatus;
+  report: InspectionReport;
+}
+
+export interface SynthesizeSessionPayload {
+  selected_tool_name: string;
+  domain: string;
+  capability_id: string;
+  version?: string;
+  estimated_cost_usd?: number;
+  test_base_url?: string;
+  production_base_url?: string;
+}
+
+export interface SynthesizeSessionResponse {
+  id: string;
+  status: OnboardingSessionStatus;
+  synthesized_manifest: SynthesizedAction;
+}
+
+export interface RiskProposalResponse {
+  id: string;
+  status: OnboardingSessionStatus;
+  risk_profile: { action: string; tier: number; reasoning: string }[];
+}
+
+export interface SandboxTestPayload {
+  sample_input?: Record<string, unknown>;
+  acknowledge_live_call?: boolean;
+}
+
+export interface SandboxTestResponse {
+  id: string;
+  status: OnboardingSessionStatus;
+  sandbox_result: SandboxResult;
+}
+
+export interface ActivateSessionResponse {
+  id: string;
+  status: OnboardingSessionStatus;
+  capability_id: string;
+}
+
+export interface ObsidianProjectionStatusResponse {
+  status: string;
+  targetDir: string;
+  totalNotesCount: number;
+  queueDepth: number;
+  projectedEventsCount: number;
+  lastProjectedAt: string | null;
+  localRestApiEnabled: boolean;
 }

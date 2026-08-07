@@ -13,7 +13,7 @@ const MOTOR_HOUSING_QUALITY_ALERT = QUALITY_ALERT_SCENARIOS.find((s) => s.lineId
 export default function IncidentsHubPage() {
   const router = useRouter();
   const hasToken = useHasToken();
-  const { recentIncidents, addIncident } = useMissionControlStore();
+  const { addIncident } = useMissionControlStore();
   const [starting, setStarting] = useState(false);
 
   // Fetch real historical & hero incident records from backend Decision Memory RAG

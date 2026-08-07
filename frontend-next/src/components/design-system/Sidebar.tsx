@@ -5,6 +5,10 @@ import { usePathname } from "next/navigation";
 
 const NAV_ITEMS = [
   { href: "/executive/enterprise", icon: "📊", label: "Executive" },
+  { href: "/jarvis", icon: "🧠", label: "Jarvis / MOA" },
+  { href: "/governance", icon: "🛡️", label: "Governance" },
+  { href: "/integrations", icon: "🔌", label: "Integrations" },
+  { href: "/capability-onboarding", icon: "🚀", label: "BYOC Studio" },
   { href: "/digital-twin", icon: "🏭", label: "Twin Room" },
   { href: "/incidents", icon: "🚨", label: "Incidents" },
   { href: "/decisions", icon: "⚖️", label: "Decisions" },
