@@ -55,8 +55,11 @@ USER ados
 
 EXPOSE 8000
 
+# 127.0.0.1 rather than localhost, for the same reason as the frontend
+# image: uvicorn binds 0.0.0.0 (IPv4), and localhost can resolve to [::1]
+# first inside a container.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
-    CMD curl -fsS http://localhost:8000/healthz || exit 1
+    CMD curl -fsS http://127.0.0.1:8000/healthz || exit 1
 
 # --workers is deliberately absent, and this is load-bearing, not an
 # oversight: paused MOA/ITSM approvals live in per-process state
