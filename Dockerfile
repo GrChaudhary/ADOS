@@ -2,7 +2,7 @@
 #
 # Until this file existed there was no packaged form of ADOS at all: the only
 # way to run it was scripts/run-backend.sh against a hand-built .venv on one
-# developer's laptop (see ADOS_OBSIDIAN/TODO - Productization.md, Stage 1).
+# developer's laptop (see docs/PRODUCTIZATION.md, Stage 1).
 #
 # Build:  docker build -t ados-backend .
 # Run:    docker compose up  (see docker-compose.yml — that wires Postgres,
@@ -63,5 +63,5 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
 # (app.state.moa_pending_tasks + LangGraph's InMemorySaver), so a second
 # worker or replica would 404 roughly half of all approve/reject calls.
 # Scaling out requires the Postgres-backed checkpointer in Stage 2 of
-# ADOS_OBSIDIAN/TODO - Productization.md. Until then: one process.
+# docs/PRODUCTIZATION.md. Until then: one process.
 CMD ["uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"]

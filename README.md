@@ -70,7 +70,7 @@ all of it plus the frontend typecheck, lint, build, and both image builds.
 
 This runs, and the test suite is real. It is **not production-hardened** —
 the known gaps are tracked honestly in
-[`ADOS_OBSIDIAN/TODO - Productization.md`](ADOS_OBSIDIAN/TODO%20-%20Productization.md).
+[`docs/PRODUCTIZATION.md`](docs/PRODUCTIZATION.md).
 The ones to know before deploying it anywhere real:
 
 - **Single process only.** Paused MOA/ITSM approvals live in per-process

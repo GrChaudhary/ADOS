@@ -6,7 +6,7 @@
 # passing" claim in this project's history was therefore true only on one
 # machine on one day. This makes it a fact anyone can check on every push.
 #
-# See ADOS_OBSIDIAN/TODO - Productization.md, Stage 1.
+# See docs/PRODUCTIZATION.md, Stage 1.
 
 name: CI
 

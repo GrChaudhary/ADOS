@@ -29,7 +29,7 @@
 # production deployment: the Postgres role is a superuser (which voids the
 # append-only guarantee on the approval ledger), there is no TLS, and the
 # backend mounts the host Docker socket — see the note on that service.
-# ADOS_OBSIDIAN/TODO - Productization.md tracks the gap.
+# docs/PRODUCTIZATION.md tracks the gap.
 services:
   postgres:
     image: postgres:16-alpine
