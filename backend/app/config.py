@@ -32,6 +32,14 @@ class Settings(BaseSettings):
 
     env: str = "local"
 
+    # executive/seed_data.py's 220 fabricated manufacturing incidents (20
+    # hand-written "hero" records + 200 generated) used to load
+    # unconditionally at every startup, so a fresh deployment's dashboards,
+    # KPIs, and Decision Memory opened full of incidents that never happened.
+    # Useful for a demo, wrong for a product — now opt-in. Consumed by
+    # backend/app/main.py's lifespan and backend/app/routers/memory.py.
+    seed_demo_data: bool = False
+
     # Real persistence (db/) — dev-only default matching docker-compose.yml's
     # postgres service defaults, same convention as jwt_secret's dev-only
     # fallback below: safe for a fresh clone to import without `.env` set,

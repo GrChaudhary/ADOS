@@ -34,6 +34,19 @@ import os
 
 os.environ["DATABASE_URL"] = "postgresql+asyncpg://ados:ados@localhost:5432/ados_test"
 
+# SEED_DEMO_DATA has the same import-time constraint as DATABASE_URL above:
+# backend/app/routers/memory.py builds its DecisionMemoryIndex singleton from
+# Settings() at import time, so setting this later has no effect.
+#
+# The product default is now False (a fresh deployment starts empty rather
+# than pre-loaded with executive/seed_data.py's 220 fabricated manufacturing
+# incidents). The suite predates that flag and was written against a seeded
+# world — every /executive/* analytic, Decision Memory search, and learning
+# test asserts against those specific records. Forced on here so the flag's
+# default flip changes production behaviour without silently rewriting what
+# hundreds of existing tests are actually testing.
+os.environ["SEED_DEMO_DATA"] = "true"
+
 import pytest
 
 from backend.app.rbac import Role, User, create_access_token

@@ -57,12 +57,16 @@ async def lifespan(app: FastAPI):
     app.state.orchestrator = DecisionOrchestrator(
         event_bus=app.state.event_bus,
         integration_hub=app.state.integration_hub,
-        # 20 hero + 200 generated demo incidents (executive/seed_data.py) -
-        # always loaded for a populated dashboard/KPI baseline. Additive
-        # with real Postgres-backed incidents hydrated below, not a
-        # replacement: different incident_id namespace (INC-2026-* vs real
-        # UUIDs).
-        seed_records=INCIDENT_RECORDS_SEED,
+        # 20 hero + 200 generated demo incidents (executive/seed_data.py),
+        # opt-in via SEED_DEMO_DATA. These feed the dashboard, the KPI
+        # baseline, and every /executive/* analytic (which read
+        # orchestrator.audit_trail.all()), so leaving them on by default
+        # meant a fresh deployment opened full of incidents that never
+        # happened. Additive with real Postgres-backed incidents hydrated
+        # below, not a replacement: different incident_id namespace
+        # (INC-2026-* vs real UUIDs), so turning this on or off never
+        # disturbs real records either way.
+        seed_records=INCIDENT_RECORDS_SEED if settings.seed_demo_data else None,
         session_factory=async_session_factory,
     )
     app.state.incident_tasks = {}
@@ -81,8 +85,8 @@ async def lifespan(app: FastAPI):
     # Same Postgres rows, loaded into the *separate* in-memory index
     # backend/app/routers/memory.py's /memory/search uses — hydrated
     # independently (not by copying audit_trail.all()) because that list
-    # already includes seed_records, and DecisionMemoryIndex() seeds
-    # itself with the same seed by default; copying would duplicate it.
+    # may already include seed_records, and the index applies the same
+    # SEED_DEMO_DATA gate to its own construction; copying would duplicate it.
     await memory.get_memory_index().hydrate_from_db(async_session_factory)
     resumed = await app.state.orchestrator.resume_pending_approvals()
     if resumed:

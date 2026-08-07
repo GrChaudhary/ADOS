@@ -8,14 +8,20 @@ from contracts import IncidentRecord, DecisionMemoryQuery, DecisionMemorySearchR
 from knowledge import DecisionMemoryIndex
 
 from ..auth import get_current_user
+from ..config import settings
 
 router = APIRouter(prefix="/memory", tags=["Decision Memory"], dependencies=[Depends(get_current_user)])
 
 # In-memory store singleton for Decision Memory REST API — topped up at
 # startup from Postgres via hydrate_from_db() (backend/app/main.py's
-# lifespan), on top of the static seed every DecisionMemoryIndex()
-# construction gets by default.
-_MEMORY_INDEX = DecisionMemoryIndex()
+# lifespan).
+#
+# DecisionMemoryIndex() with no argument self-seeds from
+# executive/seed_data.py's 220 fabricated manufacturing incidents. That is a
+# demo default, not a product one: a real deployment's Decision Memory should
+# start empty and fill with that deployment's own history. Passing an explicit
+# [] when the flag is off is what keeps it empty — see settings.seed_demo_data.
+_MEMORY_INDEX = DecisionMemoryIndex(None if settings.seed_demo_data else [])
 
 
 def get_memory_index() -> DecisionMemoryIndex:
