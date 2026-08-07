@@ -166,6 +166,19 @@ class LocalLLMClient:
     def get_anthropic_status(self) -> Dict[str, Any]:
         return self.get_provider_status("anthropic")
 
+    @property
+    def thinking_enabled(self) -> bool:
+        """Controls whether local Ollama / Qwen models run an internal thinking phase.
+        Defaults to False (off) for direct, fast responses."""
+        db_val = self._db_settings().get("ollama", {}).get("thinkingEnabled")
+        if db_val is not None:
+            if isinstance(db_val, bool):
+                return db_val
+            if isinstance(db_val, str):
+                return db_val.lower() in ("true", "1", "yes", "on")
+        env_val = os.environ.get("LOCAL_LLM_THINKING", os.environ.get("LOCAL_LLM_THINK", "false"))
+        return env_val.lower() in ("true", "1", "yes", "on")
+
     def get_ollama_status(self) -> Dict[str, Any]:
         chain = [p for p in KEY_PROVIDERS if self._configured(p)]
         if self.provider_override == "ollama":
@@ -178,6 +191,7 @@ class LocalLLMClient:
             role = "primary (no cloud provider configured)"
         status = self._ollama_health_status()
         status["role"] = role
+        status["thinkingEnabled"] = self.thinking_enabled
         return status
 
     def get_health_status(self) -> Dict[str, Any]:
@@ -383,30 +397,35 @@ class LocalLLMClient:
 
     def _generate_text_ollama(self, prompt: str, max_tokens: int, temperature: float) -> Dict[str, Any]:
         try:
+            think_enabled = self.thinking_enabled
+            options = {
+                "num_predict": max_tokens,
+                "temperature": temperature,
+                "think": think_enabled,
+            }
+            payload = {
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+                "think": think_enabled,
+                "options": options,
+            }
             with httpx.Client(timeout=90.0) as client:
                 resp = client.post(
                     f"{self.base_url}/api/generate",
-                    json={
-                        "model": self.model,
-                        "prompt": prompt,
-                        "stream": False,
-                        # qwen3 reasons into a separate "thinking" phase
-                        # before it writes anything into "response", and
-                        # thinking length varies run to run (~600-1500+
-                        # tokens observed). max_tokens caps thinking+response
-                        # combined, so it must clear the thinking phase with
-                        # room to spare or Ollama hits done_reason "length"
-                        # with an empty response - verified against this
-                        # exact model.
-                        "options": {"num_predict": max_tokens, "temperature": temperature},
-                    },
+                    json=payload,
                 )
                 if resp.status_code != 200:
                     return {"status": "error", "model_used": None, "text": None, "error": f"Ollama returned {resp.status_code}: {resp.text[:300]}"}
                 text = (resp.json().get("response") or "").strip()
                 if not text:
                     return {"status": "error", "model_used": None, "text": None, "error": "empty response"}
-                return {"status": "live_llm_generated", "model_used": f"{self.model} (local via Ollama)", "text": text}
+
+                # If thinking mode is off, ensure any residual <think>...</think> blocks are stripped
+                cleaned_text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                final_text = cleaned_text if cleaned_text else text
+
+                return {"status": "live_llm_generated", "model_used": f"{self.model} (local via Ollama)", "text": final_text}
         except Exception as exc:
             return {"status": "error", "model_used": None, "text": None, "error": str(exc)}
 

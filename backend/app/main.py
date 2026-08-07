@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from orchestrate.onboarding import runtime_registry as onboarding_runtime_regist
 from . import user_store
 from .config import settings
 from .eventbus import get_event_bus
+from .observability import RequestIdMiddleware, configure_logging
 from .routers import ai_services, agents_registry, auth, capabilities, capability_onboarding, copilot, digital_twin, events, events_stream, executive, governance, health, incidents, integrations, knowledge_graph, langgraph_agents, learning, memory, moa, settings as settings_router
 
 _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
@@ -22,6 +24,36 @@ _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
 from knowledge.local_llm_client import local_llm_client
 from executive.seed_data import INCIDENT_RECORDS_SEED
+
+
+# Before any logger is used, including during lifespan.
+configure_logging(level=settings.log_level, json_output=settings.log_json)
+
+logger = logging.getLogger("ados.startup")
+
+
+async def _refresh_llm_settings_periodically() -> None:
+    """Re-reads llm_provider_settings into local_llm_client's in-process
+    cache on a fixed interval, so a key saved on one replica becomes visible
+    on the others without a restart.
+
+    Deliberately never lets a transient DB error kill the loop -- a failed
+    refresh just means the cache stays as it was until the next tick, which
+    is strictly better than the task dying silently and the process drifting
+    permanently stale.
+    """
+    interval = settings.llm_settings_refresh_seconds
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            async with async_session_factory() as session:
+                local_llm_client.hydrate_settings_cache(
+                    await settings_router.load_all_provider_settings(session)
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("LLM settings refresh failed; keeping previous cache", exc_info=True)
 
 
 @asynccontextmanager
@@ -53,7 +85,7 @@ async def lifespan(app: FastAPI):
         async_session_factory, app.state.integration_hub.manifests, app.state.integration_hub.dynamic_capability_connector
     )
     if hydrated:
-        print(f"[Startup] Rehydrated {hydrated} onboarded capability(ies) into the dynamic connector + MOA")
+        logger.info("Rehydrated onboarded capabilities", extra={"capability_count": hydrated})
     app.state.orchestrator = DecisionOrchestrator(
         event_bus=app.state.event_bus,
         integration_hub=app.state.integration_hub,
@@ -81,7 +113,7 @@ async def lifespan(app: FastAPI):
     app.state.moa_pending_tasks = {}
 
     loaded = await app.state.orchestrator.audit_trail.hydrate_from_db()
-    print(f"[Startup] Hydrated {loaded} incident(s) from Postgres into the audit trail")
+    logger.info("Hydrated incidents from Postgres", extra={"incident_count": loaded})
     # Same Postgres rows, loaded into the *separate* in-memory index
     # backend/app/routers/memory.py's /memory/search uses — hydrated
     # independently (not by copying audit_trail.all()) because that list
@@ -90,7 +122,10 @@ async def lifespan(app: FastAPI):
     await memory.get_memory_index().hydrate_from_db(async_session_factory)
     resumed = await app.state.orchestrator.resume_pending_approvals()
     if resumed:
-        print(f"[Startup] Reconstituted {resumed} pending approval(s) stranded by the last restart")
+        logger.info(
+            "Reconstituted pending approvals stranded by the last restart",
+            extra={"approval_count": resumed},
+        )
 
     # RBAC (backend/app/user_store.py) - seeds the 5 demo accounts only if
     # the user store is empty; never resets existing accounts/passwords.
@@ -107,6 +142,8 @@ async def lifespan(app: FastAPI):
         # this is push- rather than pull-based.
         local_llm_client.hydrate_settings_cache(await settings_router.load_all_provider_settings(_startup_session))
     if generated_passwords:
+        # Passwords stay on print(): they are shown once, for a human reading
+        # the console, and must NOT flow into a log shipper or get indexed.
         print("[Startup] Seeded RBAC accounts with generated passwords (change via POST /auth/users):")
         for username, password in generated_passwords.items():
             print(f"  {username} / {password}")
@@ -126,8 +163,19 @@ async def lifespan(app: FastAPI):
     await app.state.obsidian_listener.start()
     app.state.obsidian_listener_task = asyncio.create_task(app.state.obsidian_listener.listen_to_bus(app.state.event_bus))
 
+    # Keeps this process's LLM provider cache in step with what other
+    # processes have saved — see settings.llm_settings_refresh_seconds for
+    # why a pull loop rather than a read-through cache.
+    app.state.llm_settings_refresh_task = (
+        asyncio.create_task(_refresh_llm_settings_periodically())
+        if settings.llm_settings_refresh_seconds > 0
+        else None
+    )
+
     yield
 
+    if getattr(app.state, "llm_settings_refresh_task", None):
+        app.state.llm_settings_refresh_task.cancel()
     if hasattr(app.state, "obsidian_listener_task") and app.state.obsidian_listener_task:
         app.state.obsidian_listener_task.cancel()
     if hasattr(app.state, "obsidian_listener") and app.state.obsidian_listener:
@@ -143,6 +191,10 @@ app = FastAPI(title="ADOS Backend", version="0.1.0", lifespan=lifespan)
 # "*" — the bearer token is honest-but-simple shared-secret auth (docs/009),
 # no cookies involved, but there's no reason to widen this beyond the one
 # known dev origin.
+# Outermost so every request gets an id before anything else runs, and so
+# the id is still set while CORS/error responses are produced.
+app.add_middleware(RequestIdMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_dev_origin],

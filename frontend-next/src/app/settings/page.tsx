@@ -163,12 +163,20 @@ export default function SettingsPage() {
   const hasToken = useHasToken();
   const user = getStoredUser();
   const isAdmin = user?.role === "admin";
+  const queryClient = useQueryClient();
 
   const providersQuery = useQuery<LLMProvidersResponse>({
     queryKey: ["llm-providers"],
     queryFn: api.getLLMProviders,
     refetchInterval: 15000,
     enabled: hasToken,
+  });
+
+  const toggleThinkingMutation = useMutation({
+    mutationFn: (enabled: boolean) => api.toggleThinkingMode(enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["llm-providers"] });
+    },
   });
 
   return (
@@ -204,8 +212,8 @@ export default function SettingsPage() {
             ))}
           </div>
 
-          {/* Ollama — env-only info card, not part of the key-management flow */}
-          <div className="p-6 rounded-2xl jarvis-glass-card border border-border-subtle space-y-3 shadow-lg">
+          {/* Ollama — info card with Thinking Mode Toggle */}
+          <div className="p-6 rounded-2xl jarvis-glass-card border border-border-subtle space-y-4 shadow-lg">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <span className="text-xl">💻</span>
@@ -216,9 +224,47 @@ export default function SettingsPage() {
               </span>
             </div>
             <p className="text-xs text-text-secondary">{providersQuery.data.ollama.description}</p>
+
+            {/* Thinking Mode Toggle */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl bg-purple-950/20 border border-purple-500/20">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-text-primary">Thinking Mode (Qwen / Local LLM)</span>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                      providersQuery.data.ollama.thinkingEnabled
+                        ? "bg-purple-500/20 text-purple border-purple-500/40"
+                        : "bg-emerald/10 text-emerald border-emerald/30"
+                    }`}
+                  >
+                    {providersQuery.data.ollama.thinkingEnabled ? "THINKING ON" : "DIRECT / OFF"}
+                  </span>
+                </div>
+                <p className="text-xs text-text-secondary">
+                  Controls whether local Qwen models execute an internal reasoning pass before responding. When OFF (default), response time is significantly faster and token usage is reduced.
+                </p>
+              </div>
+              {isAdmin && (
+                <button
+                  type="button"
+                  disabled={toggleThinkingMutation.isPending}
+                  onClick={() => toggleThinkingMutation.mutate(!providersQuery.data.ollama.thinkingEnabled)}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    providersQuery.data.ollama.thinkingEnabled ? "bg-purple-600" : "bg-gray-700"
+                  } ${toggleThinkingMutation.isPending ? "opacity-50 cursor-not-allowed" : ""}`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      providersQuery.data.ollama.thinkingEnabled ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              )}
+            </div>
+
             <p className="text-[11px] font-mono text-text-secondary">
               Role: <span className="text-cobalt">{providersQuery.data.ollama.role}</span> — configured via
-              LOCAL_LLM_URL / LOCAL_LLM_MODEL in .env, not through this page (no API key involved).
+              LOCAL_LLM_URL / LOCAL_LLM_MODEL in .env (no API key involved).
             </p>
           </div>
         </>

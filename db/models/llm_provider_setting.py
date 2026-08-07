@@ -19,3 +19,4 @@ class LLMProviderSettingRow(Base):
     provider: Mapped[str] = mapped_column(primary_key=True)
     api_key: Mapped[str]
     model: Mapped[Optional[str]]
+    thinking_enabled: Mapped[Optional[bool]] = mapped_column(default=False)

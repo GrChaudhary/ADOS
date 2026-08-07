@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field, ConfigDict
 
+from .trace_context import current_trace_id
+
 
 class EventEnvelope(BaseModel):
     """
@@ -51,13 +53,15 @@ class EventEnvelope(BaseModel):
         description="Semantic version of the payload schema"
     )
     trace_id: Optional[str] = Field(
-        default=None,
+        default_factory=current_trace_id,
         alias="traceId",
         description=(
-            "Links one action's request to its later retry/resume across an "
-            "async approval boundary. Unpopulated until the async approval/"
-            "retry workflow (vision doc Section 5.4) exists to need it — no "
-            "producer sets this today."
+            "Correlates every event produced while handling one HTTP request. "
+            "Populated automatically from contracts/trace_context.py, which "
+            "backend/app/observability.py's RequestIdMiddleware sets per "
+            "request — so all 7 producers get it without any of them being "
+            "changed. None outside a request (background task, script, test), "
+            "which is a normal value, not an error."
         )
     )
     idempotency_key: Optional[str] = Field(

@@ -34,17 +34,19 @@ from ..rbac import Role, require_role
 router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[Depends(get_current_user)])
 
 
-async def load_all_provider_settings(session: AsyncSession) -> Dict[str, Dict[str, str]]:
+async def load_all_provider_settings(session: AsyncSession) -> Dict[str, Dict[str, Any]]:
     """Shapes every persisted row into the {provider: {"apiKey":...,
-    "model":...}} dict knowledge/local_llm_client.py's _cfg() expects —
+    "model":..., "thinkingEnabled":...}} dict knowledge/local_llm_client.py's _cfg() expects —
     called after every save/delete below, and once at startup
     (backend/app/main.py's lifespan)."""
     rows = (await session.execute(select(LLMProviderSettingRow))).scalars().all()
-    result: Dict[str, Dict[str, str]] = {}
+    result: Dict[str, Dict[str, Any]] = {}
     for row in rows:
-        fields = {"apiKey": row.api_key}
+        fields: Dict[str, Any] = {"apiKey": row.api_key}
         if row.model:
             fields["model"] = row.model
+        if row.thinking_enabled is not None:
+            fields["thinkingEnabled"] = row.thinking_enabled
         result[row.provider] = fields
     return result
 
@@ -54,6 +56,12 @@ class SaveProviderKeyRequest(BaseModel):
 
     api_key: str = Field(..., min_length=1, alias="apiKey")
     model: Optional[str] = None
+
+
+class ToggleThinkingRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    thinking_enabled: bool = Field(..., alias="thinkingEnabled")
 
 
 class ProviderTestResponse(BaseModel):
@@ -81,6 +89,18 @@ async def list_llm_providers():
         "providers": local_llm_client.list_provider_statuses(),
         "ollama": local_llm_client.get_ollama_status(),
     }
+
+
+@router.put("/llm-providers/ollama/thinking", dependencies=[Depends(require_role(Role.ADMIN))])
+async def toggle_ollama_thinking(body: ToggleThinkingRequest, session: AsyncSession = Depends(get_db_session)):
+    row = await session.get(LLMProviderSettingRow, "ollama")
+    if row is None:
+        session.add(LLMProviderSettingRow(provider="ollama", api_key="", model=None, thinking_enabled=body.thinking_enabled))
+    else:
+        row.thinking_enabled = body.thinking_enabled
+    await session.flush()
+    local_llm_client.hydrate_settings_cache(await load_all_provider_settings(session))
+    return local_llm_client.get_ollama_status()
 
 
 @router.put("/llm-providers/{provider}", dependencies=[Depends(require_role(Role.ADMIN))])

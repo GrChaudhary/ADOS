@@ -40,6 +40,28 @@ class Settings(BaseSettings):
     # backend/app/main.py's lifespan and backend/app/routers/memory.py.
     seed_demo_data: bool = False
 
+    # How often each process re-reads llm_provider_settings from Postgres.
+    #
+    # knowledge/local_llm_client.py caches provider keys/models in process
+    # memory, pushed by backend/app/routers/settings.py after every save. That
+    # push only reaches the process that served the request — save a key on
+    # replica A and replica B keeps reporting "not configured" until it
+    # restarts. It can't pull on demand either: get_api_key()/is_configured()
+    # are called synchronously from deep inside agent code already running on
+    # the event loop, so they can't await a query.
+    #
+    # A periodic refresh closes the gap without touching that hot path. The
+    # cost of staleness is bounded and low (a key saved seconds ago isn't yet
+    # visible on other replicas); the cost of a miss is a task refusing to run.
+    # Set to 0 to disable (single-process deployments don't need it — the
+    # push already covers them).
+    llm_settings_refresh_seconds: int = 30
+
+    # Observability (backend/app/observability.py). JSON is right for a log
+    # shipper; set log_json=false locally when you'd rather read it yourself.
+    log_level: str = "INFO"
+    log_json: bool = True
+
     # Real persistence (db/) — dev-only default matching docker-compose.yml's
     # postgres service defaults, same convention as jwt_secret's dev-only
     # fallback below: safe for a fresh clone to import without `.env` set,
