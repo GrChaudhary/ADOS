@@ -1,0 +1,174 @@
+# CI — the first automated verification this repo has ever had.
+#
+# Why this matters more than it looks: the suite silently depends on local
+# infrastructure. Run `pytest` with Postgres stopped and you get 260 passed,
+# 186 errors — and nothing anywhere tells you the difference. Every "N/N
+# passing" claim in this project's history was therefore true only on one
+# machine on one day. This makes it a fact anyone can check on every push.
+#
+# See ADOS_OBSIDIAN/TODO - Productization.md, Stage 1.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ados
+          POSTGRES_PASSWORD: ados
+          POSTGRES_DB: ados
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ados"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+      # Matches docker-compose.yml's broker exactly (KRaft, no ZooKeeper).
+      # tests/test_kafka_bus.py is live-only by deliberate design — there is
+      # no mock substitute — so CI needs a real broker or those 4 tests error
+      # rather than skip.
+      kafka:
+        image: apache/kafka:3.9.0
+        ports:
+          - 29092:29092
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+          # PLAINTEXT_HOST advertises localhost because the test process runs
+          # directly on the runner, reaching the service through its mapped
+          # port — not from inside the compose-style network.
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+          CLUSTER_ID: ados-kafka-kraft-cluster-1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # docker-compose.yml creates this via a mounted init script, which
+      # service containers can't use. conftest.py points every test at
+      # ados_test, so it has to exist before pytest starts.
+      - name: Create the test database
+        env:
+          PGPASSWORD: ados
+        run: psql -h localhost -U ados -d ados -c 'CREATE DATABASE ados_test'
+
+      - name: Apply migrations to the test database
+        env:
+          DATABASE_URL: postgresql+asyncpg://ados:ados@localhost:5432/ados_test
+        run: alembic upgrade head
+
+      # The suite is live-only against Postgres and Kafka by design. Failing
+      # here with a clear message beats 186 opaque setup errors.
+      - name: Wait for Kafka
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/localhost/29092) >/dev/null 2>&1; then
+              echo "Kafka is accepting connections"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Kafka never came up on localhost:29092" >&2
+          exit 1
+
+      # No LLM keys are set, so every test that would reach a provider runs
+      # against its mocked client — matching how the suite is written. The
+      # live-LLM smoke runs in this project are manual by design.
+      #
+      # Docker IS available on the runner, so the capability-onboarding
+      # sandbox tests execute for real rather than skipping (they gate on
+      # sandbox_runner.is_docker_available()).
+      - name: Run the full test suite
+        run: pytest -q
+
+  frontend:
+    name: Frontend (typecheck, lint, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend-next
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend-next/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  images:
+    name: Docker images build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build-only (no push). Catches the class of breakage that never shows
+      # up locally: a dependency that installs from a warm cache but not from
+      # scratch, or a file the .dockerignore quietly excluded.
+      - name: Build the backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build the frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend-next
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

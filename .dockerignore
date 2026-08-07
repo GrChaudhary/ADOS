@@ -1,0 +1,32 @@
+# Keep the build context small and never ship secrets or local state.
+.git
+.gitignore
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Secrets — config comes from the environment at runtime, never baked in.
+.env
+.env.*
+!.env.example
+ibm-credentials_*.env
+apikey*.json
+
+# The frontend has its own image (frontend-next/Dockerfile).
+frontend-next
+
+# Local/authoring artifacts with no place in a server image.
+ADOS_OBSIDIAN
+Blueprints
+Videos
+documentation
+executive/*.pptx
+*.pptx
+backend.log
+.DS_Store
+**/.DS_Store

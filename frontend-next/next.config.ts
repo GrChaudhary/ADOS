@@ -3,6 +3,11 @@ import type { NextConfig } from "next";
 const BACKEND_ORIGIN = process.env.ADOS_BACKEND_ORIGIN ?? "http://localhost:8000";
 
 const nextConfig: NextConfig = {
+  // Emits .next/standalone with only the traced runtime dependencies, so the
+  // production image doesn't have to carry the full node_modules tree. Used
+  // by frontend-next/Dockerfile; harmless for `next dev`.
+  output: "standalone",
+
   async rewrites() {
     // Proxies fetch() calls to the real FastAPI backend so the browser
     // never needs CORS for plain requests. The SSE EventSource connection

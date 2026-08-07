@@ -1,4 +1,19 @@
-# Local Postgres for development and tests — see infrastructure/README.md.
+# The whole ADOS stack: Postgres, Kafka, schema migrations, the FastAPI
+# backend, and the Next.js frontend.
+#
+#   docker compose up --build      # everything, from a clean machine
+#   open http://localhost:3000
+#
+# First boot prints generated passwords for the seeded RBAC accounts to the
+# backend logs (`docker compose logs backend`) — they are generated once and
+# never reset, so capture them then.
+#
+# The pre-existing infra-only workflow still works unchanged, since those
+# services are named explicitly:
+#
+#   docker compose up -d postgres kafka     # then run the app from .venv
+#   ./.venv/bin/alembic upgrade head
+#
 # Redis (event bus) is intentionally not here: EVENT_BUS_BACKEND defaults
 # to "memory" and standing up Redis locally is a separate, existing
 # concern (.env.example's EVENT_BUS_URL), untouched by this.
@@ -10,8 +25,11 @@
 # that doc's original "not needed yet" verdict — decision reversed
 # 2026-08-04.
 #
-# Bring up:      docker compose up -d postgres kafka
-# Apply schema:  ./.venv/bin/alembic upgrade head
+# This stack is for local development and evaluation. It is NOT a
+# production deployment: the Postgres role is a superuser (which voids the
+# append-only guarantee on the approval ledger), there is no TLS, and the
+# backend mounts the host Docker socket — see the note on that service.
+# ADOS_OBSIDIAN/TODO - Productization.md tracks the gap.
 services:
   postgres:
     image: postgres:16-alpine
@@ -50,6 +68,88 @@ services:
       CLUSTER_ID: ados-kafka-kraft-cluster-1
     volumes:
       - ados_kafka_data:/var/lib/kafka/data
+
+  # One-shot schema migration. The backend waits for this to exit 0 rather
+  # than running `alembic upgrade head` itself on boot, so N backend
+  # containers can never race each other applying the same migration.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://ados:ados@postgres:5432/ados
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://ados:ados@postgres:5432/ados
+      # "memory" (default), "redis", or "kafka". Kafka is up in this stack,
+      # so switching is just: EVENT_BUS_BACKEND=kafka docker compose up
+      EVENT_BUS_BACKEND: ${EVENT_BUS_BACKEND:-memory}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Browser origin allowed through CORSMiddleware — the SSE stream
+      # bypasses the frontend's rewrite proxy and hits this API directly.
+      FRONTEND_DEV_ORIGIN: http://localhost:3000
+      # Dev-only fallback lives in backend/app/config.py; override it here
+      # (or in .env) with `python -c "import secrets; print(secrets.token_hex(32))"`.
+      # Anyone who can read this repo can forge tokens signed with the default.
+      JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me}
+      # LLM providers. Without at least one key the MOA and both LangGraph
+      # agents report "not configured" and refuse to run rather than guess.
+      NEMOTRON_API_KEY: ${NEMOTRON_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-}
+      # 20 hero + 200 generated fake manufacturing incidents. Off unless
+      # asked for — see backend/app/config.py's seed_demo_data.
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
+    volumes:
+      # SECURITY: the capability-onboarding pipeline
+      # (orchestrate/onboarding/sandbox_runner.py) shells out to the docker
+      # CLI to build and run sandboxed capability images, so it needs a
+      # daemon. Mounting the host socket gives this container effective root
+      # on the host — acceptable for local evaluation, NOT acceptable in a
+      # real deployment. The production answer is a rootless or remote
+      # builder the backend talks to over an authenticated endpoint.
+      #
+      # Comment this out to run without it: sandbox_runner gates on
+      # shutil.which("docker"), but the CLI is installed in the image, so it
+      # will find the binary and fail on the missing socket rather than
+      # degrade cleanly. Onboarding is the only affected feature.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # The socket is group-owned; the container runs as non-root. 0 is right
+    # for Docker Desktop (macOS/Windows). On Linux, find yours with
+    # `stat -c '%g' /var/run/docker.sock` and set DOCKER_GID.
+    group_add:
+      - "${DOCKER_GID:-0}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ./frontend-next
+      args:
+        # Inlined into the browser bundle at build time, so it must be the
+        # origin a *browser on the host* can reach — not the compose-internal
+        # hostname. Used only for the direct SSE connection.
+        NEXT_PUBLIC_ADOS_BACKEND_ORIGIN: http://localhost:8000
+    ports:
+      - "3000:3000"
+    environment:
+      # Server-side rewrite proxy (/api/backend/* -> backend/api/v1/*) runs
+      # inside the network, so this one IS the compose hostname.
+      ADOS_BACKEND_ORIGIN: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
 
 volumes:
   ados_postgres_data:
