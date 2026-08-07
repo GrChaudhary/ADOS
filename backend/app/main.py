@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from db.engine import async_session_factory, engine as db_engine
+from db.checkpointer import setup_checkpointer_tables
 from db.health import check_connectivity_or_raise
 from integrations import CapabilityManifestRegistry, default_hub
 from orchestrate import DecisionOrchestrator
@@ -64,6 +65,13 @@ async def lifespan(app: FastAPI):
     # notes in the plan this was built from): `alembic upgrade head` is a
     # separate, deliberate step, not run automatically on boot.
     await check_connectivity_or_raise()
+
+    # The LangGraph checkpointer's four tables are created by the library's
+    # own migration mechanism, not Alembic -- so `alembic upgrade head` alone
+    # does not fully prepare a database. Doing it here means every boot path
+    # (compose, dev, tests via TestClient) converges on a ready schema, and
+    # CI needs no extra step. Idempotent: no-ops once current.
+    await setup_checkpointer_tables()
 
     kwargs = {}
     if settings.event_bus_backend == "redis":

@@ -16,4 +16,4 @@ if [ -f .env ]; then
   set +a
 fi
 
-./.venv/bin/uvicorn backend.app.main:app --reload --port 8000
+./.venv/bin/uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000

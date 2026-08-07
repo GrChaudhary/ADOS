@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 
-const BACKEND_ORIGIN = process.env.ADOS_BACKEND_ORIGIN ?? "http://localhost:8000";
+const BACKEND_ORIGIN = process.env.ADOS_BACKEND_ORIGIN ?? "http://127.0.0.1:8000";
 
 const nextConfig: NextConfig = {
   // Emits .next/standalone with only the traced runtime dependencies, so the
