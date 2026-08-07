@@ -1,1 +1,4 @@
-[]
+[
+  "vault-mcp-connector",
+  "obsidian-local-rest-api"
+]

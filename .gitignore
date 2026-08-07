@@ -21,6 +21,16 @@ ADOS_OBSIDIAN/.obsidian/plugins/vault-mcp-connector/data/
 # key plus the full RSA private key/cert for its REST+MCP TLS server.
 ADOS_OBSIDIAN/.obsidian/plugins/obsidian-local-rest-api/data.json
 
+# Third-party Obsidian plugin bundles — reinstallable from the community
+# plugin browser (community-plugins.json above records which ones), and
+# each is megabytes of minified vendor JS. Four older plugins are already
+# tracked from before this rule; not retroactively removed, but no new
+# vendor bundles get added. Plugin *config* is still tracked.
+ADOS_OBSIDIAN/.obsidian/plugins/vault-mcp-connector/main.js
+ADOS_OBSIDIAN/.obsidian/plugins/vault-mcp-connector/styles.css
+ADOS_OBSIDIAN/.obsidian/plugins/obsidian-local-rest-api/main.js
+ADOS_OBSIDIAN/.obsidian/plugins/obsidian-local-rest-api/styles.css
+
 # Generated Obsidian projection notes — rebuilt on demand from Postgres by
 # orchestrate/obsidian/reconciler.py (POST /governance/obsidian-projection/sync)
 # and written live by the projection listener. Build output, not source.

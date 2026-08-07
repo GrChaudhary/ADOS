@@ -109,8 +109,15 @@ this documentation reference — see [`../contracts/README.md`](../contracts/REA
 
 ## Open Questions
 
-- Kafka vs. a managed event bus for the MVP — see
-  [`../infrastructure/README.md`](../infrastructure/README.md).
+- ~~Kafka vs. a managed event bus for the MVP~~ **Decided 2026-08-04,
+  revised same day** — real Apache Kafka (KRaft mode) is now a supported
+  `EVENT_BUS_BACKEND=kafka` option (`backend/app/eventbus/kafka_bus.py`),
+  adopted ahead of the original evaluation's "wait for domain-pod
+  decoupling" trigger, by explicit choice. Default stays `memory` for a
+  fresh clone/test run. See
+  [`../infrastructure/EVENT_BUS_COMPARISON.md`](../infrastructure/EVENT_BUS_COMPARISON.md)
+  for both the original reasoning and the reversal note at the top of that
+  file.
 
 ## References
 

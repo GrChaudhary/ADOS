@@ -1,7 +1,15 @@
 # ADR-0002: IBM Orchestrate as the L4 orchestration kernel
 
-Status: Accepted
+Status: Superseded by ADR-0011 (pending)
 Date: 2026-07-22
+
+**2026-08-03 update:** This was never actually built — the L4 orchestrator
+that shipped (`orchestrate/orchestrator.py`) is a custom state machine, not
+IBM Orchestrate. Only two agents (ITSM agent, executive copilot agent) were
+ever genuinely hosted on IBM watsonx Orchestrate, and that dependency is
+now being removed entirely as part of the platform generalization
+(`orchestration-platform-vision.md`) — those two agents are being rebuilt
+on LangGraph instead. This ADR is kept for historical context only.
 
 ## Context
 
