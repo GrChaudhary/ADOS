@@ -1,22 +1,26 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { api, MOATaskResponse, ITSMAskResponse, ExecutiveCopilotAskResponse } from "@/lib/api";
 import { useHasToken } from "@/lib/useHasToken";
+
+// The domains backend/app/routers/moa.py accepts. Named so the <select>
+// below can narrow its string value to a real type instead of `any`.
+type MOADomain = "hr" | "it" | "finance" | "manufacturing" | "cross-domain";
 
 export function LangGraphAgentWorkspace() {
   const hasToken = useHasToken();
   const [activeTab, setActiveTab] = useState<"moa" | "itsm" | "executive">("moa");
 
   // MOA Form state
-  const [domain, setDomain] = useState<"hr" | "it" | "finance" | "manufacturing" | "cross-domain">("hr");
+  const [domain, setDomain] = useState<MOADomain>("hr");
   const [employeeName, setEmployeeName] = useState("Marcus Vance");
   const [instruction, setInstruction] = useState("Offboard employee and revoke system accesses");
   const [moaResult, setMoaResult] = useState<MOATaskResponse | null>(null);
 
   // Quick Preset Handlers
-  const handleDomainChange = (newDomain: "hr" | "it" | "finance" | "manufacturing" | "cross-domain") => {
+  const handleDomainChange = (newDomain: MOADomain) => {
     setDomain(newDomain);
     if (newDomain === "hr") {
       setEmployeeName("Marcus Vance");
@@ -48,15 +52,24 @@ export function LangGraphAgentWorkspace() {
   const [editedArgsText, setEditedArgsText] = useState<string>("");
   const [approveError, setApproveError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (moaResult?.status === "pending_approval" && moaResult.proposedAction?.arguments) {
-      setEditedArgsText(JSON.stringify(moaResult.proposedAction.arguments, null, 2));
-      setApproveError(null);
-    } else {
-      setEditedArgsText("");
-      setApproveError(null);
-    }
-  }, [moaResult]);
+  // Reset the argument editor whenever a new MOA result arrives. This was an
+  // effect, which React flags (react-hooks/set-state-in-effect) because it
+  // costs an extra render pass — the documented alternative is to adjust
+  // state during render by comparing against the last value we handled:
+  // https://react.dev/learn/you-might-not-need-an-effect
+  //
+  // Behaviour is unchanged: the old effect's dependency was [moaResult], so
+  // it fired on exactly the same condition this comparison detects.
+  const [lastHandledResult, setLastHandledResult] = useState<MOATaskResponse | null>(null);
+  if (moaResult !== lastHandledResult) {
+    setLastHandledResult(moaResult);
+    setEditedArgsText(
+      moaResult?.status === "pending_approval" && moaResult.proposedAction?.arguments
+        ? JSON.stringify(moaResult.proposedAction.arguments, null, 2)
+        : ""
+    );
+    setApproveError(null);
+  }
 
   // Mutations
   const moaTaskMutation = useMutation({
@@ -70,7 +83,7 @@ export function LangGraphAgentWorkspace() {
       setApproveError(null);
       setMoaResult(data);
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       const msg = err?.message || "Approval failed.";
       const cleanMsg = msg.replace(/^\d+\s+\/api\/backend[^\:]*:\s*/, "");
       setApproveError(cleanMsg);
@@ -175,7 +188,7 @@ export function LangGraphAgentWorkspace() {
               <label className="text-xs font-mono text-text-secondary">Domain Pod:</label>
               <select
                 value={domain}
-                onChange={(e) => handleDomainChange(e.target.value as any)}
+                onChange={(e) => handleDomainChange(e.target.value as MOADomain)}
                 className="rounded-xl border border-purple-500/40 bg-[#120b38] px-3 py-1.5 text-xs text-purple-200 font-mono outline-none focus:border-purple-400"
               >
                 <option value="hr">HR Domain Pod</option>

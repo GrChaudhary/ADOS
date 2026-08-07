@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import {
@@ -95,14 +95,20 @@ export default function CapabilityOnboardingPage() {
 
   const session = activeSessionQuery.data;
 
-  // Sync state when session changes
-  useEffect(() => {
-    if (session?.inspection_report?.tools?.length && !selectedToolName) {
-      const firstTool = session.inspection_report.tools[0];
-      setSelectedToolName(firstTool.name);
-      setCapabilityId(firstTool.name.replace(/[^a-zA-Z0-9]/g, ""));
-    }
-  }, [session, selectedToolName]);
+  // Preselect the first discovered tool once inspection results arrive.
+  // Adjusted during render rather than in an effect
+  // (react-hooks/set-state-in-effect): React re-renders immediately without
+  // committing the intermediate result, so this costs less than the extra
+  // effect pass did. https://react.dev/learn/you-might-not-need-an-effect
+  //
+  // The !selectedToolName guard is what makes this terminate, and it is the
+  // same guard the effect already used — so a user's later selection is
+  // still never overwritten.
+  const firstDiscoveredTool = session?.inspection_report?.tools?.[0];
+  if (firstDiscoveredTool && !selectedToolName) {
+    setSelectedToolName(firstDiscoveredTool.name);
+    setCapabilityId(firstDiscoveredTool.name.replace(/[^a-zA-Z0-9]/g, ""));
+  }
 
   // Mutations
   const invalidateSessions = () => {
@@ -119,7 +125,7 @@ export default function CapabilityOnboardingPage() {
       setCurrentSessionId(res.id);
       invalidateSessions();
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       setTurn1Error(err?.message || "Inspection failed.");
       invalidateSessions();
     },
@@ -131,7 +137,7 @@ export default function CapabilityOnboardingPage() {
       setTurn2Error(null);
       invalidateSessions();
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       setTurn2Error(err?.message || "Synthesis failed.");
       invalidateSessions();
     },
@@ -142,7 +148,7 @@ export default function CapabilityOnboardingPage() {
     onSuccess: () => {
       invalidateSessions();
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       if (err?.message?.includes("409")) {
         invalidateSessions();
       }
@@ -155,7 +161,7 @@ export default function CapabilityOnboardingPage() {
       setTurn4Error(null);
       invalidateSessions();
     },
-    onError: (err: any) => {
+    onError: (err: Error) => {
       const msg = err?.message || "Sandbox test failed.";
       const cleanMsg = msg.replace(/^\d+\s+\/api\/backend[^\:]*:\s*/, "");
       setTurn4Error(cleanMsg);
@@ -403,18 +409,23 @@ export default function CapabilityOnboardingPage() {
                 <div className="space-y-1.5">
                   <label className="text-xs font-mono text-text-secondary">Track Override Hint (Optional)</label>
                   <div className="flex gap-4">
-                    {[
+                    {/* Typed rather than inferred as {value: string}: without
+                        this the setTrackHint call below only compiled behind
+                        an `as any`, which meant a typo in one of these values
+                        would have silently reached the API as a bad
+                        track_hint. */}
+                    {([
                       { value: "auto", label: "Auto-detect (Recommended)" },
                       { value: "mcp_native", label: "MCP-Native (FastMCP)" },
                       { value: "openapi", label: "OpenAPI / Swagger Spec" },
-                    ].map((opt) => (
+                    ] as { value: OnboardingTrack | "auto"; label: string }[]).map((opt) => (
                       <label key={opt.value} className="flex items-center gap-2 cursor-pointer text-xs text-text-primary font-mono">
                         <input
                           type="radio"
                           name="trackHint"
                           value={opt.value}
                           checked={trackHint === opt.value}
-                          onChange={() => setTrackHint(opt.value as any)}
+                          onChange={() => setTrackHint(opt.value)}
                           className="accent-purple-500"
                         />
                         {opt.label}
