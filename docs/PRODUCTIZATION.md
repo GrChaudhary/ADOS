@@ -191,6 +191,30 @@ a hackathon never needs and a product cannot exist without.
   step, a *real ticket* appears in a *real* ServiceNow instance, and the audit
   trail records it. One real workflow proven end to end is worth more than
   four more domain pods.
+
+  **In progress 2026-08-07 — code side done, awaiting a real instance.**
+  Everything that doesn't need credentials has landed; full walkthrough in
+  [SERVICENOW_PILOT.md](SERVICENOW_PILOT.md).
+  - Found and fixed the defect that would have made this fail silently: the
+    connector posted `CapabilityCall.input` raw, but MOA sends
+    `{"employee_name", "action"}` and ServiceNow ignores unknown fields while
+    still returning 201 — so an offboarding would have created a blank ticket
+    and written SUCCEEDED to the tamper-evident audit trail. Translation now
+    lives in `integrations/connectors/servicenow_fields.py`, per capability.
+  - The three state-changing HR offboarding actions now route to ServiceNow
+    at all. Before this they had no connector but Console, so no ServiceNow
+    configuration could ever have made an offboarding touch a real system.
+    `notify_manager` deliberately stays simulated — no mail connector exists,
+    and routing it to ServiceNow would dress up a gap.
+  - `scripts/servicenow_smoke.py` drives the real Hub → policy engine →
+    connector → Table API path, then reads the record back by `sys_id`.
+    Verified end to end against a stand-in Table API server; the only
+    unproven link left is service-now.com itself.
+  - 12 new tests asserting on the actual posted body, not just status codes
+    (455 → 467 suite-wide).
+
+  **Still open:** run the smoke script against a real PDI, then drive a full
+  offboarding through `POST /moa/tasks` with real approvals.
   [In plain terms: the system has a very sophisticated brain and, so far, imaginary hands. Every action it "takes" is currently a log line saying it pretended to do the thing. Making one single real action happen against one real outside system — a real ticket in a real ticketing system — is the moment this becomes a product rather than a very good simulation of one.]
 
 ---
