@@ -1,11 +1,11 @@
 """
-Agent Registry API — dynamic agent registration backed by IBM Cloudant.
+Agent Registry API — dynamic agent registration backed by Postgres.
 
 Provides GET/POST/DELETE for the ADOS agent registry. Built-in agents
-(the original 8 Python classes) are always returned from in-memory
-definitions and cannot be deleted. Custom agents are persisted to the
-Cloudant `ados_agents` database and optionally registered on the watsonx
-Orchestrate tenant via the ibm-watsonx-orchestrate ADK.
+(the original 8 Python classes, plus the ServiceNow ITSM execution entry)
+are always returned from in-memory definitions and cannot be deleted.
+Custom agents are persisted to the `custom_agents` table
+(db/models/custom_agent.py).
 
 Endpoints:
     GET  /agents-registry          → merged list (8 built-ins + custom)
@@ -21,8 +21,11 @@ from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from knowledge.cloudant_client import cloudant_db
+from db.models.custom_agent import CustomAgentRow
+from db.session import get_db_session
 from ..auth import get_current_user
 
 router = APIRouter(tags=["agents-registry"], dependencies=[Depends(get_current_user)])
@@ -212,19 +215,19 @@ BUILTIN_AGENTS: List[AgentRegistryEntry] = [
         createdAt="2025-01-01T00:00:00+00:00",
     ),
     AgentRegistryEntry(
-        id="watsonx-itsm-agent",
+        id="servicenow-itsm-agent",
         label="ITSM Execution",
         icon="🎫",
         color="teal",
-        description="Creates and looks up real ServiceNow incident records via a dedicated watsonx Orchestrate agent (ados_itsm_agent) against a live ServiceNow instance — the real system-of-record write for CreateIncident, CreateChangeRequest, ScheduleMaintenance, and NotifyOperator capability calls (integrations/connectors/watsonx_itsm.py).",
-        model="watsonx Orchestrate Agent (groq/openai/gpt-oss-120b) — ServiceNow Table API",
+        description="Creates real ServiceNow incident/change_request records via the governed ServiceNow Table API connector (integrations/connectors/servicenow.py) — the real system-of-record write for CreateIncident, CreateChangeRequest, and ScheduleMaintenance capability calls. NotifyOperator falls through to the console connector, since ServiceNow has no equivalent table.",
+        model="ServiceNow Table API (direct REST, no agent runtime)",
         inputSchema="CapabilityCall { capability, executionSteps, targetLineId, governance }",
         outputSchema="ExecutionResult { ticket_id, status }",
         memoryRAG=False,
         targetTier="Tier 1 (Engineer Approval)",
         stage="Execution",
         isBuiltIn=True,
-        instructions="Create or look up a real ServiceNow incident record for the requested ADOS capability call. Use create_incident to open a new record with a clear short_description/description; use get_incident to look one up by number. Report back a structured RESULT trailer with the real ticket number — never invent one.",
+        instructions="Create a real ServiceNow incident/change_request record for the requested ADOS capability call, using the mapped table (integrations/connectors/servicenow.py's _CAPABILITY_TABLE) and a clear short_description/description. Report back the real ticket number — never invent one.",
         createdAt="2026-07-28T00:00:00+00:00",
     ),
 ]
@@ -299,29 +302,23 @@ STAGE_TEMPLATES = {
 }
 
 
-def _try_register_with_adk(entry: AgentRegistryEntry) -> str:
-    """
-    Best-effort registration of the agent spec on the watsonx Orchestrate tenant
-    via the ibm-watsonx-orchestrate ADK Agent class. Logs but never raises —
-    the Cloudant write is the source of truth; ADK registration is additive.
-    """
-    try:
-        from ibm_watsonx_orchestrate.agent_builder.agents.agent import Agent  # type: ignore
-
-        agent_spec = Agent(
-            name=entry.id,
-            display_name=entry.label,
-            description=entry.description,
-            instructions=entry.instructions or entry.description,
-            llm="ibm/granite-3-8b-instruct",
-            category=entry.stage,
-        )
-        spec_repr = repr(agent_spec)
-        print(f"[ADK] Agent spec constructed for '{entry.id}': {spec_repr[:120]}...")
-        return "adk_spec_built"
-    except Exception as exc:
-        print(f"[ADK] Non-fatal: could not build agent spec for '{entry.id}': {exc}")
-        return "adk_unavailable"
+def _row_to_entry(row: CustomAgentRow) -> AgentRegistryEntry:
+    return AgentRegistryEntry(
+        id=row.id,
+        label=row.label,
+        icon=row.icon,
+        color=row.color,
+        description=row.description,
+        model=row.model,
+        inputSchema=row.input_schema,
+        outputSchema=row.output_schema,
+        memoryRAG=row.memory_rag,
+        targetTier=row.target_tier,
+        stage=row.stage,
+        isBuiltIn=False,
+        instructions=row.instructions,
+        createdAt=row.created_at,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -329,23 +326,13 @@ def _try_register_with_adk(entry: AgentRegistryEntry) -> str:
 # ---------------------------------------------------------------------------
 
 @router.get("/agents-registry", response_model=List[AgentRegistryEntry])
-async def list_agents_registry() -> List[AgentRegistryEntry]:
+async def list_agents_registry(session: AsyncSession = Depends(get_db_session)) -> List[AgentRegistryEntry]:
     """
     Returns all registered agents: the 8 built-ins plus any custom agents
-    stored in Cloudant ados_agents. Falls back gracefully if Cloudant is
-    not configured.
+    persisted in Postgres (db/models/custom_agent.py).
     """
-    custom_raw = cloudant_db.list_agents() if cloudant_db.is_configured() and cloudant_db._initialized else []
-    custom_agents: List[AgentRegistryEntry] = []
-    for doc in custom_raw:
-        # Strip Cloudant internal fields before parsing
-        doc.pop("_id", None)
-        doc.pop("_rev", None)
-        try:
-            custom_agents.append(AgentRegistryEntry(**doc))
-        except Exception as e:
-            print(f"[AgentRegistry] Skipping malformed agent doc: {e}")
-
+    rows = (await session.execute(select(CustomAgentRow))).scalars().all()
+    custom_agents = [_row_to_entry(row) for row in rows]
     return [*BUILTIN_AGENTS, *custom_agents]
 
 
@@ -356,13 +343,12 @@ async def get_stage_templates():
 
 
 @router.post("/agents-registry", response_model=AgentRegistryEntry, status_code=201)
-async def create_agent(body: CreateAgentRequest) -> AgentRegistryEntry:
+async def create_agent(body: CreateAgentRequest, session: AsyncSession = Depends(get_db_session)) -> AgentRegistryEntry:
     """
     Register a new custom agent:
       1. Validate the request
       2. Generate a stable agent_id slug from the label
-      3. Persist to Cloudant ados_agents
-      4. Best-effort ADK registration (non-blocking)
+      3. Persist to Postgres
     """
     # Generate a slug ID from label
     agent_id = body.label.lower().strip().replace(" ", "-").replace("_", "-")
@@ -387,22 +373,31 @@ async def create_agent(body: CreateAgentRequest) -> AgentRegistryEntry:
         instructions=body.instructions,
     )
 
-    # Persist to Cloudant
-    if cloudant_db.is_configured() and cloudant_db._initialized:
-        cloudant_db.save_agent(entry.model_dump())
-    else:
-        # In-memory only for demo without Cloudant (not persisted across restarts)
-        print(f"[AgentRegistry] Cloudant not configured — agent '{agent_id}' created in-memory only.")
+    session.add(
+        CustomAgentRow(
+            id=entry.id,
+            label=entry.label,
+            icon=entry.icon,
+            color=entry.color,
+            description=entry.description,
+            model=entry.model,
+            input_schema=entry.inputSchema,
+            output_schema=entry.outputSchema,
+            memory_rag=entry.memoryRAG,
+            target_tier=entry.targetTier,
+            stage=entry.stage,
+            instructions=entry.instructions,
+            created_at=entry.createdAt,
+        )
+    )
 
-    # ADK registration (best-effort)
-    adk_status = _try_register_with_adk(entry)
-    print(f"[AgentRegistry] Created agent '{agent_id}' | ADK: {adk_status}")
+    print(f"[AgentRegistry] Created agent '{agent_id}'")
 
     return entry
 
 
 @router.delete("/agents-registry/{agent_id}", status_code=204)
-async def delete_agent(agent_id: str) -> None:
+async def delete_agent(agent_id: str, session: AsyncSession = Depends(get_db_session)) -> None:
     """
     Delete a custom agent. Built-in agents are protected and cannot be deleted.
     Returns 204 on success, 403 for built-ins, 404 if not found.
@@ -413,9 +408,7 @@ async def delete_agent(agent_id: str) -> None:
             detail=f"Agent '{agent_id}' is a built-in agent and cannot be deleted."
         )
 
-    if not cloudant_db.is_configured() or not cloudant_db._initialized:
-        raise HTTPException(status_code=503, detail="Cloudant not available — cannot delete agents.")
-
-    deleted = cloudant_db.delete_agent(agent_id)
-    if not deleted:
+    row = await session.get(CustomAgentRow, agent_id)
+    if row is None:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+    await session.delete(row)

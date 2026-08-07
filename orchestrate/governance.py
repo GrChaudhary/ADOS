@@ -37,6 +37,22 @@ CAPABILITY_RISK_CLASS: Dict[Capability, str] = {
     Capability.CREATE_CHANGE_REQUEST: "high",
     Capability.CREATE_PURCHASE_ORDER: "high",
     Capability.CREATE_EXTERNAL_PO: "high",
+    Capability.REVOKE_BUILDING_ACCESS: "low",
+    Capability.DISABLE_IT_ACCESS: "medium",
+    Capability.STOP_PAYROLL: "high",
+    Capability.NOTIFY_MANAGER: "low",
+
+    # IT domain pod
+    Capability.NOTIFY_IT_HELPDESK: "low",
+    Capability.GRANT_JIRA_ACCESS: "medium",
+    Capability.REVOKE_AWS_ROLE: "medium",
+    Capability.DEPROVISION_CLOUD_ACCOUNT: "high",
+
+    # Finance domain pod
+    Capability.FLAG_INVOICE_DISCREPANCY: "low",
+    Capability.APPROVE_EXPENSE_REIMBURSEMENT: "medium",
+    Capability.ISSUE_VENDOR_PAYMENT_HOLD: "medium",
+    Capability.PROCESS_WIRE_TRANSFER: "high",
 }
 
 # Financial exposure bands, documentation/05_Product_Bible.md section 5.

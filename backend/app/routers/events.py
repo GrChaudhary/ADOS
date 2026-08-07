@@ -24,6 +24,6 @@ async def publish_event(envelope: EventEnvelope, request: Request):
 
 @router.get("", response_model=list[EventEnvelope])
 async def list_recent_events(
-    request: Request, incident_id: Optional[str] = None, limit: int = 100
+    request: Request, correlation_id: Optional[str] = None, limit: int = 100
 ):
-    return await request.app.state.event_bus.recent(incident_id=incident_id, limit=limit)
+    return await request.app.state.event_bus.recent(correlation_id=correlation_id, limit=limit)

@@ -25,10 +25,15 @@ class EventEnvelope(BaseModel):
         alias="eventType",
         description="Type of event (e.g., IncidentDetected, AgentCompleted)"
     )
-    incident_id: str = Field(
+    correlation_id: str = Field(
         ...,
-        alias="incidentId",
-        description="ID of the incident this event belongs to"
+        alias="correlationId",
+        description=(
+            "ID grouping every event belonging to the same unit of work — "
+            "an incident ID for today's manufacturing pipeline, but generic "
+            "so non-manufacturing domains (HR, Finance, ...) aren't forced "
+            "to have an 'incident'"
+        )
     )
     occurred_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),
@@ -41,9 +46,29 @@ class EventEnvelope(BaseModel):
         description="Layer or service component that emitted this event"
     )
     schema_version: str = Field(
-        default="1.0.0",
+        default="2.0.0",
         alias="schemaVersion",
         description="Semantic version of the payload schema"
+    )
+    trace_id: Optional[str] = Field(
+        default=None,
+        alias="traceId",
+        description=(
+            "Links one action's request to its later retry/resume across an "
+            "async approval boundary. Unpopulated until the async approval/"
+            "retry workflow (vision doc Section 5.4) exists to need it — no "
+            "producer sets this today."
+        )
+    )
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        alias="idempotencyKey",
+        description=(
+            "Lets a consumer recognize a republished/retried event as the "
+            "same logical occurrence rather than a new one. Unpopulated "
+            "until a producer actually retries a publish — no producer "
+            "does that today."
+        )
     )
     payload: Dict[str, Any] = Field(
         default_factory=dict,

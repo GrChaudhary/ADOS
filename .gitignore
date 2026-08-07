@@ -4,6 +4,27 @@
 !.env.example
 Blueprints/apikey.json
 data*orchestrate.json
+ADOS_OBSIDIAN/Demo Account Credentials.md
+
+# Local MCP server config (obsidian-local-rest-api's API key) — machine-
+# specific (points at 127.0.0.1) and carries a live secret, not shareable.
+.mcp.json
+
+# Vault MCP Connector (Obsidian plugin) — data.json holds live local MCP
+# server tokens (localServerMcpToken/localServerSyncToken); data/ is its
+# runtime state dir. .obsidian/ itself is intentionally tracked (app.json,
+# workspace.json, community-plugins.json), so these need an explicit carve-out.
+ADOS_OBSIDIAN/.obsidian/plugins/vault-mcp-connector/data.json
+ADOS_OBSIDIAN/.obsidian/plugins/vault-mcp-connector/data/
+
+# Local REST API with MCP (Obsidian plugin) — data.json holds a live API
+# key plus the full RSA private key/cert for its REST+MCP TLS server.
+ADOS_OBSIDIAN/.obsidian/plugins/obsidian-local-rest-api/data.json
+
+# Generated Obsidian projection notes — rebuilt on demand from Postgres by
+# orchestrate/obsidian/reconciler.py (POST /governance/obsidian-projection/sync)
+# and written live by the projection listener. Build output, not source.
+ADOS_OBSIDIAN/Platform_Graph/
 
 # Python
 .venv/

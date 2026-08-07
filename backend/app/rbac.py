@@ -40,10 +40,10 @@ class Role(str, Enum):
 
 
 class User(BaseModel):
-    """A row of the ados_users store (knowledge/cloudant_client.py's
-    save_user/get_user_by_username, wrapped by backend/app/user_store.py).
-    Never carries password_hash past user_store.py — that field is
-    verified there and dropped before this model is built."""
+    """A row of the users table (db/models/users.py, wrapped by
+    backend/app/user_store.py). Never carries password_hash past
+    user_store.py — that field is verified there and dropped before this
+    model is built."""
 
     model_config = ConfigDict(populate_by_name=True)
 

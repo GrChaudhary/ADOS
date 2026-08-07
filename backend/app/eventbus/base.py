@@ -11,15 +11,23 @@ from contracts import EventEnvelope
 
 
 class EventBus(abc.ABC):
+    async def start(self) -> None:
+        """Called once at app startup, before first use. No-op by default
+        — only backends with an async connection/consumer lifecycle to
+        establish (KafkaEventBus) need to override this."""
+
+    async def aclose(self) -> None:
+        """Called once at app shutdown. No-op by default — see start()."""
+
     @abc.abstractmethod
     async def publish(self, envelope: EventEnvelope) -> None:
-        """Publish an event. Producers set incident_id on every event from
+        """Publish an event. Producers set correlation_id on every event from
         Detected onward per docs/010-api-contracts.md, so incidents stay
         replayable from the log alone."""
 
     @abc.abstractmethod
     async def recent(
-        self, incident_id: Optional[str] = None, limit: int = 100
+        self, correlation_id: Optional[str] = None, limit: int = 100
     ) -> List[EventEnvelope]:
         """Return the most recent published events, optionally filtered by
         incident. Intended for debugging/demo and simple polling

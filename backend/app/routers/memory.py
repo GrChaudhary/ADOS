@@ -3,7 +3,7 @@ Decision Memory router (backend/app/routers/memory.py).
 Provides REST endpoints for searching and managing historical IncidentRecord audit trails.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from contracts import IncidentRecord, DecisionMemoryQuery, DecisionMemorySearchResult
 from knowledge import DecisionMemoryIndex
 
@@ -11,9 +11,10 @@ from ..auth import get_current_user
 
 router = APIRouter(prefix="/memory", tags=["Decision Memory"], dependencies=[Depends(get_current_user)])
 
-from knowledge.cloudant_client import cloudant_db
-
-# In-memory store singleton for Decision Memory REST API
+# In-memory store singleton for Decision Memory REST API — topped up at
+# startup from Postgres via hydrate_from_db() (backend/app/main.py's
+# lifespan), on top of the static seed every DecisionMemoryIndex()
+# construction gets by default.
 _MEMORY_INDEX = DecisionMemoryIndex()
 
 
@@ -36,15 +37,16 @@ async def search_decision_memory(query: DecisionMemoryQuery):
 
 
 @router.get("/records/{incident_id}", response_model=IncidentRecord)
-async def get_memory_record(incident_id: str):
+async def get_memory_record(incident_id: str, request: Request):
     """
-    Fetch a specific historical incident audit record by its unique ID.
+    Fetch a specific historical incident audit record by its unique ID —
+    checks the real Postgres-backed audit trail first (orchestrate/
+    audit_trail.py, via app.state.orchestrator), falling back to this
+    router's in-memory search index for anything only ever added there.
     """
-    if cloudant_db.is_configured():
-        doc = cloudant_db.get_incident(incident_id)
-        if doc:
-            clean_d = {k: v for k, v in doc.items() if not k.startswith("_")}
-            return IncidentRecord.model_validate(clean_d)
+    record = request.app.state.orchestrator.audit_trail.get(incident_id)
+    if record is not None:
+        return record
 
     idx = get_memory_index()
     query = DecisionMemoryQuery(limit=100)
@@ -61,12 +63,14 @@ async def get_memory_record(incident_id: str):
 
 
 @router.post("/records", response_model=IncidentRecord, status_code=status.HTTP_201_CREATED)
-async def create_memory_record(record: IncidentRecord):
+async def create_memory_record(record: IncidentRecord, request: Request):
     """
-    Persists a new incident audit trail record into Decision Memory & Cloudant.
+    Persists a new incident audit trail record into Decision Memory & the
+    real audit trail (orchestrate/audit_trail.py) — so a manually
+    backfilled record survives a restart too, not just this process's
+    in-memory search index.
     """
-    if cloudant_db.is_configured():
-        cloudant_db.save_incident(record.model_dump(by_alias=True))
+    await request.app.state.orchestrator.audit_trail.append(record)
 
     idx = get_memory_index()
     idx.add_record(record)

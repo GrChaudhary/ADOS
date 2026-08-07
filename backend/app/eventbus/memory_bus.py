@@ -27,11 +27,11 @@ class InMemoryEventBus(EventBus):
             await queue.put(envelope)
 
     async def recent(
-        self, incident_id: Optional[str] = None, limit: int = 100
+        self, correlation_id: Optional[str] = None, limit: int = 100
     ) -> List[EventEnvelope]:
         events = self._history
-        if incident_id is not None:
-            events = [e for e in events if e.incident_id == incident_id]
+        if correlation_id is not None:
+            events = [e for e in events if e.correlation_id == correlation_id]
         return events[-limit:]
 
     async def stream(self) -> AsyncIterator[EventEnvelope]:

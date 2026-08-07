@@ -6,11 +6,12 @@ Provides structured & similarity search over historical IncidentRecords for Phas
 from typing import List, Optional
 from contracts import IncidentRecord, DecisionMemoryQuery, DecisionMemorySearchResult
 
-# Deliberately not a module-level import: knowledge/__init__.py imports this
-# module directly, and cloudant_client.py transitively imports back into
-# knowledge/agents/orchestrate — a module-level import here reintroduces
-# that circular import. Deferred the same way __init__ already defers
-# executive.seed_data below.
+# executive.seed_data is deliberately not a module-level import here:
+# knowledge/__init__.py imports this module directly, and
+# executive.seed_data transitively imports back into knowledge/agents/
+# orchestrate — a module-level import here would reintroduce that
+# circular import. Deferred, same reasoning as hydrate_from_db()'s own
+# deferred imports below.
 
 
 class DecisionMemoryIndex:
@@ -31,54 +32,66 @@ class DecisionMemoryIndex:
 
     def search(self, query: DecisionMemoryQuery) -> DecisionMemorySearchResult:
         """
-        Searches real plant history in Cloudant first (the same store
-        backend/app/routers/memory.py's /memory/search uses for the
-        Knowledge tab, and that every resolved incident is automatically
-        saved to — orchestrate/orchestrator.py's _finalize), falling back
-        to the static seed set only when Cloudant isn't configured or has
-        no matches yet. This is also what agents/sdk/memory_rag.py's
-        DecisionMemoryRAG calls for Causal Isolation's precedent search, so
-        that reasoning now draws on the plant's actual incident history
-        instead of being permanently frozen on the seed data.
+        Searches this process's in-memory incident history — seeded from
+        executive/seed_data.py's static seed at construction, and (for the
+        real backend/app/routers/memory.py singleton) topped up at startup
+        with every incident persisted in Postgres via hydrate_from_db()
+        (backend/app/main.py's lifespan). This is also what
+        agents/sdk/memory_rag.py's DecisionMemoryRAG calls for Causal
+        Isolation's precedent search.
         """
-        from knowledge.cloudant_client import cloudant_db
-
-        if cloudant_db.is_configured():
-            cloudant_result = self._search_cloudant(query)
-            if cloudant_result is not None:
-                return cloudant_result
-
         return self._search_local(query)
 
-    def _search_cloudant(self, query: DecisionMemoryQuery) -> Optional[DecisionMemorySearchResult]:
-        """Mirrors memory.py's prior inline Cloudant search exactly (same
-        selector fields, same flat 0.95 relevance score) so pulling it in
-        here doesn't change what the Knowledge tab already returns —
-        it just gives Causal Isolation's RAG the same real data path.
-        Returns None (not an empty result) on zero matches so the caller
-        falls through to the seed data instead of treating "nothing in
-        Cloudant yet" as "no precedents exist"."""
-        from knowledge.cloudant_client import cloudant_db
+    async def hydrate_from_db(self, session_factory) -> int:
+        """Loads every persisted incident from Postgres directly, not via
+        orchestrate/audit_trail.py's AuditTrail — this module can't import
+        from orchestrate/ without reintroducing the circular import
+        (knowledge/__init__.py -> orchestrate/__init__.py -> agent_runner
+        -> knowledge/__init__.py) the top of this file already avoids by
+        deferring its Cloudant/executive imports. Called explicitly from
+        backend/app/main.py's lifespan, same opt-in convention as
+        AuditTrail.hydrate_from_db() — never implicit from __init__."""
+        from sqlalchemy import select
 
-        search_text = query.defect_type or query.condition_id or query.line_id or query.plant_id or ""
-        docs = cloudant_db.search_incidents(search_text, limit=query.limit or 50)
+        from contracts import Capability, CallStatus, CausalChainEntry, PolicyTier
+        from db.models.incident import IncidentRow
 
-        records: List[IncidentRecord] = []
-        for d in docs:
+        async with session_factory() as session:
+            rows = (await session.execute(select(IncidentRow))).scalars().all()
+
+        loaded = 0
+        for row in rows:
             try:
-                clean_d = {k: v for k, v in d.items() if not k.startswith("_")}
-                records.append(IncidentRecord.model_validate(clean_d))
-            except Exception:
-                pass
-
-        if not records:
-            return None
-
-        return DecisionMemorySearchResult(
-            total_matches=len(records),
-            records=records,
-            relevance_scores=[0.95] * len(records),
-        )
+                self._records.append(
+                    IncidentRecord(
+                        incident_id=row.incident_id,
+                        plant_id=row.plant_id,
+                        line_id=row.line_id,
+                        detected_at=row.detected_at,
+                        resolved_at=row.resolved_at,
+                        final_state=row.final_state,
+                        causal_chain=[CausalChainEntry.model_validate(c) for c in row.causal_chain],
+                        confidence=row.confidence,
+                        alternatives=row.alternatives,
+                        policy_tier=PolicyTier(row.policy_tier),
+                        approved_by=row.approved_by,
+                        recommendation_accepted=row.recommendation_accepted,
+                        capability_invoked=Capability(row.capability_invoked) if row.capability_invoked else None,
+                        capability_status=CallStatus(row.capability_status) if row.capability_status else None,
+                        supplier_id=row.supplier_id,
+                        execution_steps=row.execution_steps,
+                        target_line_id=row.target_line_id,
+                        estimated_cost_usd=row.estimated_cost_usd,
+                        actual_cost_usd=row.actual_cost_usd,
+                        estimated_downtime_min=row.estimated_downtime_min,
+                        actual_downtime_min=row.actual_downtime_min,
+                        created_at=row.created_at,
+                    )
+                )
+                loaded += 1
+            except Exception as e:
+                print(f"[DecisionMemoryIndex] Skipping malformed incident row {row.incident_id}: {e}")
+        return loaded
 
     def _search_local(self, query: DecisionMemoryQuery) -> DecisionMemorySearchResult:
         """

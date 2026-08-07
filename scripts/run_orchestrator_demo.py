@@ -73,7 +73,7 @@ async def run_demo():
     print(f"[INCIDENT] Capability invoked: {record.capability_invoked} -> {record.capability_status}")
     print(f"[INCIDENT] Cost: ${record.actual_cost_usd} | Downtime: {record.actual_downtime_min} min")
 
-    events = await bus.recent(incident_id=record.incident_id)
+    events = await bus.recent(correlation_id=record.incident_id)
 
     completed = next((e for e in events if e.event_type == "CapabilityInvocationCompleted"), None)
     if completed:

@@ -13,7 +13,7 @@ from knowledge.nlu_client import nlu_client
 class CausalIsolationAgent(BaseAgent):
     """
     Queries Causal Graph for ranked root causes and cross-references Knowledge Graph,
-    IBM watsonx.ai Granite LLM reasoning, and Decision Memory RAG precedents.
+    knowledge/local_llm_client.py's multi-provider LLM reasoning, and Decision Memory RAG precedents.
     """
 
     def __init__(

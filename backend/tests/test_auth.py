@@ -1,9 +1,9 @@
 """
 Login + session identity — backend/app/routers/auth.py,
-backend/app/rbac.py. Runs against user_store's in-memory fallback (no
-Cloudant configured in the test process — see root conftest.py), using a
-dedicated test account created fresh per test rather than the randomly
--passworded seeded demo accounts (backend/app/user_store.py's
+backend/app/rbac.py. Runs against user_store's real Postgres-backed store
+(backend/tests/conftest.py truncates the users table before every test),
+using a dedicated test account created fresh per test rather than the
+randomly-passworded seeded demo accounts (backend/app/user_store.py's
 bootstrap_users() generates those passwords at runtime; nothing captures
 them for tests to log in as).
 """
@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from backend.app import user_store
 from backend.app.main import app
 from backend.app.rbac import Role, User, create_access_token
+from db.engine import async_session_factory
 
 
 @pytest.fixture
@@ -23,14 +24,18 @@ def client():
 
 
 @pytest.fixture
-def known_user():
-    return user_store.create_user(
-        username="test-login-user",
-        password="correct-horse-battery-staple",
-        display_name="Test Login User",
-        role=Role.MANAGER,
-        approval_limit_usd=100_000.0,
-    )
+async def known_user():
+    async with async_session_factory() as session:
+        user = await user_store.create_user(
+            session,
+            username="test-login-user",
+            password="correct-horse-battery-staple",
+            display_name="Test Login User",
+            role=Role.MANAGER,
+            approval_limit_usd=100_000.0,
+        )
+        await session.commit()
+    return user
 
 
 def test_login_success(client, known_user):

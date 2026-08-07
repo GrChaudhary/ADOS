@@ -1,0 +1,56 @@
+# Local Postgres for development and tests — see infrastructure/README.md.
+# Redis (event bus) is intentionally not here: EVENT_BUS_BACKEND defaults
+# to "memory" and standing up Redis locally is a separate, existing
+# concern (.env.example's EVENT_BUS_URL), untouched by this.
+#
+# Kafka (event bus, EVENT_BUS_BACKEND=kafka) IS here — real Apache Kafka,
+# KRaft mode (no ZooKeeper — removed from Kafka itself since 3.3+),
+# single combined broker+controller node, Apache 2.0. See
+# infrastructure/EVENT_BUS_COMPARISON.md for why this was adopted despite
+# that doc's original "not needed yet" verdict — decision reversed
+# 2026-08-04.
+#
+# Bring up:      docker compose up -d postgres kafka
+# Apply schema:  ./.venv/bin/alembic upgrade head
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ados
+      POSTGRES_PASSWORD: ados
+      POSTGRES_DB: ados
+    ports:
+      - "5432:5432"
+    volumes:
+      - ados_postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ados"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  kafka:
+    image: apache/kafka:3.9.0
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,PLAINTEXT_HOST://:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      CLUSTER_ID: ados-kafka-kraft-cluster-1
+    volumes:
+      - ados_kafka_data:/var/lib/kafka/data
+
+volumes:
+  ados_postgres_data:
+  ados_kafka_data:

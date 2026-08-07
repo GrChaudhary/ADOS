@@ -29,3 +29,29 @@ class IncidentDetectedPayload(BaseModel):
     severity: str = Field(default="HIGH", alias="severity")
     telemetry: Dict[str, Any] = Field(default_factory=dict)
     vision_data: Optional[Dict[str, Any]] = Field(default=None, alias="visionData")
+
+
+class PendingApprovalPayload(BaseModel):
+    """Payload for PendingApproval events published to governance.pending_approval topic."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    task_id: str = Field(..., alias="taskId")
+    domain: str = Field(default="hr")
+    action_key: str = Field(..., alias="actionKey")
+    capability: str
+    policy_tier: int = Field(..., alias="policyTier")
+    estimated_cost_usd: float = Field(..., alias="estimatedCostUsd")
+    summary: str
+    timestamp: str
+
+
+class ApprovalDecisionPayload(BaseModel):
+    """Payload for ApprovalDecision events when a human signs off or rejects."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    task_id: str = Field(..., alias="taskId")
+    decision: str = Field(..., description="'approved' | 'rejected'")
+    approved_by: Optional[str] = Field(default=None, alias="approvedBy")
+    role: Optional[str] = Field(default=None)
+    timestamp: str
+

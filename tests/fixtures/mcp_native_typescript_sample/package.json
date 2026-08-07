@@ -1,0 +1,11 @@
+{
+	"name": "mcp-typescript-sample",
+	"version": "0.0.1",
+	"description": "Fixture mirroring a real MCP server (tmcp-based, not fastmcp/@modelcontextprotocol/sdk) for orchestrate/onboarding/inspector.py's tests",
+	"keywords": ["ai", "mcp", "model-context-protocol"],
+	"mcpName": "io.github.example/mcp-typescript-sample",
+	"dependencies": {
+		"tmcp": "^1.19.4"
+	},
+	"main": "dist/index.js"
+}

@@ -1,0 +1,26 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "Sample Ticketing API", "version": "1.0.0"},
+  "paths": {
+    "/tickets/{ticket_id}": {
+      "get": {
+        "operationId": "read_ticket",
+        "summary": "Fetch a support ticket by id",
+        "parameters": [
+          {"name": "ticket_id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "OK"}}
+      }
+    },
+    "/tickets": {
+      "post": {
+        "operationId": "create_ticket",
+        "summary": "Create a new support ticket",
+        "requestBody": {
+          "content": {"application/json": {"schema": {"type": "object", "properties": {"subject": {"type": "string"}}}}}
+        },
+        "responses": {"201": {"description": "Created"}}
+      }
+    }
+  }
+}

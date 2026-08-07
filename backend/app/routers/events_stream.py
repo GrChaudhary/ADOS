@@ -22,7 +22,7 @@ router = APIRouter(prefix="/events", tags=["events"])
 async def stream_events(
     request: Request,
     token: str = Query(...),
-    incident_id: Optional[str] = Query(None),
+    correlation_id: Optional[str] = Query(None),
     max_events: Optional[int] = Query(None),
 ):
     # Raises 401 itself (invalid/expired) - same as get_current_user().
@@ -37,18 +37,38 @@ async def stream_events(
                 return
 
             stream_iter = request.app.state.event_bus.stream().__aiter__()
+
+            # Pump the bus's generator into a local queue from a background
+            # task, and poll *that* queue with a timeout instead of the bus
+            # generator directly. asyncio.Queue.get() is safe to cancel — a
+            # timed-out wait_for() just leaves it unconsumed. The bus
+            # generator's own get() (inside InMemoryEventBus.stream()) is
+            # NOT safe to cancel this way: it has a try/finally that
+            # deregisters the subscriber, so cancelling it on every 0.5s
+            # timeout (the common case when traffic is quiet) permanently
+            # kills and unsubscribes the generator after the first tick —
+            # every subsequent __anext__() then raises StopAsyncIteration
+            # immediately, which looked like "stream ends right after the
+            # ping." Isolating the timeout to the local queue keeps the bus
+            # generator's own await from ever being cancelled during normal
+            # operation.
+            local_queue: asyncio.Queue = asyncio.Queue()
+
+            async def _pump():
+                async for envelope in stream_iter:
+                    await local_queue.put(envelope)
+
+            pump_task = asyncio.create_task(_pump())
             try:
                 while True:
                     if await request.is_disconnected():
                         break
                     try:
-                        envelope = await asyncio.wait_for(stream_iter.__anext__(), timeout=0.5)
+                        envelope = await asyncio.wait_for(local_queue.get(), timeout=0.5)
                     except asyncio.TimeoutError:
                         continue
-                    except StopAsyncIteration:
-                        break
 
-                    if incident_id is not None and envelope.incident_id != incident_id:
+                    if correlation_id is not None and envelope.correlation_id != correlation_id:
                         continue
 
                     yield f"data: {envelope.model_dump_json(by_alias=True)}\n\n"
@@ -60,6 +80,11 @@ async def stream_events(
                 # immediately on disconnect/return — without this, InMemoryEventBus
                 # keeps publishing to it forever, relying on GC finalization of
                 # the abandoned async generator to ever unsubscribe (unreliable).
+                pump_task.cancel()
+                try:
+                    await pump_task
+                except asyncio.CancelledError:
+                    pass
                 await stream_iter.aclose()
         except asyncio.CancelledError:
             pass

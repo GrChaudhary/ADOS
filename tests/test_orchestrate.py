@@ -151,7 +151,7 @@ async def test_orchestrator_resolves_with_tier1_approval():
     assert len(record.causal_chain) > 0
     assert len(record.alternatives) >= 1
 
-    events = await bus.recent(incident_id=record.incident_id)
+    events = await bus.recent(correlation_id=record.incident_id)
     assert "StageRequested" in [e.event_type for e in events]
     assert "AgentCompleted" in [e.event_type for e in events]
     assert "CapabilityInvocationStarted" in [e.event_type for e in events]
@@ -189,7 +189,7 @@ async def test_orchestrator_publishes_execution_checklist_events():
     record = await asyncio.wait_for(run_task, timeout=5)
     await approver_task
 
-    events = await bus.recent(incident_id=record.incident_id)
+    events = await bus.recent(correlation_id=record.incident_id)
     started = next(e for e in events if e.event_type == "CapabilityInvocationStarted")
     completed = next(e for e in events if e.event_type == "CapabilityInvocationCompleted")
 
@@ -343,41 +343,32 @@ async def test_preempted_incident_auto_resumes_under_same_incident_id():
 
 
 @pytest.mark.asyncio
-async def test_watsonx_itsm_capability_publishes_agent_completed_event(monkeypatch):
+async def test_servicenow_itsm_capability_publishes_agent_completed_event(monkeypatch):
     """orchestrator.py additionally publishes an AgentCompleted event
-    (agent_id="watsonx-itsm-agent") whenever the watsonx_itsm connector
+    (agent_id="servicenow-itsm-agent") whenever the servicenow connector
     fulfills a capability call, so backend/app/routers/agents_registry.py's
-    watsonx-itsm-agent entry shows real invocation stats/lineage on
+    servicenow-itsm-agent entry shows real invocation stats/lineage on
     frontend-next/src/app/agents/network/page.tsx's Live Swarm tab instead
     of always reading zero invocations - see the comment at orchestrator.py's
-    publish site. Uses httpx.MockTransport like tests/test_itsm_connector.py
-    - no live network calls."""
+    publish site. Uses httpx.MockTransport - no live network calls."""
     import httpx
 
-    from integrations.connectors.cloudant import CloudantConnector
     from integrations.connectors.console import ConsoleConnector
     from integrations.connectors.marketplace import MarketplaceConnector
     from integrations.connectors.sap import SAPConnector
     from integrations.connectors.servicenow import ServiceNowConnector
-    from integrations.connectors.watsonx_itsm import WatsonxITSMConnector
     from integrations.hub import IntegrationHub
 
-    monkeypatch.setenv("WO_INSTANCE", "https://api.example.watson-orchestrate.cloud.ibm.com/instances/x")
-    monkeypatch.setenv("WO_API_KEY", "test-key")
-    monkeypatch.setenv("WO_ITSM_INTEGRATION_ENABLED", "true")
-    monkeypatch.setenv("WO_ITSM_LIVE_WRITES_ENABLED", "true")
+    monkeypatch.setenv("SERVICENOW_INSTANCE_URL", "https://example.service-now.com")
+    monkeypatch.setenv("SERVICENOW_USERNAME", "test-user")
+    monkeypatch.setenv("SERVICENOW_PASSWORD", "test-pass")
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if "iam.cloud.ibm.com" in str(request.url):
-            return httpx.Response(200, json={"access_token": "fake-iam-token"})
-        content = 'RESULT: {"status": "created", "ticket_id": "INC-TEST-9001", "reason": null}'
-        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+        return httpx.Response(200, json={"result": {"sys_id": "abc123", "ticket_id": "INC-TEST-9001"}})
 
     hub = IntegrationHub()
-    hub.registry.register(CloudantConnector())
-    hub.registry.register(WatsonxITSMConnector(transport=httpx.MockTransport(handler)))
+    hub.registry.register(ServiceNowConnector(transport=httpx.MockTransport(handler)))
     hub.registry.register(MarketplaceConnector())
-    hub.registry.register(ServiceNowConnector())
     hub.registry.register(SAPConnector())
     hub.registry.register(ConsoleConnector())
 
@@ -409,13 +400,13 @@ async def test_watsonx_itsm_capability_publishes_agent_completed_event(monkeypat
     assert record.capability_invoked == Capability.SCHEDULE_MAINTENANCE
     assert record.capability_status == CallStatus.SUCCEEDED
 
-    events = await bus.recent(incident_id=record.incident_id)
+    events = await bus.recent(correlation_id=record.incident_id)
     completed = next(e for e in events if e.event_type == "CapabilityInvocationCompleted")
-    assert completed.payload["connector"] == "watsonx_itsm"
+    assert completed.payload["connector"] == "servicenow"
 
     agent_completed = [
         e for e in events
-        if e.event_type == "AgentCompleted" and e.payload.get("agentId") == "watsonx-itsm-agent"
+        if e.event_type == "AgentCompleted" and e.payload.get("agentId") == "servicenow-itsm-agent"
     ]
     assert len(agent_completed) == 1
     assert agent_completed[0].payload["result"]["ticket_id"] == "INC-TEST-9001"

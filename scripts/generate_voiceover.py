@@ -45,7 +45,7 @@ SCENE_VOICEOVERS = {
     ),
     "voice_final_scene5": (
         "Unlike decision support demos that stop at recommendations, ADOS actually executes. "
-        "Upon approval, a dedicated watsonx Orchestrate agent triggers live Table API calls to create a genuine ServiceNow incident and change request, "
+        "Upon approval, the governed ServiceNow connector triggers live Table API calls to create a genuine ServiceNow incident and change request, "
         "while reserving SAP replacement inventory in real time."
     ),
     "voice_final_scene6": (

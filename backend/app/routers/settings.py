@@ -2,8 +2,11 @@
 LLM provider settings — self-service replacement for hand-editing .env for
 NEMOTRON_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY (knowledge/local_llm_client.py).
 One shared key per provider for the whole deployment (not per-user),
-admin-managed, stored in Cloudant so it survives restarts and takes effect
-immediately (no server restart, no redeploy).
+admin-managed, stored in Postgres (db/models/llm_provider_setting.py) so
+it survives restarts and takes effect immediately (no server restart, no
+redeploy) — see knowledge/local_llm_client.py's hydrate_settings_cache()
+for how a write here becomes visible to the (synchronous) generation
+code path.
 
 Endpoints:
     GET    /settings/llm-providers                → status for all 4 backends (masked keys)
@@ -15,17 +18,35 @@ Endpoints:
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from knowledge.cloudant_client import cloudant_db
+from db.models.llm_provider_setting import LLMProviderSettingRow
+from db.session import get_db_session
 from knowledge.local_llm_client import KEY_PROVIDERS, local_llm_client
 from ..auth import get_current_user
 from ..rbac import Role, require_role
 
 router = APIRouter(prefix="/settings", tags=["settings"], dependencies=[Depends(get_current_user)])
+
+
+async def load_all_provider_settings(session: AsyncSession) -> Dict[str, Dict[str, str]]:
+    """Shapes every persisted row into the {provider: {"apiKey":...,
+    "model":...}} dict knowledge/local_llm_client.py's _cfg() expects —
+    called after every save/delete below, and once at startup
+    (backend/app/main.py's lifespan)."""
+    rows = (await session.execute(select(LLMProviderSettingRow))).scalars().all()
+    result: Dict[str, Dict[str, str]] = {}
+    for row in rows:
+        fields = {"apiKey": row.api_key}
+        if row.model:
+            fields["model"] = row.model
+        result[row.provider] = fields
+    return result
 
 
 class SaveProviderKeyRequest(BaseModel):
@@ -63,26 +84,28 @@ async def list_llm_providers():
 
 
 @router.put("/llm-providers/{provider}", dependencies=[Depends(require_role(Role.ADMIN))])
-async def save_llm_provider(provider: str, body: SaveProviderKeyRequest):
+async def save_llm_provider(provider: str, body: SaveProviderKeyRequest, session: AsyncSession = Depends(get_db_session)):
     _validate_provider(provider)
-    if not cloudant_db.is_configured():
-        raise HTTPException(
-            status_code=503,
-            detail="Cloudant not configured — saved keys wouldn't survive a restart. Set CLOUDANT_URL/CLOUDANT_API_KEY first, or set the key directly in .env.",
-        )
-    fields = {"apiKey": body.api_key}
-    if body.model:
-        fields["model"] = body.model
-    cloudant_db.save_llm_provider_setting(provider, fields)
-    local_llm_client.refresh_settings_cache()
+    row = await session.get(LLMProviderSettingRow, provider)
+    if row is None:
+        session.add(LLMProviderSettingRow(provider=provider, api_key=body.api_key, model=body.model))
+    else:
+        row.api_key = body.api_key
+        if body.model:
+            row.model = body.model
+    await session.flush()
+    local_llm_client.hydrate_settings_cache(await load_all_provider_settings(session))
     return local_llm_client.get_provider_status(provider)
 
 
 @router.delete("/llm-providers/{provider}", dependencies=[Depends(require_role(Role.ADMIN))])
-async def delete_llm_provider(provider: str):
+async def delete_llm_provider(provider: str, session: AsyncSession = Depends(get_db_session)):
     _validate_provider(provider)
-    cloudant_db.delete_llm_provider_setting(provider)
-    local_llm_client.refresh_settings_cache()
+    row = await session.get(LLMProviderSettingRow, provider)
+    if row is not None:
+        await session.delete(row)
+        await session.flush()
+    local_llm_client.hydrate_settings_cache(await load_all_provider_settings(session))
     return local_llm_client.get_provider_status(provider)
 
 

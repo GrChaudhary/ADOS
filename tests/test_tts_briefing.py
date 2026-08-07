@@ -2,7 +2,7 @@
 TTS incident-briefing wiring — orchestrate/orchestrator.py's _finalize().
 All Watson TTS access is monkeypatched on the module-level `tts_client`
 singleton; no live network calls, matching the discipline in
-tests/test_itsm_connector.py and tests/test_audit_trail_cloudant.py.
+tests/test_itsm_connector.py.
 """
 
 import asyncio

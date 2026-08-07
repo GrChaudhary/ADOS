@@ -14,6 +14,7 @@ from contracts import Capability, CallStatus, CapabilityCall, GovernanceInfo, Po
 from integrations.connectors.sap import SAPConnector
 from integrations.connectors.servicenow import ServiceNowConnector
 from integrations.hub import IntegrationHub
+from integrations.capability_manifest import CapabilityManifestRegistry, RiskProfileEntry
 from integrations.capability_registry import CapabilityRegistry
 from integrations.connectors.console import ConsoleConnector
 from integrations.policy_engine import ConnectorPolicyEngine
@@ -149,3 +150,50 @@ async def test_default_hub_still_resolves_notify_operator_to_console():
     response = await hub.invoke(_call(Capability.NOTIFY_OPERATOR, message="hello"))
     assert response.status == CallStatus.SUCCEEDED
     assert response.connector == "console"
+
+
+@pytest.mark.asyncio
+async def test_hub_blocks_invocation_of_a_hot_disabled_capability():
+    """§8.7 capability-level circuit breaker, enforced end to end through
+    IntegrationHub.invoke() — pulling a capability at the manifest layer
+    blocks it before any connector runs, without touching connector
+    registration."""
+    hub = IntegrationHub()
+    hub.registry.register(ConsoleConnector())
+
+    await hub.manifests.propose(
+        Capability.NOTIFY_OPERATOR.value,
+        domain="ops",
+        version="1.0.0",
+        source="built-in",
+        risk_profile=[RiskProfileEntry(action="notify", tier=PolicyTier.AUTONOMOUS, reasoning="read-only notification")],
+        proposed_by="onboarding-agent",
+    )
+    await hub.manifests.record_sandbox_evidence(Capability.NOTIFY_OPERATOR.value, "ran ok", actor="onboarding-agent")
+    await hub.manifests.activate(Capability.NOTIFY_OPERATOR.value, actor="admin-1", reason="approved")
+    await hub.manifests.hot_disable(Capability.NOTIFY_OPERATOR.value, actor="admin-1", reason="spamming operators in prod")
+
+    response = await hub.invoke(_call(Capability.NOTIFY_OPERATOR, message="hello"))
+    assert response.status == CallStatus.FAILED
+    assert "hot-disabled" in response.error
+
+
+@pytest.mark.asyncio
+async def test_hub_unaffected_by_manifests_for_other_capabilities():
+    hub = IntegrationHub()
+    hub.registry.register(ConsoleConnector())
+
+    await hub.manifests.propose(
+        Capability.CREATE_PURCHASE_ORDER.value,
+        domain="finance",
+        version="1.0.0",
+        source="built-in",
+        risk_profile=[RiskProfileEntry(action="create_po", tier=PolicyTier.APPROVAL_REQUIRED, reasoning="spends money")],
+        proposed_by="onboarding-agent",
+    )
+    await hub.manifests.record_sandbox_evidence(Capability.CREATE_PURCHASE_ORDER.value, "ran ok", actor="onboarding-agent")
+    await hub.manifests.activate(Capability.CREATE_PURCHASE_ORDER.value, actor="admin-1", reason="approved")
+    await hub.manifests.hot_disable(Capability.CREATE_PURCHASE_ORDER.value, actor="admin-1", reason="unrelated capability")
+
+    response = await hub.invoke(_call(Capability.NOTIFY_OPERATOR, message="hello"))
+    assert response.status == CallStatus.SUCCEEDED

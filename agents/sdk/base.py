@@ -1,6 +1,5 @@
 """
 Base Agent abstract class and SDK foundation for ADOS reasoning agents.
-Integrates with IBM watsonx Orchestrate ADK conventions.
 """
 
 import time
@@ -48,7 +47,7 @@ class BaseAgent(abc.ABC):
         # Wrap in standard event envelope
         envelope = EventEnvelope(
             event_type="AgentCompleted",
-            incident_id=context.incident_id,
+            correlation_id=context.incident_id,
             produced_by=f"agents/{self.agent_id}",
             schema_version="1.0.0",
             payload=payload.model_dump(by_alias=True)

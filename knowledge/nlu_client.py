@@ -31,9 +31,9 @@ class NLUClient:
 
     def is_configured(self) -> bool:
         # Requires the literal env var, not just settings parsed from the
-        # .env file on disk — matches knowledge/cloudant_client.py's
-        # is_configured() convention, so pipeline calls stay off in the
-        # pytest suite unless a test explicitly opts in via monkeypatch.
+        # .env file on disk — same convention every other knowledge/
+        # *_client.py is_configured() uses, so pipeline calls stay off in
+        # the pytest suite unless a test explicitly opts in via monkeypatch.
         if "NLU_API_KEY" not in os.environ or "NLU_URL" not in os.environ:
             return False
         key = os.environ.get("NLU_API_KEY") or settings.nlu_api_key

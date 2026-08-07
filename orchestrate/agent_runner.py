@@ -66,7 +66,7 @@ class AgentRunner:
 
         requested = EventEnvelope(
             event_type="StageRequested",
-            incident_id=context.incident_id,
+            correlation_id=context.incident_id,
             produced_by="orchestrate/decision-orchestrator",
             payload={"agentId": agent.agent_id, "stageName": stage_input.stage_name},
         )

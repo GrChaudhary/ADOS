@@ -1,10 +1,12 @@
 """
-User persistence for RBAC (backend/app/rbac.py). Wraps knowledge/
-cloudant_client.py's new save_user/get_user_by_username/list_users when
-Cloudant is configured, and falls back to an in-memory dict otherwise —
-same graceful-degrade convention as knowledge/nlu_client.py,
-knowledge/tts_client.py, and knowledge/local_llm_client.py: real when
-configured, honestly degraded (never fabricated) when not.
+User persistence for RBAC (backend/app/rbac.py). Postgres-backed via
+db/models/users.py, request-scoped session — db/session.py's
+get_db_session() FastAPI dependency, the pattern documented there for
+plain-CRUD routers with no long-lived singleton. Replaces the old
+Cloudant-or-in-memory graceful-degrade split: Postgres is required
+application infrastructure now (main.py's lifespan fails fast at startup
+if it's unreachable), so there's no "not configured" case left to fall
+back for.
 
 Seeded accounts mirror the 4 personas the frontend already had
 (frontend-next/src/lib/usePersona.ts) plus a new admin account for user
@@ -12,17 +14,14 @@ management, which none of the 4 covered.
 """
 
 import secrets
-import uuid
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
-from knowledge.cloudant_client import cloudant_db
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from db.models.users import UserRow
 
 from .rbac import Role, User, hash_password, verify_password
-
-# username -> user doc (includes password_hash) — only used when Cloudant
-# isn't configured. Module-level so it survives across requests within
-# one process, same lifetime as cloudant_db's in-memory client.
-_IN_MEMORY_USERS: Dict[str, Dict[str, Any]] = {}
 
 SEED_ACCOUNTS = [
     {"username": "emma", "display_name": "Emma Vance", "role": Role.MANAGER, "approval_limit_usd": 250_000.0},
@@ -30,102 +29,90 @@ SEED_ACCOUNTS = [
     {"username": "sophia", "display_name": "Sophia Vance", "role": Role.EXECUTIVE, "approval_limit_usd": 5_000_000.0},
     {"username": "auditor", "display_name": "Compliance Auditor", "role": Role.AUDITOR, "approval_limit_usd": 0.0},
     # A large finite ceiling, not float("inf") — Infinity isn't valid JSON
-    # and would break JWT/Cloudant document encoding.
+    # and would break JWT encoding.
     {"username": "admin", "display_name": "System Administrator", "role": Role.ADMIN, "approval_limit_usd": 1_000_000_000.0},
 ]
 
 
-def _doc_to_user(doc: Dict[str, Any]) -> User:
+def _row_to_user(row: UserRow) -> User:
     return User(
-        user_id=doc.get("userId") or doc.get("user_id"),
-        username=doc["username"],
-        display_name=doc.get("displayName") or doc.get("display_name"),
-        role=Role(doc["role"]),
-        approval_limit_usd=doc.get("approvalLimitUsd") if doc.get("approvalLimitUsd") is not None else doc.get("approval_limit_usd"),
-        active=doc.get("active", True),
+        user_id=str(row.user_id),
+        username=row.username,
+        display_name=row.display_name,
+        role=Role(row.role),
+        approval_limit_usd=row.approval_limit_usd,
+        active=row.active,
     )
 
 
-def _get_by_username(username: str) -> Optional[Dict[str, Any]]:
-    if cloudant_db.is_configured():
-        return cloudant_db.get_user_by_username(username)
-    return _IN_MEMORY_USERS.get(username)
+async def _get_by_username(session: AsyncSession, username: str) -> Optional[UserRow]:
+    return (await session.execute(select(UserRow).where(UserRow.username == username))).scalar_one_or_none()
 
 
-def _save(doc: Dict[str, Any]) -> None:
-    if cloudant_db.is_configured():
-        cloudant_db.save_user(doc)
-    else:
-        _IN_MEMORY_USERS[doc["username"]] = doc
+async def create_user(
+    session: AsyncSession,
+    username: str,
+    password: str,
+    display_name: str,
+    role: Role,
+    approval_limit_usd: float,
+) -> User:
+    row = UserRow(
+        username=username,
+        display_name=display_name,
+        role=role.value,
+        approval_limit_usd=approval_limit_usd,
+        password_hash=hash_password(password),
+    )
+    session.add(row)
+    await session.flush()  # populate row.user_id (Python-side default) before we read it below
+    return _row_to_user(row)
 
 
-def _list_all() -> List[Dict[str, Any]]:
-    if cloudant_db.is_configured():
-        return cloudant_db.list_users()
-    return list(_IN_MEMORY_USERS.values())
+async def username_exists(session: AsyncSession, username: str) -> bool:
+    return await _get_by_username(session, username) is not None
 
 
-def create_user(username: str, password: str, display_name: str, role: Role, approval_limit_usd: float) -> User:
-    doc = {
-        "userId": str(uuid.uuid4()),
-        "username": username,
-        "displayName": display_name,
-        "role": role.value,
-        "approvalLimitUsd": approval_limit_usd,
-        "passwordHash": hash_password(password),
-        "active": True,
-    }
-    _save(doc)
-    return _doc_to_user(doc)
-
-
-def username_exists(username: str) -> bool:
-    return _get_by_username(username) is not None
-
-
-def reset_password(username: str, new_password: str) -> bool:
-    """Updates an existing user's password in place. Deliberately not
-    create_user() called again — that mints a fresh userId every time, so
-    for the Cloudant-backed store (which upserts by _id == userId) it
-    would create a second document for the same username rather than
-    updating the original. Returns False if the username doesn't exist."""
-    doc = _get_by_username(username)
-    if doc is None:
+async def reset_password(session: AsyncSession, username: str, new_password: str) -> bool:
+    """Updates an existing user's password in place, preserving user_id —
+    returns False if the username doesn't exist."""
+    row = await _get_by_username(session, username)
+    if row is None:
         return False
-    doc = dict(doc)
-    doc["passwordHash"] = hash_password(new_password)
-    doc.pop("password_hash", None)  # legacy snake_case key, if present
-    _save(doc)
+    row.password_hash = hash_password(new_password)
     return True
 
 
-def verify_login(username: str, password: str) -> Optional[User]:
-    doc = _get_by_username(username)
-    if not doc or not doc.get("active", True):
+async def verify_login(session: AsyncSession, username: str, password: str) -> Optional[User]:
+    row = await _get_by_username(session, username)
+    if row is None or not row.active:
         return None
-    if not verify_password(password, doc.get("passwordHash") or doc.get("password_hash") or ""):
+    if not verify_password(password, row.password_hash):
         return None
-    return _doc_to_user(doc)
+    return _row_to_user(row)
 
 
-def list_users() -> List[User]:
-    return [_doc_to_user(doc) for doc in _list_all()]
+async def list_users(session: AsyncSession) -> List[User]:
+    rows = (await session.execute(select(UserRow))).scalars().all()
+    return [_row_to_user(row) for row in rows]
 
 
-def bootstrap_users() -> Optional[Dict[str, str]]:
+async def bootstrap_users(session: AsyncSession) -> Optional[Dict[str, str]]:
     """Seeds SEED_ACCOUNTS with random passwords only if the store is
     currently empty (never overwrites/resets existing accounts — an admin
     may have already changed a password). Returns the generated
     {username: password} map so main.py can print it once, or None if
     seeding was skipped because accounts already exist."""
-    if _list_all():
+    existing = (await session.execute(select(UserRow.user_id).limit(1))).first()
+    if existing is not None:
         return None
 
     generated: Dict[str, str] = {}
     for account in SEED_ACCOUNTS:
         password = secrets.token_urlsafe(9)
         generated[account["username"]] = password
-        create_user(
+        await create_user(
+            session,
             username=account["username"],
             password=password,
             display_name=account["display_name"],

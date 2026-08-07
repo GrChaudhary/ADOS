@@ -29,11 +29,12 @@ the same incident_id, up to `max_resume_attempts` times before settling
 as Preempted for good. See run_incident's docstring.
 """
 
-import asyncio
 import os
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from agents.sdk import IncidentContext, StageInput
 from contracts import (
@@ -49,7 +50,6 @@ from contracts import (
     PolicyTier,
 )
 from knowledge import CausalGraph, DigitalTwinStore, KnowledgeGraph
-from knowledge.cloudant_client import cloudant_db
 from knowledge.tts_client import tts_client
 
 from backend.app.eventbus import EventBus
@@ -72,6 +72,7 @@ class DecisionOrchestrator:
         causal_graph: Optional[CausalGraph] = None,
         digital_twin: Optional[DigitalTwinStore] = None,
         seed_records: Optional[List[IncidentRecord]] = None,
+        session_factory: Optional[async_sessionmaker] = None,
     ):
         self._bus = event_bus
         self._hub = integration_hub
@@ -82,10 +83,10 @@ class DecisionOrchestrator:
             event_bus, self.knowledge_graph, self.causal_graph, self.digital_twin
         )
         # seed_records is demo/historical data only (executive/seed_data.py,
-        # main.py's lifespan) - real Cloudant-backed incidents load
-        # separately via hydrate_from_cloudant(), additively (different
-        # incident_id namespace), not instead of this.
-        self.audit_trail = AuditTrail(seed_records=seed_records)
+        # main.py's lifespan) - real Postgres-backed incidents load
+        # separately via audit_trail.hydrate_from_db(), additively
+        # (different incident_id namespace), not instead of this.
+        self.audit_trail = AuditTrail(seed_records=seed_records, session_factory=session_factory)
         self.approvals = ApprovalQueue()
         self._preemption = PreemptionEngine()
         # IBM Watson TTS incident briefings — opt-in (TTS_INCIDENT_BRIEFING_ENABLED,
@@ -217,7 +218,7 @@ class DecisionOrchestrator:
 
         await self._bus.publish(EventEnvelope(
             event_type="CapabilityInvocationStarted",
-            incident_id=pending.incident_id,
+            correlation_id=pending.incident_id,
             produced_by="orchestrate/decision-orchestrator",
             payload={
                 "capability": pending.capability.value,
@@ -237,7 +238,7 @@ class DecisionOrchestrator:
 
         await self._bus.publish(EventEnvelope(
             event_type="CapabilityInvocationCompleted",
-            incident_id=pending.incident_id,
+            correlation_id=pending.incident_id,
             produced_by="orchestrate/decision-orchestrator",
             payload={
                 "capability": pending.capability.value,
@@ -513,7 +514,7 @@ class DecisionOrchestrator:
 
                 await self._bus.publish(EventEnvelope(
                     event_type="CapabilityInvocationStarted",
-                    incident_id=context.incident_id,
+                    correlation_id=context.incident_id,
                     produced_by="orchestrate/decision-orchestrator",
                     payload={
                         "capability": capability.value,
@@ -538,7 +539,7 @@ class DecisionOrchestrator:
 
                 await self._bus.publish(EventEnvelope(
                     event_type="CapabilityInvocationCompleted",
-                    incident_id=context.incident_id,
+                    correlation_id=context.incident_id,
                     produced_by="orchestrate/decision-orchestrator",
                     payload={
                         "capability": capability.value,
@@ -554,20 +555,20 @@ class DecisionOrchestrator:
                 # Also represents this connector's work as an AgentCompleted
                 # event, same shape agents/sdk/base.py's BaseAgent.run()
                 # produces for the 8 Phase 2 reasoning agents - so the
-                # watsonx-itsm-agent registry entry (backend/app/routers/
+                # servicenow-itsm-agent registry entry (backend/app/routers/
                 # agents_registry.py) shows real invocation stats/lineage on
                 # frontend-next/src/app/agents/network/page.tsx's Live Swarm
                 # tab instead of always reading 0. Scoped to the one connector
                 # that has a matching registry entry today; extend this
                 # mapping if/when other connectors (SAP, marketplace) get one.
-                if response.connector == "watsonx_itsm":
+                if response.connector == "servicenow":
                     await self._bus.publish(EventEnvelope(
                         event_type="AgentCompleted",
-                        incident_id=context.incident_id,
-                        produced_by="agents/watsonx-itsm-agent",
+                        correlation_id=context.incident_id,
+                        produced_by="agents/servicenow-itsm-agent",
                         schema_version="1.0.0",
                         payload=AgentCompletedPayload(
-                            agent_id="watsonx-itsm-agent",
+                            agent_id="servicenow-itsm-agent",
                             stage_name="Execution",
                             execution_time_ms=execution_time_ms,
                             confidence=out5.confidence,
@@ -651,19 +652,18 @@ class DecisionOrchestrator:
         return Capability.SCHEDULE_MAINTENANCE  # OPT-1-PARAMETER-ADJUST and unrecognized options
 
     async def _snapshot_pending(self, context: IncidentContext, sm: IncidentStateMachine, **kwargs) -> None:
-        """Best-effort Cloudant write while an incident sits at
+        """Best-effort Postgres write while an incident sits at
         AwaitingApproval, so a backend restart doesn't strand it as an
-        unrecoverable 404 (previously only _finalize wrote through to
-        Cloudant, so anything still mid-pipeline at restart time vanished
-        with the in-memory audit_trail/approvals/event_bus state). Purely
-        additive: GET /incidents/{id} already falls back to Cloudant when
-        the in-memory lookup misses (backend/app/routers/incidents.py), so
-        this just gives that fallback something real to find. It's
-        read-only after a restart — there's no live PendingApproval to
-        resume, so /incidents/{id}/approve still 404s honestly rather than
-        pretending to resume mid-flight orchestration."""
-        if not cloudant_db.is_configured():
-            return
+        unrecoverable 404 (previously only _finalize wrote through, so
+        anything still mid-pipeline at restart time vanished with the
+        in-memory audit_trail/approvals/event_bus state). Purely additive:
+        audit_trail.hydrate_from_db() (backend/app/main.py's lifespan)
+        loads this snapshot back into audit_trail's in-memory list at
+        startup, so GET /incidents/{id} (backend/app/routers/incidents.py)
+        finds it there directly — no separate DB fallback needed in that
+        router. It's read-only after a restart — there's no live
+        PendingApproval to resume, so /incidents/{id}/approve still 404s
+        honestly rather than pretending to resume mid-flight orchestration."""
         detected_at = sm.history[0][1]
         record = IncidentRecord(
             incident_id=context.incident_id,
@@ -674,10 +674,7 @@ class DecisionOrchestrator:
             final_state="AwaitingApproval",
             **kwargs,
         )
-        try:
-            await asyncio.to_thread(cloudant_db.save_incident, record.model_dump(by_alias=True))
-        except Exception as e:
-            print(f"[DecisionOrchestrator] Cloudant pending-snapshot write failed for {context.incident_id}: {e}")
+        await self.audit_trail.persist_snapshot(record)
 
     async def _finalize(self, context: IncidentContext, sm: IncidentStateMachine, **kwargs) -> IncidentRecord:
         self.digital_twin.set_status(context.line_id, "OPERATIONAL")

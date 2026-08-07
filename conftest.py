@@ -6,33 +6,37 @@ Some test modules call dotenv.load_dotenv() at import time
 tests/test_phase4a_integration.py), and the shell that launches pytest may
 itself have these exported (e.g. after `set -a && source .env` in a prior
 manual session). Either way, real credentials end up in os.environ for
-the rest of the pytest process — including CLOUDANT_URL/CLOUDANT_API_KEY,
-NLU_API_KEY/TTS_API_KEY, LOCAL_LLM_ENABLED/etc. knowledge/cloudant_client.py,
-knowledge/nlu_client.py, knowledge/tts_client.py, and
-knowledge/local_llm_client.py all gate real network calls behind an
+the rest of the pytest process — including NLU_API_KEY/TTS_API_KEY,
+LOCAL_LLM_ENABLED/etc. knowledge/nlu_client.py, knowledge/tts_client.py,
+and knowledge/local_llm_client.py all gate real network calls behind an
 os.environ check for exactly this reason. This autouse fixture keeps
 every one of those gates closed for every test regardless of module
 import order or ambient shell state, so the suite never makes a live
-Cloudant/NLU/TTS/Ollama/watsonx-ITSM call unless a test explicitly opts
-back in via its own monkeypatch (see tests/test_audit_trail_cloudant.py,
-tests/test_tts_briefing.py, tests/test_phase2_integration.py's NLU
-tests, tests/test_itsm_connector.py). This isn't hypothetical, twice
-over: this fixture originally only covered NLU/TTS, a Cloudant leak
-caused backend/app/routers/incidents.py's evt.producedBy bug to surface
-non-deterministically, and — most seriously — once WO_ITSM_LIVE_WRITES_
-ENABLED was added to .env this same session, the exact same leak made
-orchestrator-driving tests actually eligible to fire a REAL ServiceNow
-ticket via the live watsonx Orchestrate agent (WatsonxITSMConnector
-reads os.environ directly on every call, no singleton to monkeypatch —
-deleting the env vars is the only gate available to it). See git
-history; this is why every WO_ITSM_* var is deleted below, not just
-disabled via a client method.
+NLU/TTS/Ollama call unless a test explicitly opts back in via its own
+monkeypatch (see tests/test_tts_briefing.py, tests/test_phase2_integration.py's
+NLU tests). A connector that reads os.environ directly on every call
+(no singleton to monkeypatch) has no other gate available to it — this is
+why env vars get deleted here rather than only disabled via a client
+method, for any connector built that way in the future.
+
+DATABASE_URL below is a different kind of gate, set for a different
+reason: db/engine.py builds its engine from Settings() at IMPORT time
+(unlike the clients above, which all re-check os.environ live on every
+call), so a monkeypatch fixture fires too late — the engine would already
+be pointed at whatever DATABASE_URL existed before the fixture ran. This
+line has to be the literal first thing this module does, before any
+import below (including `import pytest`) pulls in backend.app.config and
+constructs the real Settings() singleton, so every test — DB-focused or
+not — runs against ados_test, never the dev database.
 """
+
+import os
+
+os.environ["DATABASE_URL"] = "postgresql+asyncpg://ados:ados@localhost:5432/ados_test"
 
 import pytest
 
 from backend.app.rbac import Role, User, create_access_token
-from knowledge.cloudant_client import cloudant_db
 from knowledge.local_llm_client import local_llm_client
 from knowledge.nlu_client import nlu_client
 from knowledge.tts_client import tts_client
@@ -43,7 +47,7 @@ def admin_auth_header() -> dict:
     rather than using backend/tests/conftest.py's auth_headers fixture
     (that fixture is backend/tests-scoped). Same synthetic unrestricted
     admin identity, minted directly - no /auth/login round trip, no
-    user_store/Cloudant dependency."""
+    user_store/database dependency."""
     admin = User(
         user_id="test-admin",
         username="test-admin",
@@ -56,20 +60,12 @@ def admin_auth_header() -> dict:
 
 @pytest.fixture(autouse=True)
 def _no_live_external_services_by_default(monkeypatch):
-    monkeypatch.delenv("CLOUDANT_URL", raising=False)
-    monkeypatch.delenv("CLOUDANT_API_KEY", raising=False)
-    monkeypatch.delenv("CLOUDANT_USERNAME", raising=False)
     monkeypatch.delenv("NLU_API_KEY", raising=False)
     monkeypatch.delenv("NLU_URL", raising=False)
     monkeypatch.delenv("TTS_API_KEY", raising=False)
     monkeypatch.delenv("TTS_URL", raising=False)
     monkeypatch.delenv("TTS_INCIDENT_BRIEFING_ENABLED", raising=False)
     monkeypatch.delenv("LOCAL_LLM_ENABLED", raising=False)
-    monkeypatch.delenv("WO_INSTANCE", raising=False)
-    monkeypatch.delenv("WO_API_KEY", raising=False)
-    monkeypatch.delenv("WO_ITSM_INTEGRATION_ENABLED", raising=False)
-    monkeypatch.delenv("WO_ITSM_LIVE_WRITES_ENABLED", raising=False)
-    monkeypatch.setattr(cloudant_db, "is_configured", lambda: False)
     monkeypatch.setattr(nlu_client, "is_configured", lambda: False)
     monkeypatch.setattr(tts_client, "is_configured", lambda: False)
     monkeypatch.setattr(local_llm_client, "is_configured", lambda: False)

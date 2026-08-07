@@ -119,7 +119,7 @@ def test_vision_spec_agent(context):
     assert len(output.evidence) > 0
     assert len(output.alternatives) > 0
     assert envelope.event_type == "AgentCompleted"
-    assert envelope.incident_id == context.incident_id
+    assert envelope.correlation_id == context.incident_id
 
 
 def test_causal_isolation_agent_end_to_end(context, kg, cg):

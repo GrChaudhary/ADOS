@@ -1,0 +1,58 @@
+{
+  "A_deterministic_node_vision_spec": {
+    "custom_engine": {
+      "n": 50,
+      "mean_ms": 0.016,
+      "p50_ms": 0.014,
+      "p95_ms": 0.018
+    },
+    "langgraph": {
+      "n": 50,
+      "mean_ms": 0.548,
+      "p50_ms": 0.503,
+      "p95_ms": 0.606
+    }
+  },
+  "B_llm_backed_node_causal_isolation_fallback_path": {
+    "custom_engine": {
+      "n": 50,
+      "mean_ms": 0.141,
+      "p50_ms": 0.137,
+      "p95_ms": 0.146
+    },
+    "langgraph": {
+      "n": 50,
+      "mean_ms": 0.66,
+      "p50_ms": 0.651,
+      "p95_ms": 0.734
+    }
+  },
+  "C_approval_pause_resume_round_trip": {
+    "custom_engine": {
+      "n": 50,
+      "mean_ms": 0.046,
+      "p50_ms": 0.047,
+      "p95_ms": 0.049
+    },
+    "langgraph": {
+      "n": 50,
+      "mean_ms": 0.851,
+      "p50_ms": 0.832,
+      "p95_ms": 0.975
+    }
+  },
+  "D_mocked_capability_execution": {
+    "custom_engine": {
+      "n": 50,
+      "mean_ms": 0.006,
+      "p50_ms": 0.006,
+      "p95_ms": 0.007
+    },
+    "langgraph": {
+      "n": 50,
+      "mean_ms": 0.441,
+      "p50_ms": 0.436,
+      "p95_ms": 0.471
+    }
+  }
+}

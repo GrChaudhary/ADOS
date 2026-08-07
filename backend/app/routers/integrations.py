@@ -1,7 +1,7 @@
 """
 Integrations Status Router for Layer 4 Integration Hub.
-Provides real-time connector health metrics, live Cloudant document counts, latency, and auth status.
-Supports GET /integrations/status and POST /integrations/watsonx/test-connection.
+Provides real-time connector health metrics, live Postgres connectivity, latency, and auth status.
+Supports GET /integrations/status.
 """
 
 import os
@@ -9,9 +9,8 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict, Field
 
+from db.health import get_health_status as get_postgres_health_status
 from integrations import default_hub
-from integrations.connectors.watsonx_itsm import WatsonxITSMConnector
-from knowledge.cloudant_client import cloudant_db
 from knowledge.local_llm_client import local_llm_client
 from knowledge.nlu_client import nlu_client
 from knowledge.tts_client import tts_client
@@ -39,28 +38,19 @@ class ConnectorStatusResponse(BaseModel):
     database_name: Optional[str] = None
 
 
-class WatsonxTestResponse(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    connected: bool
-    agent_count: Optional[int] = Field(default=None, alias="agentCount")
-    agents: Optional[List[str]] = None
-    error: Optional[str] = None
-
-
 @router.get("/status", response_model=List[ConnectorStatusResponse])
 async def get_connector_status():
     """Returns real-time status, configuration state, document counts, and latency for all connectors."""
     connectors_meta = [
         {
-            "id": "watsonx_itsm",
-            "name": "watsonx_itsm",
-            "display_name": "IBM watsonx Orchestrate ITSM",
+            "id": "servicenow",
+            "name": "servicenow",
+            "display_name": "ServiceNow ITSM Connector",
             "kind": "real",
-            "auth": "IBM Cloud IAM OAuth 2.0",
-            "module": "integrations/connectors/watsonx_itsm.py",
-            "description": "Automated IT/OT incident creation, change request logging, and operator notifications.",
-            "capabilities": ["CreateIncident", "CreateChangeRequest", "ScheduleMaintenance", "NotifyOperator"],
+            "auth": "Basic Auth (Table API)",
+            "module": "integrations/connectors/servicenow.py",
+            "description": "Automated IT/OT incident and change-request creation via the real ServiceNow Table API.",
+            "capabilities": ["CreateIncident", "CreateChangeRequest", "ScheduleMaintenance"],
         },
         {
             "id": "sap",
@@ -99,7 +89,7 @@ async def get_connector_status():
             "kind": "real",
             "auth": "IBM Cloud IAM OAuth 2.0",
             "module": "knowledge/nlu_client.py",
-            "description": "Live sentiment, keyword, and category extraction over the Reasoning stage's watsonx.ai explanation text.",
+            "description": "Live sentiment, keyword, and category extraction over the Reasoning stage's LLM-generated explanation text.",
             "capabilities": ["AnalyzeText", "ExtractSentiment", "ExtractKeywords"],
         },
         {
@@ -116,24 +106,22 @@ async def get_connector_status():
 
     result: List[ConnectorStatusResponse] = []
 
-    # 1. Add Cloudant NoSQL database status
-    cloudant_health = cloudant_db.get_health_status()
+    # 1. Add PostgreSQL database status (db/health.py — replaces the old
+    # Cloudant health card now that everything's migrated off it).
+    pg_health = await get_postgres_health_status()
     result.append(
         ConnectorStatusResponse(
-            name="IBM Cloudant NoSQL Database",
-            id="cloudant_nosql",
-            configured=cloudant_db.is_configured(),
+            name=pg_health["name"],
+            id=pg_health["id"],
+            configured=True,  # required application infrastructure — always configured, see db/health.py
             kind="real",
-            status=cloudant_health.get("status", "Not Configured"),
-            auth="IBM Cloud IAM OAuth 2.0",
-            module="knowledge/cloudant_client.py",
-            description=cloudant_health.get("description", "Production Cloudant NoSQL document database."),
-            capabilities=["QueryDatabase", "PersistIncident", "StreamAuditLogs"],
-            connected=cloudant_health.get("connected", False),
-            latency_ms=cloudant_health.get("latency_ms", 0),
-            doc_count=cloudant_health.get("doc_count", 0),
-            host=cloudant_health.get("host"),
-            database_name=cloudant_health.get("database_name"),
+            status=pg_health.get("status", "Not Configured"),
+            auth=pg_health.get("auth"),
+            module=pg_health.get("module"),
+            description=pg_health.get("description"),
+            capabilities=pg_health.get("capabilities", []),
+            connected=pg_health.get("connected", False),
+            latency_ms=pg_health.get("latency_ms", 0),
         )
     )
 
@@ -167,11 +155,11 @@ async def get_connector_status():
         is_cfg = False
         if c_id == "sap":
             is_cfg = bool(os.environ.get("SAP_BASE_URL") and os.environ.get("SAP_API_KEY"))
-        elif c_id == "watsonx_itsm":
+        elif c_id == "servicenow":
             is_cfg = bool(
-                os.environ.get("WO_INSTANCE")
-                and os.environ.get("WO_API_KEY")
-                and os.environ.get("WO_ITSM_INTEGRATION_ENABLED") == "true"
+                os.environ.get("SERVICENOW_INSTANCE_URL")
+                and os.environ.get("SERVICENOW_USERNAME")
+                and os.environ.get("SERVICENOW_PASSWORD")
             )
         elif c_id == "marketplace":
             is_cfg = False
@@ -202,19 +190,3 @@ async def get_connector_status():
         )
 
     return result
-
-
-@router.post("/watsonx/test-connection", response_model=WatsonxTestResponse)
-async def test_watsonx_connection():
-    """Test connection endpoint for IBM watsonx Orchestrate ITSM."""
-    connector = WatsonxITSMConnector()
-    if hasattr(connector, "test_connection"):
-        res = await connector.test_connection()
-        return WatsonxTestResponse.model_validate(res)
-
-    inst = os.environ.get("WO_INSTANCE")
-    key = os.environ.get("WO_API_KEY")
-    if not inst or not key:
-        return WatsonxTestResponse(connected=False, error="WO_INSTANCE or WO_API_KEY not set in environment")
-
-    return WatsonxTestResponse(connected=True, agent_count=1, agents=["ados_executive_copilot"])

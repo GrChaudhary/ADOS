@@ -23,8 +23,33 @@ class Capability(str, Enum):
     QUERY_EXTERNAL_STOCK = "QueryExternalStock"
     CREATE_EXTERNAL_PO = "CreateExternalPO"
     GET_FREIGHT_QUOTE = "GetFreightQuote"
-    QUERY_DATABASE = "QueryDatabase"
-    PERSIST_INCIDENT = "PersistIncident"
+
+    # HR domain pod (orchestrate/moa/hr_domain.py) — MOA vertical-slice
+    # milestone, orchestration-platform-vision.md §11 build-sequence step 2.
+    REVOKE_BUILDING_ACCESS = "RevokeBuildingAccess"
+    DISABLE_IT_ACCESS = "DisableITAccess"
+    STOP_PAYROLL = "StopPayroll"
+    NOTIFY_MANAGER = "NotifyManager"
+
+    # IT domain pod (orchestrate/moa/it_domain.py)
+    NOTIFY_IT_HELPDESK = "NotifyITHelpdesk"
+    GRANT_JIRA_ACCESS = "GrantJiraAccess"
+    REVOKE_AWS_ROLE = "RevokeAWSRole"
+    DEPROVISION_CLOUD_ACCOUNT = "DeprovisionCloudAccount"
+
+    # Finance domain pod (orchestrate/moa/finance_domain.py)
+    FLAG_INVOICE_DISCREPANCY = "FlagInvoiceDiscrepancy"
+    APPROVE_EXPENSE_REIMBURSEMENT = "ApproveExpenseReimbursement"
+    ISSUE_VENDOR_PAYMENT_HOLD = "IssueVendorPaymentHold"
+    PROCESS_WIRE_TRANSFER = "ProcessWireTransfer"
+
+    # Capability Onboarding (orchestrate/onboarding/, §8) — one sentinel for
+    # every dynamically onboarded capability. CapabilityCall.capability stays
+    # a closed, Pydantic-enforced enum; the real free-text capability_id
+    # (e.g. "zendesk.read_ticket", tracked by CapabilityManifestRegistry)
+    # rides in CapabilityCall.input["capability_id"] instead. See
+    # integrations/connectors/dynamic.py for the dispatch side of this.
+    DYNAMIC_CAPABILITY = "DynamicCapability"
 
 
 class PolicyTier(int, Enum):

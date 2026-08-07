@@ -67,9 +67,6 @@ async def start_incident(body: StartIncidentRequest, request: Request, current_u
     return StartIncidentResponse(incident_id=incident_id)
 
 
-from knowledge.cloudant_client import cloudant_db
-
-
 @router.get("/incidents/{incident_id}")
 async def get_incident(incident_id: str, request: Request):
     orchestrator = request.app.state.orchestrator
@@ -79,23 +76,16 @@ async def get_incident(incident_id: str, request: Request):
 
     task: Optional[asyncio.Task] = request.app.state.incident_tasks.get(incident_id)
     pending = orchestrator.approvals.get(incident_id)
-    events = await request.app.state.event_bus.recent(incident_id=incident_id, limit=50)
+    events = await request.app.state.event_bus.recent(correlation_id=incident_id, limit=50)
 
-    # Cloudant is only consulted once this process has no live trace of the
-    # incident at all (task/pending/events all empty) - a genuine
-    # backend-restart recovery case (orchestrate/orchestrator.py's
-    # _snapshot_pending). While the process is still alive, in-memory state
-    # is always more current/authoritative than a point-in-time snapshot:
-    # checking Cloudant first would make a still-live, still-awaiting-
-    # approval incident look like an inert historical record (no
-    # awaitingApproval/approvalSummary fields, "finalState" present) even
-    # though it's actually still progressing right now.
+    # A genuine backend-restart recovery case (orchestrate/orchestrator.py's
+    # _snapshot_pending) would already have been caught by the
+    # audit_trail.get() check above: audit_trail.hydrate_from_db()
+    # (backend/app/main.py's lifespan) loads every persisted incident —
+    # including AwaitingApproval snapshots — into that in-memory list at
+    # startup. So reaching here with task/pending/events all empty means
+    # this incident_id genuinely doesn't exist anywhere.
     if task is None and pending is None and len(events) == 0:
-        if cloudant_db.is_configured():
-            doc = cloudant_db.get_incident(incident_id)
-            if doc:
-                clean_d = {k: v for k, v in doc.items() if not k.startswith("_")}
-                return clean_d
         raise HTTPException(status_code=404, detail="unknown incident")
 
     causal_chain = []

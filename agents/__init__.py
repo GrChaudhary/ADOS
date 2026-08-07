@@ -10,6 +10,7 @@ from .parameter_adjustment_agent import ParameterAdjustmentAgent
 from .impact_simulation_agent import ImpactSimulationAgent
 from .rerouting_agent import ReroutingAgent
 from .feedback_calibration_agent import FeedbackCalibrationAgent
+from .severity_triage_agent import SeverityTriageAgent
 
 __all__ = [
     "VisionSpecAgent",
@@ -19,5 +20,6 @@ __all__ = [
     "ParameterAdjustmentAgent",
     "ImpactSimulationAgent",
     "ReroutingAgent",
-    "FeedbackCalibrationAgent"
+    "FeedbackCalibrationAgent",
+    "SeverityTriageAgent"
 ]

@@ -1,0 +1,57 @@
+Not a real `git diff` — orchestrate_langgraph/{state,nodes,graph}.py were
+brand-new, uncommitted files at the time of this experiment (this whole
+module was built in one working session), so there is no prior committed
+version to diff against. This is a manual reconstruction of exactly the
+lines the severity_triage wiring added, in the same file/line spirit as
+custom_engine_add_stage.diff for side-by-side comparison.
+
+--- orchestrate_langgraph/state.py ---
+@@
+     vision_result: dict          # VisionSpecAgent StageOutput.result
++    severity_result: dict        # SeverityTriageAgent StageOutput.result
+
+--- orchestrate_langgraph/nodes.py ---
+@@
+-from agents import CausalIsolationAgent, VisionSpecAgent
++from agents import CausalIsolationAgent, SeverityTriageAgent, VisionSpecAgent
+@@
+ _vision_agent = VisionSpecAgent()
+ _causal_agent = CausalIsolationAgent()
++_severity_agent = SeverityTriageAgent()
+@@
++def severity_triage_node(state: IncidentGraphState) -> dict:
++    """Extensibility experiment only — see agents/severity_triage_agent.py
++    and orchestrate_langgraph/extensibility_experiment/."""
++    output, _envelope = _severity_agent.run(
++        _incident_context(state),
++        StageInput(stage_name="Perception", payload={"deviation_mm": state["vision_result"]["deviation_mm"]}),
++    )
++    return {"severity_result": output.result}
++
++
+ def causal_isolation_node(state: IncidentGraphState) -> dict:
+
+--- orchestrate_langgraph/graph.py ---
+@@
+ from .nodes import (
+     causal_isolation_node,
+     execute_capability_node,
+     governance_gate_node,
+     route_after_governance,
++    severity_triage_node,
+     vision_spec_node,
+ )
+@@
+     builder.add_node("vision_spec", vision_spec_node)
++    builder.add_node("severity_triage", severity_triage_node)
+     builder.add_node("causal_isolation", causal_isolation_node)
+     builder.add_node("governance_gate", governance_gate_node)
+     builder.add_node("execute_capability", execute_capability_node)
+
+     builder.add_edge(START, "vision_spec")
+-    builder.add_edge("vision_spec", "causal_isolation")
++    builder.add_edge("vision_spec", "severity_triage")
++    builder.add_edge("severity_triage", "causal_isolation")
+     builder.add_edge("causal_isolation", "governance_gate")
+
+Totals: 3 files, +15/-1 lines (net +14).

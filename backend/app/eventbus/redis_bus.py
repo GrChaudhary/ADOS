@@ -26,15 +26,15 @@ class RedisEventBus(EventBus):
         )
 
     async def recent(
-        self, incident_id: Optional[str] = None, limit: int = 100
+        self, correlation_id: Optional[str] = None, limit: int = 100
     ) -> List[EventEnvelope]:
         # XREVRANGE returns newest-first; fetch a bit more than `limit` to
-        # allow for incident_id filtering, then re-order oldest-first to
+        # allow for correlation_id filtering, then re-order oldest-first to
         # match InMemoryEventBus.recent()'s contract.
         raw = await self._client.xrevrange(self._stream, count=limit * 5)
         events = [EventEnvelope.model_validate(json.loads(v["data"])) for _, v in raw]
-        if incident_id is not None:
-            events = [e for e in events if e.incident_id == incident_id]
+        if correlation_id is not None:
+            events = [e for e in events if e.correlation_id == correlation_id]
         return list(reversed(events[:limit]))
 
     async def stream(self) -> AsyncIterator[EventEnvelope]:

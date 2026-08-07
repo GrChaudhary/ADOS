@@ -2,7 +2,7 @@
 (Nemotron), OpenAI, Anthropic (Claude), and a locally-running Ollama server
 (free, no auth, ultimate fallback). Each of the first three can be
 configured either via .env (deployment-time, static) or via the Settings
-page (backend/app/routers/settings.py — runtime, stored in Cloudant, no
+page (backend/app/routers/settings.py — runtime, stored in Postgres, no
 restart needed); a DB-stored value always wins over the matching .env var
 when both are present.
 
@@ -53,8 +53,7 @@ class LocalLLMClient:
         self.base_url = os.environ.get("LOCAL_LLM_URL", "http://localhost:11434")
         self.model = os.environ.get("LOCAL_LLM_MODEL", "qwen3:4b")
 
-        self._settings_cache: Optional[Dict[str, Any]] = None
-        self._settings_cache_ts: float = 0.0
+        self._settings_cache: Dict[str, Any] = {}
         self._health_cache: Dict[str, Dict[str, Any]] = {}
         self._health_cache_ts: Dict[str, float] = {}
 
@@ -64,27 +63,21 @@ class LocalLLMClient:
     # ------------------------------------------------------------------
 
     def _db_settings(self) -> Dict[str, Any]:
-        """Cloudant-stored provider overrides, cached 30s so every
-        generation call doesn't pay a network round trip. Lazy import: this
-        module is imported by agents/causal_isolation_agent.py, which is
-        pulled in through orchestrate/agent_runner.py -> agents/__init__.py
-        -> back here if cloudant_client were imported at module level (it
-        transitively imports executive.seed_data, which imports the same
-        agents package) — see knowledge/decision_memory_index.py for the
-        identical fix applied to the same underlying cycle."""
-        now = time.time()
-        if self._settings_cache is not None and (now - self._settings_cache_ts) < 30:
-            return self._settings_cache
-        from knowledge.cloudant_client import cloudant_db
-        self._settings_cache = cloudant_db.get_llm_settings() if cloudant_db.is_configured() else {}
-        self._settings_cache_ts = now
+        """Postgres-stored provider overrides — asyncpg has no sync query
+        path, and this method (like get_api_key/get_model/is_configured
+        below it) is called synchronously from deep inside agent code that
+        already runs on a live event loop, so it can't itself await a
+        query. Push-based instead of pull-based: hydrate_settings_cache()
+        is the only writer, called by backend/app/routers/settings.py
+        right after every save/delete (and once at startup, main.py's
+        lifespan) — so this is always just an in-memory read, never I/O."""
         return self._settings_cache
 
-    def refresh_settings_cache(self) -> None:
-        """Called by the settings router right after a save/delete so the
-        change is live immediately instead of waiting up to 30s."""
-        self._settings_cache = None
-        self._settings_cache_ts = 0.0
+    def hydrate_settings_cache(self, settings: Dict[str, Any]) -> None:
+        """settings is {provider: {"apiKey": ..., "model": ...}}, one
+        entry per row currently in llm_provider_settings — see
+        backend/app/routers/settings.py's _load_all_provider_settings()."""
+        self._settings_cache = settings
 
     def _cfg(self, provider: str, field: str, env_var: str, default: Optional[str] = None) -> Optional[str]:
         db_val = self._db_settings().get(provider, {}).get(field)

@@ -24,7 +24,7 @@ async def test_agent_event_round_trips_through_backend_event_bus():
     bus = InMemoryEventBus()
     await bus.publish(envelope)
 
-    recent = await bus.recent(incident_id=context.incident_id)
+    recent = await bus.recent(correlation_id=context.incident_id)
     assert len(recent) == 1
     assert recent[0].event_type == "AgentCompleted"
     assert recent[0].payload["confidence"] == pytest.approx(output.confidence)

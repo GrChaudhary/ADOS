@@ -1,8 +1,8 @@
 """Live IBM Watson NLU + TTS endpoints. Thin pass-throughs to
 knowledge/nlu_client.py and knowledge/tts_client.py — no simulated
 fallback output; an unconfigured or failing service returns a 502 with the
-real error, matching the honesty convention used for the watsonx
-connectors (integrations/connectors/watsonx_itsm.py).
+real error, matching the honesty convention used for the ServiceNow
+connector (integrations/connectors/servicenow.py).
 """
 
 from typing import Any, Dict, Optional
