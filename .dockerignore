@@ -20,6 +20,12 @@ apikey*.json
 # The frontend has its own image (frontend-next/Dockerfile).
 frontend-next
 
+# Built inside the image instead (see the npm ci/build step in Dockerfile),
+# so the result never depends on what happens to exist on the machine doing
+# the build. These are also platform-specific and gitignored anyway.
+orchestrate/onboarding/vendor/openapi-mcp-generator/node_modules
+orchestrate/onboarding/vendor/openapi-mcp-generator/dist
+
 # Local/authoring artifacts with no place in a server image.
 ADOS_OBSIDIAN
 Blueprints

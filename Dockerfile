@@ -15,6 +15,13 @@
 # docker-compose.yml mounts.
 FROM docker:27-cli AS docker-cli
 
+# Node is a real runtime dependency, not a build convenience: the capability
+# onboarding pipeline shells out to `node` for the OpenAPI track's generator
+# shim (orchestrate/onboarding/vendor/get_tools_shim.mjs) and to `npx -y` to
+# launch MCP-native servers. Without it both tracks fail at runtime -- which
+# is exactly what happened in the first image built from this file.
+FROM node:22-bookworm-slim AS node-dist
+
 FROM python:3.13-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
@@ -38,6 +45,11 @@ RUN apt-get update \
 # deployment.
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 
+COPY --from=node-dist /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-dist /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
 WORKDIR /app
 
 # Dependencies first so source edits don't invalidate the install layer.
@@ -45,6 +57,16 @@ COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
 COPY . .
+
+# The vendored openapi-mcp-generator ships as TypeScript source. Both its
+# node_modules/ and dist/ are gitignored (the repo-wide `dist/` and
+# `node_modules/` rules), so a clean clone -- and therefore any image built
+# from one -- has neither, and the OpenAPI onboarding track dies with
+# ERR_MODULE_NOT_FOUND on dist/index.js. Build it here rather than depending
+# on whatever happens to be lying around in the build context.
+RUN cd orchestrate/onboarding/vendor/openapi-mcp-generator \
+    && npm ci --no-audit --no-fund \
+    && npm run build
 
 # Non-root by default. The container joins the host's docker group at runtime
 # (docker-compose.yml's group_add) rather than running as root just to reach

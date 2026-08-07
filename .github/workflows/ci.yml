@@ -78,6 +78,21 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The vendored openapi-mcp-generator ships as TypeScript source; its
+      # node_modules/ and dist/ are both gitignored, so a clean checkout has
+      # neither and the OpenAPI onboarding tests die with ERR_MODULE_NOT_FOUND
+      # on dist/index.js. This is a real clean-clone defect, not a CI quirk --
+      # the Dockerfile does the same build for the same reason.
+      - name: Build the vendored OpenAPI generator
+        working-directory: orchestrate/onboarding/vendor/openapi-mcp-generator
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
       # docker-compose.yml creates this via a mounted init script, which
       # service containers can't use. conftest.py points every test at
       # ados_test, so it has to exist before pytest starts.
@@ -134,6 +149,15 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Next 16 generates the PageProps/LayoutProps route types into .next/
+      # during a build, and src/app/incidents/[incidentId]/page.tsx uses
+      # PageProps<"/incidents/[incidentId]">. A clean checkout has no .next,
+      # so tsc fails with "Cannot find name 'PageProps'" -- it only passes
+      # locally because a previous build left those types behind. `typegen`
+      # generates them without paying for a full build.
+      - name: Generate route types
+        run: npx next typegen
 
       - name: Typecheck
         run: npx tsc --noEmit
