@@ -169,9 +169,9 @@ a hackathon never needs and a product cannot exist without.
 
 ---
 
-## Stage 4 — Prove the hands are real (the highest-value item on this list)
+## Stage 4 — Prove the hands are real — **DONE 2026-08-07**
 
-- [ ] **Land one real end-to-end workflow against one real external system.**
+- [x] **Land one real end-to-end workflow against one real external system.**
 
   Today, `ConsoleConnector` declares `capabilities = set(Capability)` — it
   fulfills **every capability in the system** and returns
@@ -213,8 +213,21 @@ a hackathon never needs and a product cannot exist without.
   - 12 new tests asserting on the actual posted body, not just status codes
     (455 → 467 suite-wide).
 
-  **Still open:** run the smoke script against a real PDI, then drive a full
-  offboarding through `POST /moa/tasks` with real approvals.
+  **Done, verified against a real instance (dev397690) 2026-08-07.** A full
+  offboarding ran through `POST /moa/tasks`: the LLM planned four steps on
+  its own, auto-executed the two Tier-0 actions, paused for approval on
+  Tier-1 (disable IT access) and Tier-2 (stop payroll), and correctly
+  accepted a rejection of a fifth action it proposed that had no business in
+  an offboarding. **Three real change requests now exist on the instance**
+  — CHG0030002/3/4 — each with a real description naming the employee.
+  `notify_manager` correctly created nothing, as designed.
+
+  One process lesson worth keeping: the first attempt reported
+  "Offboarding completed successfully" and created **nothing**, because the
+  running container image predated these changes (restarted without
+  `--build`). The API response looked identical to the real one. Checking the
+  external system directly — not the app's own success message — is the only
+  verification that means anything here.
   [In plain terms: the system has a very sophisticated brain and, so far, imaginary hands. Every action it "takes" is currently a log line saying it pretended to do the thing. Making one single real action happen against one real outside system — a real ticket in a real ticketing system — is the moment this becomes a product rather than a very good simulation of one.]
 
 ---

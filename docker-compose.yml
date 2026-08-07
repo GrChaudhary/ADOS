@@ -105,6 +105,12 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-}
+      # ServiceNow — the one connector wired to a real external system.
+      # Without these the HR offboarding actions fall back to Console and
+      # only simulate. See docs/SERVICENOW_PILOT.md.
+      SERVICENOW_INSTANCE_URL: ${SERVICENOW_INSTANCE_URL:-}
+      SERVICENOW_USERNAME: ${SERVICENOW_USERNAME:-}
+      SERVICENOW_PASSWORD: ${SERVICENOW_PASSWORD:-}
       # 20 hero + 200 generated fake manufacturing incidents. Off unless
       # asked for — see backend/app/config.py's seed_demo_data.
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
