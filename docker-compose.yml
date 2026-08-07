@@ -147,12 +147,14 @@ services:
         # origin a *browser on the host* can reach — not the compose-internal
         # hostname. Used only for the direct SSE connection.
         NEXT_PUBLIC_ADOS_BACKEND_ORIGIN: http://localhost:8000
+        # The server-side rewrite proxy (/api/backend/* -> backend/api/v1/*)
+        # runs inside the network, so this one IS the compose hostname. It has
+        # to be a BUILD arg: next.config.ts's rewrites() is evaluated during
+        # `next build` and baked into .next/routes-manifest.json, so setting
+        # it only at runtime silently does nothing. See frontend-next/Dockerfile.
+        ADOS_BACKEND_ORIGIN: http://backend:8000
     ports:
       - "3000:3000"
-    environment:
-      # Server-side rewrite proxy (/api/backend/* -> backend/api/v1/*) runs
-      # inside the network, so this one IS the compose hostname.
-      ADOS_BACKEND_ORIGIN: http://backend:8000
     depends_on:
       backend:
         condition: service_healthy

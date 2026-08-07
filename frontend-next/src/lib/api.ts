@@ -393,13 +393,6 @@ export interface KnowledgeGraphSnapshot {
   edges: GraphEdge[];
 }
 
-export interface WatsonxConnectionTestResult {
-  connected: boolean;
-  agentCount: number | null;
-  agents: string[] | null;
-  error: string | null;
-}
-
 export interface IntegrationConnectorItem {
   id: string;
   name: string;
@@ -608,8 +601,6 @@ export const api = {
     apiFetch<LLMProviderStatus>(`/settings/llm-providers/${provider}`, { method: "DELETE" }),
   testLLMProvider: (provider: string) =>
     apiFetch<LLMProviderTestResult>(`/settings/llm-providers/${provider}/test`, { method: "POST" }),
-  testWatsonxConnection: () =>
-    apiFetch<WatsonxConnectionTestResult>("/integrations/watsonx/test-connection", { method: "POST" }),
   invokeCapability: (body: CapabilityCallRequest) =>
     apiFetch<CapabilityCallResponse>("/capabilities/invoke", { method: "POST", body: JSON.stringify(body) }),
   // 404 when TTS_INCIDENT_BRIEFING_ENABLED isn't set on the backend or the

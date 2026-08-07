@@ -28,6 +28,20 @@ COPY . .
 ARG NEXT_PUBLIC_ADOS_BACKEND_ORIGIN=http://localhost:8000
 ENV NEXT_PUBLIC_ADOS_BACKEND_ORIGIN=${NEXT_PUBLIC_ADOS_BACKEND_ORIGIN}
 
+# ADOS_BACKEND_ORIGIN must be a BUILD arg too, not just a runtime env var,
+# and this is not obvious: next.config.ts's rewrites() is evaluated during
+# `next build` and its result baked into .next/routes-manifest.json. Setting
+# the variable at runtime has NO effect -- the container will happily report
+# ADOS_BACKEND_ORIGIN=http://backend:8000 while the manifest still holds
+# whatever was present at build time.
+#
+# That bug was live in this image: every server-side proxied API call failed
+# with ECONNREFUSED against 127.0.0.1:8000 (the frontend container itself),
+# while the page still rendered fine -- so checking that / returned 200
+# missed it entirely.
+ARG ADOS_BACKEND_ORIGIN=http://backend:8000
+ENV ADOS_BACKEND_ORIGIN=${ADOS_BACKEND_ORIGIN}
+
 RUN npm run build
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await api.login(username, password);
-      router.push("/novus");
+      router.push("/jarvis");
     } catch {
       setError("Invalid username or password.");
     } finally {
@@ -35,8 +35,9 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="p-6 rounded-xl bg-card/60 backdrop-blur-md border border-border-subtle shadow-lg space-y-4">
           <div>
-            <label className="block text-xs text-text-secondary mb-1">Username</label>
+            <label htmlFor="username-input" className="block text-xs text-text-secondary mb-1">Username</label>
             <input
+              id="username-input"
               autoFocus
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -44,14 +45,16 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label className="block text-xs text-text-secondary mb-1">Password</label>
+            <label htmlFor="password-input" className="block text-xs text-text-secondary mb-1">Password</label>
             <input
+              id="password-input"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-3 py-2 rounded-lg bg-glass border border-border-subtle text-text-primary text-sm focus:border-cobalt focus:outline-none"
             />
           </div>
+
 
           {error && <p className="text-xs text-status-red">{error}</p>}
 

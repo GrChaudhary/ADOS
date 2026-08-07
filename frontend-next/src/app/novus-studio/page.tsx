@@ -17,7 +17,7 @@ import IntegrationsPage from "@/app/integrations/page";
 export type StudioTab = "reasoning" | "autonomy" | "agents" | "hub" | "copilot";
 
 const GOVERNANCE_RULES = [
-  { tier: "Tier 0", name: "Autonomous Execution", costLimit: "< $500", confGate: "> 85%", action: "Executes automatically via watsonx Orchestrate ADK", status: "ACTIVE" },
+  { tier: "Tier 0", name: "Autonomous Execution", costLimit: "< $25,000", confGate: "> 90%", action: "Executes automatically via ADOS Autonomous Orchestrator", status: "ACTIVE" },
   { tier: "Tier 1", name: "Plant Manager Approval", costLimit: "$500 - $5,000", confGate: "60% - 85%", action: "Routes to Plant Manager digital sign-off queue", status: "REQUIRED FOR INC-94821" },
   { tier: "Tier 2", name: "Executive Safety Lockout", costLimit: "> $5,000", confGate: "< 60%", action: "Requires multi-executive approval + emergency line pause", status: "STANDBY" },
 ];
@@ -152,7 +152,7 @@ export default function NovusStudioDashboard() {
 
 
   const [chatMessages, setChatMessages] = useState<Array<{ id: number; sender: "user" | "ai"; text: string; pending?: boolean }>>([
-    { id: 0, sender: "ai", text: "Hello Director. I am the watsonx Executive Copilot. CNC Spindle #04 on Line 2 registered a +0.42mm bore tolerance breach. Causal Isolation identified Spindle Bearing Thermal Expansion (87% confidence). How can I assist your operational overview?" }
+    { id: 0, sender: "ai", text: "Hello Director. I am the ADOS Executive Copilot. CNC Spindle #04 on Line 2 registered a +0.42mm bore tolerance breach. Causal Isolation identified Spindle Bearing Thermal Expansion (87% confidence). How can I assist your operational overview?" }
   ]);
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
@@ -519,7 +519,7 @@ export default function NovusStudioDashboard() {
           <div className={styles.tabView}>
             <div className={styles.viewHeader}>
               <h2>🔌 ENTERPRISE INTEGRATIONS HUB</h2>
-              <p>ServiceNow, SAP ERP, watsonx Orchestrate ADK & Kafka connector status — migrated from /integrations</p>
+              <p>ServiceNow, SAP ERP, ADOS Capabilities & Kafka bus status — migrated from /integrations</p>
             </div>
             <div className={styles.embeddedPage}>
               <IntegrationsPage />
@@ -531,7 +531,7 @@ export default function NovusStudioDashboard() {
         {activeTab === "copilot" && (
           <div className={styles.tabView}>
             <div className={styles.viewHeader}>
-              <h2>💬 EXECUTIVE WATSONX.AI COPILOT</h2>
+              <h2>💬 EXECUTIVE ADOS COPILOT</h2>
               <p>Natural language operational query engine, grounded in documentation/08-12&apos;s governance policy documents</p>
             </div>
 

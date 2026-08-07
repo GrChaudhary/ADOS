@@ -194,10 +194,6 @@ export default function IntegrationsPage() {
     enabled: hasToken,
   });
 
-  const watsonxTest = useMutation({
-    mutationFn: api.testWatsonxConnection,
-  });
-
   const connectors = statusQuery.data ?? [];
   const connectedCount = connectors.filter((c) => c.connected).length;
 
@@ -213,7 +209,7 @@ export default function IntegrationsPage() {
             </span>
           </div>
           <p className="text-sm text-text-secondary mt-1">
-            Real-time enterprise connectors, live Cloudant NoSQL document stores, ping latency metrics, and capability contracts.
+            Real-time enterprise connectors, PostgreSQL document stores, ping latency metrics, and capability contracts.
           </p>
         </div>
 
@@ -300,37 +296,6 @@ export default function IntegrationsPage() {
                 </div>
               </div>
 
-              {c.id === "watsonx_itsm" && (
-                <div className="pt-2 border-t border-border-subtle space-y-2">
-                  <button
-                    onClick={() => watsonxTest.mutate()}
-                    disabled={!hasToken || watsonxTest.isPending}
-                    className="px-3 py-1.5 rounded-lg text-xs font-mono bg-cobalt/10 text-cobalt border border-cobalt/30 hover:bg-cobalt/20 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {watsonxTest.isPending ? "Testing…" : "Test Live Connection"}
-                  </button>
-                  {watsonxTest.data && (
-                    <div
-                      className={`p-2.5 rounded-lg border text-xs font-mono ${
-                        watsonxTest.data.connected
-                          ? "bg-emerald/10 border-emerald/30 text-emerald"
-                          : "bg-status-red/10 border-status-red/30 text-status-red"
-                      }`}
-                    >
-                      {watsonxTest.data.connected ? (
-                        <>
-                          🟢 Live — {watsonxTest.data.agentCount} agent(s) registered
-                          {watsonxTest.data.agents && watsonxTest.data.agents.length > 0 && (
-                            <>: {watsonxTest.data.agents.join(", ")}</>
-                          )}
-                        </>
-                      ) : (
-                        <>🔴 {watsonxTest.data.error}</>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
           );
         })}

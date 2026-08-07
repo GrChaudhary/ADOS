@@ -713,7 +713,7 @@ export default function AgentNetworkPage() {
                   {/* Instructions (if present) */}
                   {selectedAgent.instructions && (
                     <div className="space-y-1 font-mono text-xs">
-                      <div className="text-text-secondary">watsonx ADK Instructions:</div>
+                      <div className="text-text-secondary">Agent System Instructions:</div>
                       <div className="p-2.5 rounded bg-dark-900/60 border border-cobalt/20 text-cobalt text-[11px] leading-relaxed">
                         {selectedAgent.instructions}
                       </div>
