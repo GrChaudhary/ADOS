@@ -152,7 +152,8 @@ async def lifespan(app: FastAPI):
     if generated_passwords:
         # Passwords stay on print(): they are shown once, for a human reading
         # the console, and must NOT flow into a log shipper or get indexed.
-        print("[Startup] Seeded RBAC accounts with generated passwords (change via POST /auth/users):")
+        source = "SEED_PASSWORD" if settings.seed_password else "generated, shown once and never again"
+        print(f"[Startup] Seeded RBAC accounts ({source}). Reset later with scripts/reset_user_password.py:")
         for username, password in generated_passwords.items():
             print(f"  {username} / {password}")
 

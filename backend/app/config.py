@@ -92,6 +92,20 @@ class Settings(BaseSettings):
     # deployment (anyone who reads this source could forge tokens).
     jwt_secret: str = "dev-only-insecure-jwt-secret-change-me"
 
+    # Password given to the 5 seeded RBAC accounts on FIRST boot only
+    # (user_store.bootstrap_users). Empty means "generate a random one per
+    # account and print it once" — safe, but unrecoverable the moment that
+    # console output scrolls away or the Postgres volume is recreated, which
+    # is how people end up permanently locked out of their own instance.
+    #
+    # Set it in .env to make seeding reproducible: wipe the database, boot
+    # again, and the same known password works. It is NOT a backdoor into an
+    # existing instance — bootstrap_users still refuses to touch accounts
+    # that already exist, so changing this later does nothing until the user
+    # store is empty again. To change a live password use
+    # scripts/reset_user_password.py.
+    seed_password: str = ""
+
     # IBM Watson Natural Language Understanding
     nlu_api_key: str = ""
     nlu_url: str = ""

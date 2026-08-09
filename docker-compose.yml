@@ -99,6 +99,12 @@ services:
       # (or in .env) with `python -c "import secrets; print(secrets.token_hex(32))"`.
       # Anyone who can read this repo can forge tokens signed with the default.
       JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-jwt-secret-change-me}
+      # Password for the 5 seeded accounts on FIRST boot. Leave unset and each
+      # gets a random one printed once to these logs — which is why recreating
+      # ados_postgres_data (docker compose down -v) otherwise locks you out.
+      # Set it in .env and a wiped database always comes back with the same
+      # known password. Existing accounts are never touched either way.
+      SEED_PASSWORD: ${SEED_PASSWORD:-}
       # LLM providers. Without at least one key the MOA and both LangGraph
       # agents report "not configured" and refuse to run rather than guess.
       NEMOTRON_API_KEY: ${NEMOTRON_API_KEY:-}

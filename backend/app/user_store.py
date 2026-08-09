@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.users import UserRow
 
+from .config import settings
 from .rbac import Role, User, hash_password, verify_password
 
 SEED_ACCOUNTS = [
@@ -98,18 +99,25 @@ async def list_users(session: AsyncSession) -> List[User]:
 
 
 async def bootstrap_users(session: AsyncSession) -> Optional[Dict[str, str]]:
-    """Seeds SEED_ACCOUNTS with random passwords only if the store is
-    currently empty (never overwrites/resets existing accounts — an admin
-    may have already changed a password). Returns the generated
-    {username: password} map so main.py can print it once, or None if
-    seeding was skipped because accounts already exist."""
+    """Seeds SEED_ACCOUNTS only if the store is currently empty (never
+    overwrites/resets existing accounts — an admin may have already changed a
+    password). Returns the {username: password} map so main.py can print it
+    once, or None if seeding was skipped because accounts already exist.
+
+    Passwords come from settings.seed_password when it is set, otherwise one
+    random password per account. The random default is the safer choice for
+    an unattended deployment, but it is shown exactly once and stored only as
+    a bcrypt hash, so recreating the Postgres volume silently invalidates the
+    password everyone was using — the lockout this parameter exists to
+    prevent. See config.py's seed_password.
+    """
     existing = (await session.execute(select(UserRow.user_id).limit(1))).first()
     if existing is not None:
         return None
 
     generated: Dict[str, str] = {}
     for account in SEED_ACCOUNTS:
-        password = secrets.token_urlsafe(9)
+        password = settings.seed_password or secrets.token_urlsafe(9)
         generated[account["username"]] = password
         await create_user(
             session,
