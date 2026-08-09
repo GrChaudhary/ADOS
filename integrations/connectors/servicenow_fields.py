@@ -53,6 +53,46 @@ _HR_OFFBOARDING_SUMMARY = {
 }
 
 
+# ServiceNow's short_description is a 160-character column on a stock instance.
+# Longer values are truncated server-side without complaint, so a root-cause
+# sentence would silently lose its ending — the full text goes in `description`.
+_SHORT_DESCRIPTION_LIMIT = 160
+
+
+def _helpdesk_record(call_input: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """NotifyITHelpdesk -> an incident a human can act on.
+
+    The runtime sends `{"summary": "<one line root cause>"}` — that is the
+    shape `run_capability('NotifyITHelpdesk', ...)` is called with in the
+    acceptance mission, and it is not ServiceNow's vocabulary.
+
+    Provenance is written into the record itself rather than left implicit. An
+    operator opening this ticket at 3am should be able to see that ADOS raised
+    it, which mission did, and which capability request to look up — without
+    that, an autonomously-created ticket is indistinguishable from a mystery.
+    """
+    summary = str(call_input.get("summary") or call_input.get("message") or "").strip()
+    if not summary:
+        summary = "IT helpdesk notification raised by ADOS (no summary supplied)"
+
+    short = summary if len(summary) <= _SHORT_DESCRIPTION_LIMIT else (
+        summary[: _SHORT_DESCRIPTION_LIMIT - 1] + "…"
+    )
+
+    provenance = [
+        "Raised automatically by ADOS and approved through its governance layer.",
+        f"Mission: {context.get('mission_id') or 'unknown'}",
+        f"Capability request: {context.get('request_id') or 'unknown'}",
+        f"Requested by: {context.get('requested_by') or 'unknown'}",
+    ]
+    return {
+        "short_description": short,
+        "description": summary + "\n\n" + "\n".join(provenance),
+        "urgency": _MEDIUM,
+        "category": "Inquiry / Help",
+    }
+
+
 def _passthrough(record: Dict[str, Any]) -> Dict[str, Any]:
     """Caller already speaks ServiceNow. Strip ADOS-internal keys and post
     the rest as-is — this is the itsm_agent.py path, which has always sent
@@ -60,7 +100,11 @@ def _passthrough(record: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in record.items() if k not in _ADOS_INTERNAL_KEYS}
 
 
-def build_record(capability: Capability, call_input: Dict[str, Any]) -> Dict[str, Any]:
+def build_record(
+    capability: Capability,
+    call_input: Dict[str, Any],
+    context: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """Returns the dict to POST to ServiceNow's Table API.
 
     Two shapes are accepted, distinguished by whether the caller supplied
@@ -77,6 +121,9 @@ def build_record(capability: Capability, call_input: Dict[str, Any]) -> Dict[str
     """
     if call_input.get("short_description"):
         return _passthrough(call_input)
+
+    if capability is Capability.NOTIFY_IT_HELPDESK:
+        return _helpdesk_record(call_input, context or {})
 
     employee = call_input.get("employee_name") or "an unnamed employee"
 

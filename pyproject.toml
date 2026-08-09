@@ -3,3 +3,15 @@
 # under agents/ or knowledge/ for the Phase 2 work happening in parallel.
 pythonpath = ["."]
 asyncio_mode = "auto"
+# `external` tests MUTATE a real third-party system. They are deselected by
+# default so that `pytest` — in CI, in a hook, on a laptop — can never create
+# real records as a side effect of running the suite. Run them deliberately:
+#
+#     pytest -m external
+#
+# A test that writes to someone's ServiceNow instance should require you to
+# have typed the words "external" first.
+addopts = "-m 'not external'"
+markers = [
+    "external: mutates a real external system (ServiceNow). Deselected by default.",
+]

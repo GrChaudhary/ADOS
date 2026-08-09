@@ -159,6 +159,60 @@ Also model-specific.
 
 ---
 
+## External side effects (ServiceNow)
+
+### Two test modes, and why the separation is load-bearing
+
+| | default suite | `pytest -m external` |
+|---|---|---|
+| ServiceNow | `httpx.MockTransport` | the real instance |
+| external writes | none | **creates a real incident** |
+| missing credentials | irrelevant | **FAILS** — never skips, never falls back |
+| a Console result | n/a | **fails the test** |
+
+`addopts = "-m 'not external'"` means no ordinary `pytest` run — CI, a hook, a
+laptop — can create real records as a side effect. Running them requires having
+typed the word `external`.
+
+The external test asserts `response.connector == "servicenow"` before anything
+else. A silent fallback to Console would return SUCCEEDED with
+`"[console] simulated NotifyITHelpdesk"` and a green test proving nothing
+happened — the exact false-success class this integration exists to prevent.
+
+### `close_code` is version-dependent, and its failure is silent-shaped
+
+Closing with `"Closed/Resolved by Caller"` — correct on older instances —
+returned:
+
+```
+403 Data Policy Exception: The following fields are mandatory: Resolution code
+```
+
+The instance rejects an unrecognised choice value and then reports the field as
+*unset*, so a wrong value is indistinguishable from a missing one. Configurable
+via `SERVICENOW_CLOSE_CODE` (default `"Resolved by caller"`). Check a target
+instance with:
+
+```
+GET /api/now/table/sys_choice?sysparm_query=name=incident^element=close_code
+```
+
+### Cleanup is close, not delete — and it has already failed once
+
+Records are closed (state 7), not deleted: closing is the normal ServiceNow
+lifecycle and preserves the audit trail the test exists to produce.
+
+Three runs executed before the `close_code` problem was understood, and each
+left an open incident behind. They were found by querying the marker and closed.
+That is why every test-created record carries an unmistakable marker:
+
+```
+[ADOS PRIME-AGENT INTEGRATION TEST] <test-id>
+```
+
+If cleanup fails, the test **fails loudly with the sys_id**, because an orphaned
+ticket in someone's instance is worse than a noisy test.
+
 ## Evidence and acceptance
 
 ### Evidence must be fetched, never pre-loaded
