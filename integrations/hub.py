@@ -19,6 +19,7 @@ from .connectors.sap import SAPConnector
 from .connectors.servicenow import ServiceNowConnector
 from .connectors.marketplace import MarketplaceConnector
 from .connectors.mission_evidence import MissionEvidenceConnector
+from .connectors.prime_runtime import PrimeRuntimeConnector
 from .connectors.smart_factory import SmartFactoryConnector
 from .policy_engine import ConnectorPolicyEngine, PolicyViolation, require_governance
 
@@ -82,6 +83,11 @@ def default_hub(manifests: Optional[CapabilityManifestRegistry] = None) -> Integ
     # says the evidence was fetched, and no evidence. Registration order is
     # what keeps a read capability honest.
     hub.registry.register(MissionEvidenceConnector())
+    # Before ConsoleConnector for the same reason as MissionEvidenceConnector:
+    # RunPrimeRLMAgent had NO connector, so Console won it and returned
+    # "[console] simulated RunPrimeRLMAgent" — a green audit row for an agent
+    # that never ran.
+    hub.registry.register(PrimeRuntimeConnector())
     hub.registry.register(MarketplaceConnector())
     hub.registry.register(ServiceNowConnector())
     hub.registry.register(SAPConnector())

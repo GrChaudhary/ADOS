@@ -131,7 +131,7 @@ export const AGENTS: Record<string, AgentMeta> = {
     label: "Prime RLM Agent",
     icon: "🧬",
     color: "purple",
-    description: "Runs a task inside a containerized Prime Agent, whose only tool is a persistent IPython kernel. Reaches ADOS solely through the governed MCP capability gateway. NOTE: this entry still routes to the simulated execute_rlm_task() facade — the real runtime is not yet wired to it.",
+    description: "Runs an analysis task inside a containerized Prime Agent, whose only tool is a persistent IPython kernel. Reasoning only: the sub-runtime is granted no ADOS capabilities, so it cannot act on the organization. Reaches ADOS solely through the governed MCP capability gateway.",
     model: "Prime Agent RLM Harness (Recursive Continual Learning)",
     inputSchema: "RLMTaskPrompt { prompt, domain, max_iterations }",
     outputSchema: "RLMExecutionResult { taskId, status, harness, kernelTrace }",

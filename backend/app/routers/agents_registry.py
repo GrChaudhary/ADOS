@@ -235,18 +235,18 @@ BUILTIN_AGENTS: List[AgentRegistryEntry] = [
         label="Prime RLM Agent",
         icon="🧬",
         color="purple",
-        # Description rewritten to match what has actually been demonstrated.
-        # It previously claimed "self-improving", "harness prompt/tool
-        # auto-refinement" and "auto-fix bugs" — none of which exist. This entry
-        # is still backed by PrimeAgentClient.execute_rlm_task(), which returns
-        # a hardcoded trace; the real containerized runtime is
-        # orchestrate/runtime/prime.py and is NOT wired to this registry entry.
-        # See docs/prime-agent-integration/13-acceptance-report.md.
+        # Description matches what actually runs. It previously claimed
+        # "self-improving", "harness prompt/tool auto-refinement" and "auto-fix
+        # bugs" — none of which exist — and was backed by
+        # PrimeAgentClient.execute_rlm_task(), a hardcoded trace that no code
+        # path ever called. That module is deleted; RunPrimeRLMAgent now routes
+        # to integrations/connectors/prime_runtime.py, which starts the real
+        # container. See docs/prime-agent-integration/13-acceptance-report.md.
         description=(
-            "Runs a task inside a containerized Prime Agent, whose only tool is a "
-            "persistent IPython kernel. Reaches ADOS solely through the governed MCP "
-            "capability gateway. NOTE: this registry entry still routes to the "
-            "simulated execute_rlm_task() facade — the real runtime is not yet wired to it."
+            "Runs an analysis task inside a containerized Prime Agent, whose only tool "
+            "is a persistent IPython kernel. Reasoning only: the sub-runtime is granted "
+            "no ADOS capabilities, so it cannot act on the organization. Reaches ADOS "
+            "solely through the governed MCP capability gateway."
         ),
         model="Prime Agent (containerized, model/provider configurable)",
         inputSchema="RLMTaskPrompt { prompt, domain, max_iterations }",
