@@ -28,7 +28,9 @@ def test_get_llm_providers_returns_all_key_providers_and_ollama(client, auth_hea
     assert resp.status_code == 200
     body = resp.json()
     provider_names = {p["provider"] for p in body["providers"]}
-    assert provider_names == {"nemotron", "openai", "anthropic"}
+    # Mirrors local_llm_client.KEY_PROVIDERS exactly — groq joined the set when
+    # the primary-provider toggle landed, and this assertion is what caught it.
+    assert provider_names == {"nemotron", "groq", "openai", "anthropic"}
     assert "ollama" in body
 
 
@@ -107,3 +109,31 @@ def test_toggle_ollama_thinking_mode(client, auth_headers):
     resp = client.put("/settings/llm-providers/ollama/thinking", json={"thinkingEnabled": False}, headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["thinkingEnabled"] is False
+
+
+def test_set_active_provider_endpoints(client, auth_headers):
+    # Test PUT /settings/active-provider with groq
+    resp = client.put("/settings/active-provider", json={"provider": "groq"}, headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["activeProvider"] == "groq"
+    assert resp.json()["activeProviderSource"] == "database"
+    assert local_llm_client.provider_override == "groq"
+    assert local_llm_client.active_provider["active_provider"] == "groq"
+
+    # Verify GET /settings/llm-providers returns activeProvider groq
+    get_resp = client.get("/settings/llm-providers", headers=auth_headers)
+    assert get_resp.status_code == 200
+    assert get_resp.json()["activeProvider"] == "groq"
+    assert get_resp.json()["activeProviderSource"] == "database"
+
+    # Test PUT /settings/llm-providers/active back to auto
+    resp_auto = client.put("/settings/llm-providers/active", json={"provider": "auto"}, headers=auth_headers)
+    assert resp_auto.status_code == 200
+    assert resp_auto.json()["activeProvider"] == "auto"
+    assert local_llm_client.provider_override == ""
+
+
+def test_set_active_provider_invalid_target(client, auth_headers):
+    resp = client.put("/settings/active-provider", json={"provider": "nonexistent_model"}, headers=auth_headers)
+    assert resp.status_code == 400
+

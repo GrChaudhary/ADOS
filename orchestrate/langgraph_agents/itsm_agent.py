@@ -226,8 +226,13 @@ def route_after_reason(state: ItsmGraphState) -> str:
     return "end"  # give_up — not_configured or error, already terminal
 
 
-def build_graph(hub: Optional[IntegrationHub] = None):
+def build_graph(hub: Optional[IntegrationHub] = None, checkpointer=None):
+    """checkpointer defaults to a fresh InMemorySaver; the app passes
+    db/checkpointer.py's Postgres saver so a paused create-incident proposal
+    survives a restart. Same reasoning as orchestrate/moa/graph.py's
+    build_graph — see that docstring."""
     hub = hub if hub is not None else default_hub()
+    checkpointer = checkpointer if checkpointer is not None else InMemorySaver()
     builder = StateGraph(ItsmGraphState)
     builder.add_node("reason", reason_node)
     builder.add_node("lookup", lookup_node)
@@ -242,17 +247,19 @@ def build_graph(hub: Optional[IntegrationHub] = None):
     builder.add_edge("lookup", "reason")
     builder.add_edge("propose", "reason")
 
-    return builder.compile(checkpointer=InMemorySaver())
+    return builder.compile(checkpointer=checkpointer)
 
 
-async def ask_itsm_agent(query: str, hub: Optional[IntegrationHub] = None, request_id: Optional[str] = None):
+async def ask_itsm_agent(
+    query: str, hub: Optional[IntegrationHub] = None, request_id: Optional[str] = None, checkpointer=None,
+):
     """Returns (result, graph, config). result is None when the graph
     paused on a create-incident proposal — call resume_itsm_agent() with
     the human's decision to continue. Mirrors orchestrate_langgraph/
     graph.py's run_incident_langgraph() return shape and the same
     "fresh graph + independent InMemorySaver thread per call" reasoning."""
     request_id = request_id or str(uuid.uuid4())
-    graph = build_graph(hub)
+    graph = build_graph(hub, checkpointer=checkpointer)
     config = {"configurable": {"thread_id": request_id}}
     initial: ItsmGraphState = {
         "request_id": request_id,
@@ -269,8 +276,21 @@ async def ask_itsm_agent(query: str, hub: Optional[IntegrationHub] = None, reque
     return result, graph, config
 
 
-async def resume_itsm_agent(graph, config, decision: str, approved_by: Optional[str] = None):
-    """decision: "approved" | "rejected"."""
+async def resume_itsm_agent(
+    request_id: str,
+    decision: str,
+    approved_by: Optional[str] = None,
+    hub: Optional[IntegrationHub] = None,
+    checkpointer=None,
+):
+    """decision: "approved" | "rejected".
+
+    Takes the request_id and rebuilds, rather than being handed the live
+    graph object — so the process that approves need not be the one that
+    proposed. Same change, for the same reason, as
+    orchestrate/moa/graph.py's resume_moa_task."""
+    graph = build_graph(hub, checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": request_id}}
     result = await graph.ainvoke(Command(resume={"decision": decision, "approved_by": approved_by}), config=config)
     if "__interrupt__" in result:
         return None, graph, config

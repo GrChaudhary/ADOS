@@ -71,6 +71,12 @@ class ProviderTestResponse(BaseModel):
     latency_ms: Optional[float] = None
 
 
+class SetPrimaryProviderRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    provider: str = Field(..., alias="provider")
+
+
 def _validate_provider(provider: str) -> None:
     if provider not in KEY_PROVIDERS:
         raise HTTPException(
@@ -85,10 +91,35 @@ async def list_llm_providers():
     Keys are always masked (see knowledge/local_llm_client.py's
     mask_api_key) — the full key is never sent back to the browser once
     saved, only on the write that set it."""
+    info = local_llm_client.active_provider_info
     return {
         "providers": local_llm_client.list_provider_statuses(),
         "ollama": local_llm_client.get_ollama_status(),
+        "activeProvider": info["active_provider"],
+        "activeProviderSource": info["active_provider_source"],
     }
+
+
+@router.put("/active-provider", dependencies=[Depends(require_role(Role.ADMIN))])
+@router.put("/llm-providers/active", dependencies=[Depends(require_role(Role.ADMIN))])
+async def set_active_provider(body: SetPrimaryProviderRequest, session: AsyncSession = Depends(get_db_session)):
+    target = body.provider.strip().lower()
+    valid_targets = {"auto", "ollama", *KEY_PROVIDERS}
+    if target not in valid_targets:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown active provider '{target}'. Must be one of: {', '.join(sorted(valid_targets))}.",
+        )
+    row = await session.get(LLMProviderSettingRow, "__active_provider__")
+    if row is None:
+        session.add(LLMProviderSettingRow(provider="__active_provider__", api_key="", model=target))
+    else:
+        row.model = target
+    await session.flush()
+    local_llm_client.hydrate_settings_cache(await load_all_provider_settings(session))
+    info = local_llm_client.active_provider_info
+    return {"activeProvider": info["active_provider"], "activeProviderSource": info["active_provider_source"]}
+
 
 
 @router.put("/llm-providers/ollama/thinking", dependencies=[Depends(require_role(Role.ADMIN))])

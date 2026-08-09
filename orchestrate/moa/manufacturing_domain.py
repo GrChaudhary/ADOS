@@ -28,7 +28,7 @@ MANUFACTURING_ACTIONS: Dict[str, ManufacturingAction] = {
     ),
     "reserve_inventory": ManufacturingAction(
         key="reserve_inventory",
-        description="Reserve plant inventory stock for production line run",
+        description="Reserve plant inventory stock in High-Bay Warehouse (HBW) for production line run",
         capability=Capability.RESERVE_INVENTORY,
         estimated_cost_usd=5000.0,
     ),
@@ -49,6 +49,30 @@ MANUFACTURING_ACTIONS: Dict[str, ManufacturingAction] = {
         description="Create capital equipment purchase order for replacement components",
         capability=Capability.CREATE_PURCHASE_ORDER,
         estimated_cost_usd=250000.0,
+    ),
+    "reroute_station": ManufacturingAction(
+        key="reroute_station",
+        description="Re-dispatch workpiece via Vacuum Gripper Robot (VGR) to alternative production line",
+        capability=Capability.REROUTE_STATION,
+        estimated_cost_usd=2000.0,
+    ),
+    "evaluate_gnn_risk": ManufacturingAction(
+        key="evaluate_gnn_risk",
+        description="Query Graph Neural Network (GNN) model for plant-wide cascading risk scores",
+        capability=Capability.EVALUATE_GNN_RISK,
+        estimated_cost_usd=0.0,
+    ),
+    "read_rul_telemetry": ManufacturingAction(
+        key="read_rul_telemetry",
+        description="Ingest Remaining Useful Life (RUL) and machine wear telemetry from Digital Twin",
+        capability=Capability.READ_RUL_TELEMETRY,
+        estimated_cost_usd=0.0,
+    ),
+    "sort_workpiece": ManufacturingAction(
+        key="sort_workpiece",
+        description="Trigger Sorting Machine (SM) pneumatic ejectors based on optical/thermal vision",
+        capability=Capability.SORT_WORKPIECE,
+        estimated_cost_usd=500.0,
     ),
 }
 

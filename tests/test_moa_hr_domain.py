@@ -9,6 +9,7 @@ threshold is crossed.
 """
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
 from contracts import PolicyTier
 from integrations import IntegrationHub
@@ -16,6 +17,13 @@ from integrations.connectors.console import ConsoleConnector
 from knowledge.local_llm_client import local_llm_client
 from orchestrate.cascade_breaker import CascadeCircuitBreaker
 from orchestrate.moa import graph as moa_graph
+
+# One InMemorySaver shared by this module's tests. build_graph() creates a
+# fresh one per call by design (so that forgetting to pass a checkpointer in
+# production fails loudly rather than silently "working" in one process), which
+# means a test that resumes a task must hand the same saver back in.
+_saver = InMemorySaver()
+
 
 
 def _fake_generate(responses):
@@ -49,7 +57,7 @@ def _tracking_hub():
 @pytest.mark.asyncio
 async def test_not_configured_gives_up_cleanly(monkeypatch):
     monkeypatch.setattr(local_llm_client, "is_configured", lambda: False)
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=_console_hub())
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=_console_hub(), checkpointer=_saver)
     assert result["status"] == "not_configured"
     assert result["final_answer"] is None
 
@@ -67,7 +75,7 @@ async def test_autonomous_action_executes_without_pausing(monkeypatch):
             ]
         ),
     )
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=_console_hub())
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=_console_hub(), checkpointer=_saver)
     assert result is not None  # never paused
     assert result["status"] == "ok"
     assert result["tools_called"] == ["notify_manager"]
@@ -83,7 +91,7 @@ async def test_high_risk_action_pauses_and_requires_executive_approval_tier(monk
         _fake_generate([{"status": "live_llm_generated", "model_used": "fake", "text": "ACTION: stop_payroll"}]),
     )
     hub, calls_made = _tracking_hub()
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub)
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub, checkpointer=_saver)
 
     assert result is None  # paused, not a terminal result
     assert calls_made == []  # nothing invoked before approval
@@ -100,7 +108,7 @@ async def test_medium_cost_action_pauses_at_approval_required_not_executive(monk
         "_generate_text",
         _fake_generate([{"status": "live_llm_generated", "model_used": "fake", "text": "ACTION: disable_it_access"}]),
     )
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=_console_hub())
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=_console_hub(), checkpointer=_saver)
 
     assert result is None
     proposed = graph.get_state(config).values["proposed_action"]
@@ -121,8 +129,8 @@ async def test_rejected_high_risk_action_never_invokes_hub(monkeypatch):
         ),
     )
     hub, calls_made = _tracking_hub()
-    _, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub)
-    result, graph, config = await moa_graph.resume_moa_task(graph, config, decision="rejected", approved_by="admin-1")
+    _, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub, checkpointer=_saver)
+    result, graph, config = await moa_graph.resume_moa_task(config["configurable"]["thread_id"], decision="rejected", approved_by="admin-1", hub=hub, checkpointer=_saver)
 
     assert calls_made == []
     assert result["approval_decision"] == "rejected"
@@ -144,8 +152,8 @@ async def test_approved_high_risk_action_invokes_hub_with_correct_governance(mon
         ),
     )
     hub, calls_made = _tracking_hub()
-    _, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub)
-    result, graph, config = await moa_graph.resume_moa_task(graph, config, decision="approved", approved_by="exec-1")
+    _, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub, checkpointer=_saver)
+    result, graph, config = await moa_graph.resume_moa_task(config["configurable"]["thread_id"], decision="approved", approved_by="exec-1", hub=hub, checkpointer=_saver)
 
     assert result["status"] == "ok"
     assert result["tools_called"] == ["stop_payroll"]
@@ -171,7 +179,7 @@ async def test_cascade_breaker_forces_escalation_after_threshold(monkeypatch):
     hub, calls_made = _tracking_hub()
     breaker = CascadeCircuitBreaker(threshold=2)
     result, graph, config = await moa_graph.run_moa_task(
-        "Priya Nair", "Offboard Priya", hub=hub, cascade_breaker=breaker
+        "Priya Nair", "Offboard Priya", hub=hub, cascade_breaker=breaker, checkpointer=_saver
     )
 
     # Actions 1-2 auto-execute (crossing the threshold on the 2nd); action 3
@@ -197,7 +205,7 @@ async def test_stops_after_max_iterations_instead_of_looping_forever(monkeypatch
         ),
     )
     result, graph, config = await moa_graph.run_moa_task(
-        "Priya Nair", "Offboard Priya", hub=_console_hub(), cascade_breaker=CascadeCircuitBreaker(threshold=100)
+        "Priya Nair", "Offboard Priya", hub=_console_hub(), cascade_breaker=CascadeCircuitBreaker(threshold=100), checkpointer=_saver
     )
     assert result["status"] == "max_iterations_exceeded"
 
@@ -210,7 +218,7 @@ async def test_unparseable_model_response_is_a_hard_failure(monkeypatch):
         "_generate_text",
         _fake_generate([{"status": "live_llm_generated", "model_used": "fake", "text": "uh, sure, I'll do something"}]),
     )
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=_console_hub())
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=_console_hub(), checkpointer=_saver)
     assert result["status"] == "error"
     assert result["final_answer"] is None
 
@@ -223,6 +231,6 @@ async def test_unknown_action_key_is_a_hard_failure(monkeypatch):
         "_generate_text",
         _fake_generate([{"status": "live_llm_generated", "model_used": "fake", "text": "ACTION: fire_everyone"}]),
     )
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=_console_hub())
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=_console_hub(), checkpointer=_saver)
     assert result["status"] == "error"
     assert result["final_answer"] is None

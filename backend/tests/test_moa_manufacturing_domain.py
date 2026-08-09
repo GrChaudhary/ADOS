@@ -16,6 +16,10 @@ def test_manufacturing_domain_actions_and_governance():
     assert "update_mes" in MANUFACTURING_ACTIONS
     assert "schedule_maintenance" in MANUFACTURING_ACTIONS
     assert "create_purchase_order" in MANUFACTURING_ACTIONS
+    assert "reroute_station" in MANUFACTURING_ACTIONS
+    assert "evaluate_gnn_risk" in MANUFACTURING_ACTIONS
+    assert "read_rul_telemetry" in MANUFACTURING_ACTIONS
+    assert "sort_workpiece" in MANUFACTURING_ACTIONS
 
     # Tier 0 (Autonomous)
     t0_query = assign_policy_tier(Capability.QUERY_EXTERNAL_STOCK, confidence=1.0, estimated_cost_usd=0.0)

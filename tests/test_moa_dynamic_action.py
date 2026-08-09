@@ -12,6 +12,7 @@ in-memory and dynamic_registry reads it fresh on every call.
 """
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
 from contracts import Capability, PolicyTier
 from integrations import IntegrationHub
@@ -21,6 +22,13 @@ from integrations.connectors.dynamic import DynamicDispatchConfig
 from knowledge.local_llm_client import local_llm_client
 from orchestrate.moa import dynamic_registry, graph as moa_graph
 from orchestrate.moa.dynamic_registry import DynamicAction
+
+# One InMemorySaver shared by this module's tests. build_graph() creates a
+# fresh one per call by design (so that forgetting to pass a checkpointer in
+# production fails loudly rather than silently "working" in one process), which
+# means a test that resumes a task must hand the same saver back in.
+_saver = InMemorySaver()
+
 
 
 @pytest.fixture(autouse=True)
@@ -124,7 +132,7 @@ async def test_llm_can_select_a_dynamic_action_and_capability_id_flows_into_the_
         ),
     )
 
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub)
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub, checkpointer=_saver)
 
     # DYNAMIC_CAPABILITY has no CAPABILITY_RISK_CLASS entry -> fails safe to
     # "high" -> always EXECUTIVE_APPROVAL, so this must pause, never
@@ -135,7 +143,7 @@ async def test_llm_can_select_a_dynamic_action_and_capability_id_flows_into_the_
     assert proposed["policy_tier"] == PolicyTier.EXECUTIVE_APPROVAL.value
     assert calls_seen == []  # nothing invoked before approval
 
-    result, graph, config = await moa_graph.resume_moa_task(graph, config, decision="approved", approved_by="exec-1")
+    result, graph, config = await moa_graph.resume_moa_task(config["configurable"]["thread_id"], decision="approved", approved_by="exec-1", hub=hub, checkpointer=_saver)
 
     assert result["tools_called"] == ["notify_slack"]
     assert len(calls_seen) == 1
@@ -182,7 +190,7 @@ async def test_calibrated_tier_overrides_the_executive_approval_floor(monkeypatc
         ]),
     )
 
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub)
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub, checkpointer=_saver)
 
     # Still pauses -- APPROVAL_REQUIRED, not AUTONOMOUS -- but at the
     # calibrated tier, not the uncalibrated EXECUTIVE_APPROVAL floor.
@@ -190,7 +198,7 @@ async def test_calibrated_tier_overrides_the_executive_approval_floor(monkeypatc
     proposed = graph.get_state(config).values["proposed_action"]
     assert proposed["policy_tier"] == PolicyTier.APPROVAL_REQUIRED.value
 
-    result, graph, config = await moa_graph.resume_moa_task(graph, config, decision="approved", approved_by="mgr-1")
+    result, graph, config = await moa_graph.resume_moa_task(config["configurable"]["thread_id"], decision="approved", approved_by="mgr-1", hub=hub, checkpointer=_saver)
     assert calls_seen[0].governance.policy_tier == PolicyTier.APPROVAL_REQUIRED
 
 
@@ -224,7 +232,7 @@ async def test_calibrated_to_autonomous_auto_executes_without_pausing(monkeypatc
         ]),
     )
 
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub)
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Offboard Priya", hub=hub, checkpointer=_saver)
 
     # No pause at all -- calibrated all the way to AUTONOMOUS.
     assert result is not None
@@ -294,10 +302,10 @@ async def test_llm_supplies_real_argument_values_and_they_flow_into_the_call(mon
         ),
     )
 
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Add 4 and 5", hub=hub)
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Add 4 and 5", hub=hub, checkpointer=_saver)
     assert result is None  # still pauses -- DYNAMIC_CAPABILITY always floors at EXECUTIVE_APPROVAL
 
-    result, graph, config = await moa_graph.resume_moa_task(graph, config, decision="approved", approved_by="exec-1")
+    result, graph, config = await moa_graph.resume_moa_task(config["configurable"]["thread_id"], decision="approved", approved_by="exec-1", hub=hub, checkpointer=_saver)
 
     assert result["tools_called"] == ["add_numbers"]
     assert len(calls_seen) == 1
@@ -323,7 +331,7 @@ async def test_missing_required_args_is_a_hard_failure(monkeypatch):
         _fake_generate([{"status": "live_llm_generated", "model_used": "fake", "text": "ACTION: add_numbers"}]),
     )
 
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Add some numbers", hub=hub)
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Add some numbers", hub=hub, checkpointer=_saver)
     assert result["status"] == "error"
 
 
@@ -343,7 +351,7 @@ async def test_malformed_args_is_a_hard_failure_even_when_nothing_was_required(m
         _fake_generate([{"status": "live_llm_generated", "model_used": "fake", "text": "ACTION: notify_slack\nARGS: not valid json"}]),
     )
 
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Notify the manager", hub=hub)
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Notify the manager", hub=hub, checkpointer=_saver)
     # Malformed ARGS is a hard fail even though nothing was strictly
     # required -- never silently ignore malformed LLM output.
     assert result["status"] == "error"
@@ -384,7 +392,7 @@ async def _setup_add_numbers(monkeypatch, *, first_llm_text: str = 'ACTION: add_
             {"status": "live_llm_generated", "model_used": "fake", "text": "ANSWER: Added the numbers."},
         ]),
     )
-    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Add some numbers", hub=hub)
+    result, graph, config = await moa_graph.run_moa_task("Priya Nair", "Add some numbers", hub=hub, checkpointer=_saver)
     assert result is None
     return hub, graph, config, calls_seen
 
@@ -399,11 +407,11 @@ async def test_proposed_action_exposes_input_schema_for_the_frontend_to_render_a
 
 @pytest.mark.asyncio
 async def test_human_edited_arguments_override_the_llm_proposed_ones(monkeypatch):
-    _, graph, config, calls_seen = await _setup_add_numbers(monkeypatch)
+    hub, graph, config, calls_seen = await _setup_add_numbers(monkeypatch)
 
     # A human notices the LLM got it wrong and corrects it before approving.
     result, graph, config = await moa_graph.resume_moa_task(
-        graph, config, decision="approved", approved_by="exec-1", edited_arguments={"a": 100, "b": 1},
+        config["configurable"]["thread_id"], decision="approved", approved_by="exec-1", edited_arguments={"a": 100, "b": 1}, hub=hub, checkpointer=_saver,
     )
 
     assert result["tools_called"] == ["add_numbers"]
@@ -414,17 +422,17 @@ async def test_human_edited_arguments_override_the_llm_proposed_ones(monkeypatch
 
 @pytest.mark.asyncio
 async def test_edited_arguments_missing_a_required_param_is_rejected_before_resuming(monkeypatch):
-    _, graph, config, calls_seen = await _setup_add_numbers(monkeypatch)
+    hub, graph, config, calls_seen = await _setup_add_numbers(monkeypatch)
 
     with pytest.raises(ValueError, match="missing required parameter"):
-        await moa_graph.resume_moa_task(graph, config, decision="approved", approved_by="exec-1", edited_arguments={"a": 100})
+        await moa_graph.resume_moa_task(config["configurable"]["thread_id"], decision="approved", approved_by="exec-1", edited_arguments={"a": 100}, hub=hub, checkpointer=_saver)
 
     assert calls_seen == []  # rejected before act_node ever ran -- nothing executed with a partial edit
 
     # Still genuinely resumable afterward with a valid correction -- proves
     # the rejected attempt never advanced or corrupted the paused graph.
     result, graph, config = await moa_graph.resume_moa_task(
-        graph, config, decision="approved", approved_by="exec-1", edited_arguments={"a": 100, "b": 1},
+        config["configurable"]["thread_id"], decision="approved", approved_by="exec-1", edited_arguments={"a": 100, "b": 1}, hub=hub, checkpointer=_saver,
     )
     assert result["tools_called"] == ["add_numbers"]
     assert calls_seen[0].input["a"] == 100 and calls_seen[0].input["b"] == 1
@@ -432,10 +440,10 @@ async def test_edited_arguments_missing_a_required_param_is_rejected_before_resu
 
 @pytest.mark.asyncio
 async def test_edited_arguments_must_be_a_json_object(monkeypatch):
-    _, graph, config, calls_seen = await _setup_add_numbers(monkeypatch)
+    hub, graph, config, calls_seen = await _setup_add_numbers(monkeypatch)
 
     with pytest.raises(ValueError, match="must be a JSON object"):
-        await moa_graph.resume_moa_task(graph, config, decision="approved", approved_by="exec-1", edited_arguments=[1, 2, 3])
+        await moa_graph.resume_moa_task(config["configurable"]["thread_id"], decision="approved", approved_by="exec-1", edited_arguments=[1, 2, 3], hub=hub, checkpointer=_saver)
 
     assert calls_seen == []
 
@@ -445,10 +453,12 @@ async def test_rejecting_with_edited_arguments_present_still_just_rejects(monkey
     """edited_arguments is only relevant to an approval that actually
     executes -- rejecting must ignore it rather than validating it, since
     a rejected action never builds a CapabilityCall at all."""
-    _, graph, config, calls_seen = await _setup_add_numbers(monkeypatch)
+    hub, graph, config, calls_seen = await _setup_add_numbers(monkeypatch)
 
     result, graph, config = await moa_graph.resume_moa_task(
-        graph, config, decision="rejected", approved_by="exec-1", edited_arguments={"a": 100},  # missing "b", would fail if validated
+        config["configurable"]["thread_id"], decision="rejected", approved_by="exec-1",
+        edited_arguments={"a": 100},  # missing "b", would fail if validated
+        hub=hub, checkpointer=_saver,
     )
 
     assert result["approval_decision"] == "rejected"

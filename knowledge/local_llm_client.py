@@ -28,11 +28,12 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 # Providers a Settings-page key can be saved for, in fixed failover
-# priority order (nemotron, openai, anthropic — Ollama is env-only, see
+# priority order (nemotron, groq, openai, anthropic — Ollama is env-only, see
 # module docstring). Shared by _generate_text's failover loop and
 # backend/app/routers/settings.py's provider listing, so the two can never
 # drift apart on what "all providers" means.
-KEY_PROVIDERS = ("nemotron", "openai", "anthropic")
+KEY_PROVIDERS = ("nemotron", "groq", "openai", "anthropic")
+
 
 
 def mask_api_key(key: Optional[str]) -> Optional[str]:
@@ -86,28 +87,50 @@ class LocalLLMClient:
         return os.environ.get(env_var, default)
 
     def get_api_key(self, provider: str) -> Optional[str]:
-        env_var = {"nemotron": "NEMOTRON_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}[provider]
+        env_var = {"nemotron": "NEMOTRON_API_KEY", "groq": "GROQ_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}[provider]
         return self._cfg(provider, "apiKey", env_var)
 
     def get_model(self, provider: str) -> str:
         env_var, default = {
             "nemotron": ("NEMOTRON_MODEL", "nvidia/llama-3.3-nemotron-super-49b-v1"),
+            "groq": ("GROQ_MODEL", "llama-3.3-70b-versatile"),
             "openai": ("OPENAI_MODEL", "gpt-4o-mini"),
             "anthropic": ("ANTHROPIC_MODEL", "claude-opus-5"),
         }[provider]
         return self._cfg(provider, "model", env_var, default)
+
 
     @property
     def nemotron_base_url(self) -> str:
         return os.environ.get("NEMOTRON_BASE_URL", "https://integrate.api.nvidia.com/v1")
 
     @property
+    def active_provider_info(self) -> Dict[str, str]:
+        db_val = self._db_settings().get("__active_provider__", {}).get("model")
+        if db_val:
+            val = db_val.strip().lower()
+            if val != "auto":
+                return {"active_provider": val, "active_provider_source": "database"}
+            return {"active_provider": "auto", "active_provider_source": "database"}
+        env_val = os.environ.get("LLM_PROVIDER", "").strip().lower()
+        if env_val:
+            return {"active_provider": env_val, "active_provider_source": "environment"}
+        return {"active_provider": "auto", "active_provider_source": "auto"}
+
+    @property
+    def active_provider(self) -> Dict[str, str]:
+        """Alias returning active provider and source info."""
+        return self.active_provider_info
+
+    @property
     def provider_override(self) -> str:
-        """"" (default/unset) = automatic failover across every configured
+        """ (default/unset/auto) = automatic failover across every configured
         provider in KEY_PROVIDERS order, Ollama last. A specific provider
-        name forces that one exclusively, with no fallback — an explicit
-        opt-out of failover, not the normal mode."""
-        return os.environ.get("LLM_PROVIDER", "").strip().lower()
+        name forces that one exclusively, with no fallback."""
+        info = self.active_provider_info
+        prov = info["active_provider"]
+        return "" if prov == "auto" else prov
+
 
     def _configured(self, provider: str) -> bool:
         if provider == "ollama":
@@ -160,11 +183,15 @@ class LocalLLMClient:
     def get_nemotron_status(self) -> Dict[str, Any]:
         return self.get_provider_status("nemotron")
 
+    def get_groq_status(self) -> Dict[str, Any]:
+        return self.get_provider_status("groq")
+
     def get_openai_status(self) -> Dict[str, Any]:
         return self.get_provider_status("openai")
 
     def get_anthropic_status(self) -> Dict[str, Any]:
         return self.get_provider_status("anthropic")
+
 
     @property
     def thinking_enabled(self) -> bool:
@@ -212,11 +239,14 @@ class LocalLLMClient:
     def _health_status(self, provider: str) -> Dict[str, Any]:
         if provider == "nemotron":
             return self._nemotron_health_status()
+        if provider == "groq":
+            return self._groq_health_status()
         if provider == "openai":
             return self._openai_health_status()
         if provider == "anthropic":
             return self._anthropic_health_status()
         raise ValueError(f"unknown provider: {provider}")
+
 
     def _cached_health(self, provider: str, ttl_seconds: float, check) -> Dict[str, Any]:
         """Shared cache for the three metered cloud APIs — the Integrations
@@ -282,6 +312,32 @@ class LocalLLMClient:
                 return {"status": f"Unreachable: {exc}", "connected": False}
 
         return {**base, **self._cached_health("nemotron", 60, check)}
+
+    def _groq_health_status(self) -> Dict[str, Any]:
+        base = {
+            "name": "Groq Cloud",
+            "auth": "Bearer API key",
+            "description": f"Ultra-low latency cloud reasoning via Groq ({self.get_model('groq')}).",
+            "host": "https://api.groq.com/openai/v1",
+        }
+        api_key = self.get_api_key("groq")
+        if not api_key:
+            return {**base, "status": "Not Configured", "connected": False}
+
+        def check() -> Dict[str, Any]:
+            try:
+                with httpx.Client(timeout=5.0) as client:
+                    resp = client.get("https://api.groq.com/openai/v1/models", headers={"Authorization": f"Bearer {api_key}"})
+                    if resp.status_code == 200:
+                        return {"status": "Connected 🟢", "connected": True}
+                    if resp.status_code == 401:
+                        return {"status": "Unauthorized — check the saved API key", "connected": False}
+                    return {"status": f"Groq returned {resp.status_code}", "connected": False}
+            except Exception as exc:
+                return {"status": f"Unreachable: {exc}", "connected": False}
+
+        return {**base, **self._cached_health("groq", 60, check)}
+
 
     def _openai_health_status(self) -> Dict[str, Any]:
         base = {
@@ -389,11 +445,14 @@ class LocalLLMClient:
             return self._generate_text_ollama(prompt, max_tokens, temperature)
         if provider == "nemotron":
             return self._generate_text_nemotron(prompt, max_tokens, temperature)
+        if provider == "groq":
+            return self._generate_text_groq(prompt, max_tokens, temperature)
         if provider == "openai":
             return self._generate_text_openai(prompt, max_tokens, temperature)
         if provider == "anthropic":
             return self._generate_text_anthropic(prompt, max_tokens)
         raise ValueError(f"unknown provider: {provider}")
+
 
     def _generate_text_ollama(self, prompt: str, max_tokens: int, temperature: float) -> Dict[str, Any]:
         try:
@@ -460,6 +519,35 @@ class LocalLLMClient:
                 return {"status": "live_llm_generated", "model_used": f"{model} (NVIDIA NIM)", "text": text}
         except Exception as exc:
             return {"status": "error", "model_used": None, "text": None, "error": str(exc)}
+
+    def _generate_text_groq(self, prompt: str, max_tokens: int, temperature: float) -> Dict[str, Any]:
+        api_key = self.get_api_key("groq")
+        model = self.get_model("groq")
+        try:
+            with httpx.Client(timeout=45.0) as client:
+                resp = client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": max_tokens,
+                        "temperature": temperature,
+                        "stream": False,
+                    },
+                )
+                if resp.status_code != 200:
+                    return {"status": "error", "model_used": None, "text": None, "error": f"Groq returned {resp.status_code}: {resp.text[:300]}"}
+                data = resp.json()
+                choices = data.get("choices") or []
+                text = (choices[0].get("message", {}).get("content") if choices else "") or ""
+                text = text.strip()
+                if not text:
+                    return {"status": "error", "model_used": None, "text": None, "error": "empty response"}
+                return {"status": "live_llm_generated", "model_used": f"{model} (Groq Cloud)", "text": text}
+        except Exception as exc:
+            return {"status": "error", "model_used": None, "text": None, "error": str(exc)}
+
 
     def _generate_text_openai(self, prompt: str, max_tokens: int, temperature: float) -> Dict[str, Any]:
         api_key = self.get_api_key("openai")

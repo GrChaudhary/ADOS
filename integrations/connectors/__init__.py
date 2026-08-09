@@ -3,8 +3,9 @@ from .console import ConsoleConnector
 from .sap import SAPConnector
 from .servicenow import ServiceNowConnector
 from .marketplace import MarketplaceConnector
+from .smart_factory import SmartFactoryConnector
 
-__all__ = ["Connector", "ConsoleConnector", "ServiceNowConnector", "SAPConnector", "MarketplaceConnector"]
+__all__ = ["Connector", "ConsoleConnector", "ServiceNowConnector", "SAPConnector", "MarketplaceConnector", "SmartFactoryConnector"]
 
 # DynamicCapabilityConnector is deliberately not re-exported here: it
 # imports from integrations.capability_manifest, which is upstream of this

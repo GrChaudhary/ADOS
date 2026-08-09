@@ -126,7 +126,20 @@ export const AGENTS: Record<string, AgentMeta> = {
     memoryRAG: false,
     targetTier: "Tier 1 (Engineer Approval)",
   },
+  "prime-rlm-agent": {
+    id: "prime-rlm-agent",
+    label: "Prime RLM Agent",
+    icon: "🧬",
+    color: "purple",
+    description: "Self-improving RLM coding and research agent (Prime Intellect). Performs recursive root-cause debugging, continuous IPython sandbox execution, and harness prompt/tool auto-refinement.",
+    model: "Prime Agent RLM Harness (Recursive Continual Learning)",
+    inputSchema: "RLMTaskPrompt { prompt, domain, max_iterations }",
+    outputSchema: "RLMExecutionResult { taskId, status, harness, kernelTrace, harnessRefinements }",
+    memoryRAG: true,
+    targetTier: "Tier 1 (Engineer Approval)",
+  },
 };
+
 
 /** Set of IDs belonging to the 8 built-in agents — used to lock delete actions in the UI. */
 export const BUILTIN_AGENT_IDS: ReadonlySet<string> = new Set(Object.keys(AGENTS));

@@ -230,7 +230,24 @@ BUILTIN_AGENTS: List[AgentRegistryEntry] = [
         instructions="Create a real ServiceNow incident/change_request record for the requested ADOS capability call, using the mapped table (integrations/connectors/servicenow.py's _CAPABILITY_TABLE) and a clear short_description/description. Report back the real ticket number — never invent one.",
         createdAt="2026-07-28T00:00:00+00:00",
     ),
+    AgentRegistryEntry(
+        id="prime-rlm-agent",
+        label="Prime RLM Agent",
+        icon="🧬",
+        color="purple",
+        description="Self-improving RLM coding and research agent (Prime Intellect). Performs recursive root-cause debugging, continuous IPython sandbox execution, and harness prompt/tool auto-refinement.",
+        model="Prime Agent RLM Harness (Recursive Continual Learning)",
+        inputSchema="RLMTaskPrompt { prompt, domain, max_iterations }",
+        outputSchema="RLMExecutionResult { taskId, status, harness, kernelTrace, harnessRefinements }",
+        memoryRAG=True,
+        targetTier="Tier 1 (Engineer Approval)",
+        stage="Reasoning",
+        isBuiltIn=True,
+        instructions="Execute recursive continual learning passes across code and scripts in an IPython kernel sandbox. Auto-fix bugs, log kernel trace, and refine execution harness.",
+        createdAt="2026-08-09T00:00:00+00:00",
+    ),
 ]
+
 
 BUILTIN_IDS = {a.id for a in BUILTIN_AGENTS}
 

@@ -4,8 +4,9 @@ GET /governance/circuit-breaker + POST /governance/circuit-breaker/clear
 CascadeCircuitBreaker in ADOS — orchestrate/moa/graph.py creates one PER
 MOA task (see that module's own docstring: "One instance per
 incident/task"). These endpoints report an honest AGGREGATE over the
-currently-live per-task breakers held in app.state.moa_pending_tasks
-(populated only while a task is paused awaiting a human), not a
+currently-live per-task breakers, now persisted in the moa_task_breakers
+table (backend/app/moa_breaker_store.py) rather than a process-local dict
+— populated only while a task is paused awaiting a human, not a
 fabricated global counter — these tests drive real MOA tasks through the
 real router to produce that live state, rather than constructing a
 breaker directly and bypassing the thing under test.

@@ -168,6 +168,13 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Install Playwright Chromium browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E smoke test
+        run: npm run test:e2e
+
+
   images:
     name: Docker images build
     runs-on: ubuntu-latest

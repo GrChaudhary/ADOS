@@ -8,12 +8,15 @@ returned here is read directly from the modules that actually enforce it.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.session import get_db_session
 from integrations.connectors.servicenow import ServiceNowConnector
 from orchestrate.cascade_breaker import CascadeCircuitBreaker, CascadeState
 from orchestrate.governance import CAPABILITY_RISK_CLASS, HIGH_EXPOSURE_MIN_USD, LOW_EXPOSURE_MAX_USD, TIER0_CONFIDENCE_THRESHOLD
 from orchestrate.obsidian_projection import generate_obsidian_projection
 
+from .. import moa_breaker_store
 from ..auth import get_current_user
 from ..rbac import Role, User
 
@@ -68,16 +71,12 @@ async def get_policies():
 # ---------------------------------------------------------------------
 
 
-def _live_breakers(request: Request) -> dict:
-    return {
-        task_id: breaker
-        for task_id, (_graph, _config, breaker) in request.app.state.moa_pending_tasks.items()
-    }
-
-
 @router.get("/circuit-breaker")
-async def get_circuit_breaker_status(request: Request):
-    breakers = _live_breakers(request)
+async def get_circuit_breaker_status(request: Request, session: AsyncSession = Depends(get_db_session)):
+    # Reads the moa_task_breakers table rather than a process-local dict, so
+    # the aggregate covers every paused task in the deployment instead of only
+    # the ones this replica happens to have started.
+    breakers = await moa_breaker_store.list_live(session)
     open_task_ids = [tid for tid, b in breakers.items() if b.state is CascadeState.OPEN]
     return {
         "state": CascadeState.OPEN.value.upper() if open_task_ids else CascadeState.CLOSED.value.upper(),
@@ -89,18 +88,22 @@ async def get_circuit_breaker_status(request: Request):
 
 
 @router.post("/circuit-breaker/clear")
-async def clear_circuit_breaker(request: Request, current_user: User = Depends(get_current_user)):
+async def clear_circuit_breaker(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
     """The explicit human batch-review sign-off (§5.3) — the only way a
     breaker closes other than a Tier 1/2 human decision inside the task
-    itself. No timeout-based auto-recovery, by design."""
+    itself. No timeout-based auto-recovery, by design.
+
+    Now durable: clearing persists, so a restart can't resurrect a streak a
+    human already signed off on, and — the direction that actually matters —
+    can't drop one they haven't."""
     if current_user.role == Role.AUDITOR:
         raise HTTPException(status_code=403, detail="Auditors have read-only access and cannot clear the circuit breaker")
 
-    cleared = 0
-    for breaker in _live_breakers(request).values():
-        if breaker.state is CascadeState.OPEN or breaker.review_batch():
-            breaker.clear_after_review()
-            cleared += 1
+    cleared = await moa_breaker_store.clear_all_open(session)
     return {"status": "cleared", "breakers_cleared": cleared}
 
 

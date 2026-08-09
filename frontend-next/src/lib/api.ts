@@ -430,7 +430,10 @@ export interface LLMProviderStatus {
 export interface LLMProvidersResponse {
   providers: LLMProviderStatus[];
   ollama: Omit<LLMProviderStatus, "provider" | "masked_key"> & { host?: string; thinkingEnabled?: boolean };
+  activeProvider?: string;
+  activeProviderSource?: string;
 }
+
 
 export interface LLMProviderTestResult {
   success: boolean;
@@ -590,7 +593,13 @@ export const api = {
   getIntegrationsStatus: () => apiFetch<IntegrationConnectorItem[]>("/integrations/status"),
   // LLM provider settings — Settings page
   getLLMProviders: () => apiFetch<LLMProvidersResponse>("/settings/llm-providers"),
+  setActiveLLMProvider: (provider: string) =>
+    apiFetch<{ activeProvider: string; activeProviderSource: string }>("/settings/active-provider", {
+      method: "PUT",
+      body: JSON.stringify({ provider }),
+    }),
   toggleThinkingMode: (enabled: boolean) =>
+
     apiFetch<LLMProvidersResponse["ollama"]>("/settings/llm-providers/ollama/thinking", {
       method: "PUT",
       body: JSON.stringify({ thinkingEnabled: enabled }),
