@@ -66,22 +66,30 @@ bottleneck, but it will matter for longer missions on a metered provider.
 
 ## Runtime
 
-### `runtime_session_id` is always NULL
+### ~~`runtime_session_id` is always NULL~~ — FIXED 2026-08-10
 
-`runtime_sessions.runtime_session_id` exists and is never populated. Prime
-Agent's RPC surface emits **no `session` event** — an earlier design note
-asserted one, on the assumption that a mode built for automation would announce
-its session id. It does not. The id is reachable only by *asking*, via the
-`get_state` command returning an `RpcSessionState`
-(`src/modes/rpc/rpc-types.ts`).
+Kept here because the shape of the bug is worth remembering: the column existed
+from the start, the adapter appeared to populate it, and it was NULL in every
+run ever executed.
 
-Consequence: ADOS cannot correlate its session row with Prime Agent's own
-session file after the container is gone. The `"session"` entry in
-`_EVENT_MAP` is dead code.
+Prime Agent's RPC surface emits **no `session` event**. An earlier design note
+asserted one, on the reasonable assumption that a mode built for automation
+would announce its session id; it does not, and the id is reachable over the
+protocol only via the `get_state` command (`src/modes/rpc/rpc-types.ts`). The
+`"session"` entry in `_EVENT_MAP` was therefore dead code that made the adapter
+*look* like it captured the id while capturing nothing.
 
-Cheap fix available, not yet applied: the session file's **basename is the id**
-(`/work/.sessions/<uuid>.jsonl`), readable at teardown without touching the RPC
-protocol.
+Fixed by reading it where Prime Agent actually writes it: the session file's
+basename is the id (`src/core/session-file-actions.ts`), and the file lives in
+`--session-dir` inside our own workspace. `recover_runtime_session_id()` is
+called from `run_objective()` — **not** `teardown()` — because teardown deletes
+the workspace, and a recovery attempted afterwards silently yields the same NULL
+this change exists to remove.
+
+Verified in a live run: `runtime_session_id = '019fe7e7-de3f-731b-bf6e-07686ca21091'`,
+persisted to `runtime_sessions`. Covered by
+`backend/tests/test_runtime_session_id.py`, including a structural test that the
+dead `_EVENT_MAP["session"]` entry stays gone.
 
 ### Network egress is placement, not filtering
 

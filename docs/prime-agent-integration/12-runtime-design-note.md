@@ -43,19 +43,15 @@ later; they are not needed to prove the loop.
 the assumption that a mode built for automation would announce its session id.
 It does not: the first thing on stdout after a `prompt` is
 `{"type":"response","command":"prompt","success":true}`, and Prime Agent's
-session id is reachable only by *asking* — the `get_state` command, which
-returns an `RpcSessionState` carrying `sessionId`
-(`src/modes/rpc/rpc-types.ts`). The adapter's `"session"` entry in `_EVENT_MAP`
-is therefore dead code and `runtime_sessions.runtime_session_id` is always
-NULL. Recorded as a gap: the field promises a correlation to Prime Agent's own
-session file that ADOS is not currently keeping.
+session id is reachable over the protocol only by *asking* — the `get_state`
+command, which returns an `RpcSessionState` carrying `sessionId`
+(`src/modes/rpc/rpc-types.ts`).
 
-**`agent_end` means "this prompt is finished", not "the work succeeded."**
-Established empirically: `nvidia/llama-3.3-nemotron-super-49b-v1` produced
-`agent_end` with `content: []`, zero tool executions, and exit code 0, having
-done nothing at all. The adapter therefore records success from *observed
-effects* — tool executions seen, final assistant text present, capability calls
-received by the gateway — never from process exit status.
+ADOS does not ask. `recover_runtime_session_id()` reads the id from the session
+file's basename instead (`src/core/session-file-actions.ts`), since the file
+lives in `--session-dir` inside our own workspace — a read rather than a
+protocol change. It runs in `run_objective()`, before `teardown()` deletes the
+workspace. Fixed 2026-08-10; `runtime_sessions.runtime_session_id` is populated.
 
 ## B. Container lifecycle
 

@@ -54,8 +54,10 @@ _ADOS_SKILL_MANIFEST = (
 
 # Prime Agent's event vocabulary -> ADOS's. Anything unmapped is dropped rather
 # than passed through, so ADOS's event stream never depends on upstream shapes.
+# NOTE: there is deliberately no "session" entry. Prime Agent's RPC surface
+# emits no such event — the mapping used to be here and was dead code, which is
+# why runtime_session_id was always NULL. See recover_runtime_session_id().
 _EVENT_MAP = {
-    "session": "runtime.session.started",
     "tool_execution_start": "runtime.tool.started",
     "tool_execution_end": "runtime.tool.finished",
     "turn_end": "runtime.turn.completed",
@@ -268,8 +270,6 @@ class PrimeAgentRuntime:
             async for event in self._read_events(proc, spec.max_wall_clock_seconds):
                 etype = event.get("type")
 
-                if etype == "session":
-                    runtime_session_id = event.get("id")
                 if etype == "tool_execution_start":
                     tool_calls += 1
                     self.state = SessionState.WAITING_FOR_CAPABILITY
@@ -333,8 +333,43 @@ class PrimeAgentRuntime:
             tool_success_count=tool_ok,
             tool_error_count=tool_err,
             failure_reason=failure,
-            runtime_session_id=runtime_session_id,
+            # Read here, while the workspace still exists — teardown deletes it.
+            runtime_session_id=runtime_session_id or self.recover_runtime_session_id(),
         )
+
+    def recover_runtime_session_id(self) -> Optional[str]:
+        """Prime Agent's own session id, recovered from its session file.
+
+        There is no `session` event on the RPC surface. An earlier design note
+        asserted one, on the reasonable assumption that a mode built for
+        automation would announce its session id; it does not, and the id is
+        reachable over the protocol only by *asking* — the `get_state` command,
+        which returns an `RpcSessionState` (`src/modes/rpc/rpc-types.ts`).
+
+        Injecting an extra command into a live RPC stream to learn an
+        identifier is more moving parts than the problem deserves. The session
+        file's basename IS the id (`src/core/session-file-actions.ts`:
+        `sessionId = basename(sessionPath).replace(/\\.jsonl$/, "")`), and Prime
+        Agent writes it into `--session-dir`, which is inside our own workspace.
+        So this is a read, not a protocol change.
+
+        Timing matters: the workspace is disposable and `teardown()` deletes it,
+        so this must run before then — which is why `run_objective` calls it
+        rather than `teardown`.
+
+        Most recent file wins: a resumed session directory can hold several, and
+        the one this run just wrote is the newest.
+        """
+        if not self.workspace:
+            return None
+        sessions = self.workspace / ".sessions"
+        try:
+            files = [p for p in sessions.glob("*.jsonl") if p.is_file()]
+        except OSError:
+            return None
+        if not files:
+            return None
+        return max(files, key=lambda p: p.stat().st_mtime).stem
 
     async def _read_events(self, proc, timeout_seconds: float) -> AsyncIterator[Dict[str, Any]]:
         """Strict JSONL: split on \\n only.
