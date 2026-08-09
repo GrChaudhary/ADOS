@@ -53,7 +53,16 @@ CAPABILITY_RISK_CLASS: Dict[Capability, str] = {
     Capability.APPROVE_EXPENSE_REIMBURSEMENT: "medium",
     Capability.ISSUE_VENDOR_PAYMENT_HOLD: "medium",
     Capability.PROCESS_WIRE_TRANSFER: "high",
+
+    # RLM / Continual Harness
+    Capability.RUN_PRIME_RLM_AGENT: "medium",
+
+    # Read-only, scoped to the caller's own mission, no side effects — low, so
+    # it runs autonomously and an investigation never blocks on a human just to
+    # read the case file it was assigned.
+    Capability.FETCH_INCIDENT_EVIDENCE: "low",
 }
+
 
 # Financial exposure bands, documentation/05_Product_Bible.md section 5.
 # Public (no leading underscore) - backend/app/routers/governance.py

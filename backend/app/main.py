@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from typing import Any
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -16,6 +17,7 @@ from orchestrate.onboarding import runtime_registry as onboarding_runtime_regist
 
 from . import user_store
 from .config import settings
+from .mcp_gateway import mcp_http_app
 from .eventbus import get_event_bus
 from .observability import RequestIdMiddleware, configure_logging
 from .routers import ai_services, agents_registry, auth, capabilities, capability_onboarding, copilot, digital_twin, events, events_stream, executive, governance, health, incidents, integrations, knowledge_graph, langgraph_agents, learning, memory, moa, settings as settings_router
@@ -55,6 +57,27 @@ async def _refresh_llm_settings_periodically() -> None:
             raise
         except Exception:
             logger.warning("LLM settings refresh failed; keeping previous cache", exc_info=True)
+
+
+# The MCP sub-app is rebuilt for EVERY lifespan run, not once at import.
+#
+# FastMCP's StreamableHTTPSessionManager refuses to .run() twice on the same
+# instance, and the test suite starts this app's lifespan once per TestClient —
+# dozens of times per session. A single import-time instance therefore works in
+# production and detonates the moment a second TestClient opens, which is
+# exactly what it did: 30 failures and 55 errors across files that have nothing
+# to do with MCP.
+#
+# So the mount below is a thin delegator to whichever instance the current
+# lifespan created, and _mcp_current is None outside a lifespan (the endpoint
+# is genuinely not available then, which is honest).
+_mcp_current: Any = None
+
+
+async def _mcp_delegator(scope, receive, send):
+    if _mcp_current is None:
+        raise RuntimeError("MCP gateway addressed outside the application lifespan")
+    await _mcp_current(scope, receive, send)
 
 
 @asynccontextmanager
@@ -114,11 +137,14 @@ async def lifespan(app: FastAPI):
     # proposal paused on interrupt() — see backend/app/routers/
     # langgraph_agents.py. Same shape as incident_tasks above: an in-memory
     # dict of live, in-process objects a later request needs to find again.
-    app.state.itsm_pending_proposals = {}
-    # task_id -> (compiled LangGraph, config) for a MOA HR-domain action
-    # paused on interrupt() — see backend/app/routers/moa.py. Same shape as
-    # itsm_pending_proposals above.
-    app.state.moa_pending_tasks = {}
+    # NOTE: there are deliberately no app.state.moa_pending_tasks /
+    # itsm_pending_proposals dicts any more. Paused approvals used to live in
+    # dicts here, which meant a restart dropped every pending approval on the
+    # floor and a second replica could not see, let alone resume, a task it
+    # had not started. That state now lives in the LangGraph checkpointer
+    # (db/checkpointer.py), plus the moa_task_breakers table
+    # (backend/app/moa_breaker_store.py) for the one piece a rebuilt graph
+    # cannot reconstruct: the cascade breaker's streak.
 
     loaded = await app.state.orchestrator.audit_trail.hydrate_from_db()
     logger.info("Hydrated incidents from Postgres", extra={"incident_count": loaded})
@@ -181,7 +207,20 @@ async def lifespan(app: FastAPI):
         else None
     )
 
-    yield
+    # The MCP capability gateway is a mounted ASGI sub-app with its own
+    # session manager, and that manager only starts if its lifespan runs.
+    # Mounting alone is NOT enough — a mounted app's lifespan is not invoked
+    # by Starlette, so without this the endpoint would accept connections and
+    # then fail on the first tool call. Nesting it here keeps ADOS's lifespan
+    # the single owner of startup order.
+    global _mcp_current
+    _mcp_gateway = mcp_http_app()
+    async with _mcp_gateway.router.lifespan_context(app):
+        _mcp_current = _mcp_gateway
+        try:
+            yield
+        finally:
+            _mcp_current = None
 
     if getattr(app.state, "llm_settings_refresh_task", None):
         app.state.llm_settings_refresh_task.cancel()
@@ -238,3 +277,8 @@ if _FRONTEND_DIR.exists():
     # HTML/JS, no build step, served from the same origin as the API so
     # frontend/app.js's fetch() calls need no CORS configuration.
     app.mount("/dashboard", StaticFiles(directory=_FRONTEND_DIR, html=True), name="dashboard")
+
+# The Prime Agent runtime's only route back into ADOS. Mounted OUTSIDE the
+# /api/v1 routers deliberately: it carries opaque per-session runtime tokens,
+# not user JWTs, so it must not sit behind get_current_user.
+app.mount("/mcp", _mcp_delegator)

@@ -18,6 +18,8 @@ from .connectors.dynamic import DynamicCapabilityConnector
 from .connectors.sap import SAPConnector
 from .connectors.servicenow import ServiceNowConnector
 from .connectors.marketplace import MarketplaceConnector
+from .connectors.mission_evidence import MissionEvidenceConnector
+from .connectors.smart_factory import SmartFactoryConnector
 from .policy_engine import ConnectorPolicyEngine, PolicyViolation, require_governance
 
 
@@ -72,9 +74,18 @@ def default_hub(manifests: Optional[CapabilityManifestRegistry] = None) -> Integ
     this ordering, ConsoleConnector would silently win and no dynamically
     onboarded capability would ever actually execute."""
     hub = IntegrationHub(manifests=manifests)
+    # Before ConsoleConnector for a reason worth stating plainly: Console
+    # declares `capabilities = set(Capability)` and is_configured() = True, so
+    # if it won the selection for FetchIncidentEvidence it would return
+    # status=SUCCEEDED with output {"message": "[console] simulated
+    # FetchIncidentEvidence"} — a green capability row, an audit trail that
+    # says the evidence was fetched, and no evidence. Registration order is
+    # what keeps a read capability honest.
+    hub.registry.register(MissionEvidenceConnector())
     hub.registry.register(MarketplaceConnector())
     hub.registry.register(ServiceNowConnector())
     hub.registry.register(SAPConnector())
+    hub.registry.register(SmartFactoryConnector())
     hub.registry.register(hub.dynamic_capability_connector)
     hub.registry.register(ConsoleConnector())
     return hub

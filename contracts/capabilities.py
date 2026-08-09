@@ -43,6 +43,26 @@ class Capability(str, Enum):
     ISSUE_VENDOR_PAYMENT_HOLD = "IssueVendorPaymentHold"
     PROCESS_WIRE_TRANSFER = "ProcessWireTransfer"
 
+    # Manufacturing domain pod (orchestrate/moa/manufacturing_domain.py)
+    REROUTE_STATION = "RerouteStation"
+    EVALUATE_GNN_RISK = "EvaluateGNNRisk"
+    READ_RUL_TELEMETRY = "ReadRULTelemetry"
+    SORT_WORKPIECE = "SortWorkpiece"
+
+    # Self-Learning RLM Agent (Prime Intellect prime-agent harness)
+    RUN_PRIME_RLM_AGENT = "RunPrimeRLMAgent"
+
+    # Mission evidence retrieval (integrations/connectors/mission_evidence.py).
+    # Reads ADOS's own record of a mission and has no side effect.
+    #
+    # It exists because evidence must be RETRIEVED through the governed path,
+    # not handed to the runtime for free. A runtime pre-loaded with its evidence
+    # can still produce a report when its tools are broken — and one did,
+    # inventing a disk-space root cause it had no way to have observed. Make the
+    # facts reachable only through a capability, and a broken runtime produces
+    # no facts, which ADOS can see.
+    FETCH_INCIDENT_EVIDENCE = "FetchIncidentEvidence"
+
     # Capability Onboarding (orchestrate/onboarding/, §8) — one sentinel for
     # every dynamically onboarded capability. CapabilityCall.capability stays
     # a closed, Pydantic-enforced enum; the real free-text capability_id
@@ -50,6 +70,7 @@ class Capability(str, Enum):
     # rides in CapabilityCall.input["capability_id"] instead. See
     # integrations/connectors/dynamic.py for the dispatch side of this.
     DYNAMIC_CAPABILITY = "DynamicCapability"
+
 
 
 class PolicyTier(int, Enum):
