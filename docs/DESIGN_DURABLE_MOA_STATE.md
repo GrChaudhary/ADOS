@@ -146,3 +146,52 @@ work, and worth it only if the second driver is genuinely unacceptable.
 
 Step 3 is the one to not skip. It is the least visible and the most
 load-bearing.
+
+---
+
+## What actually shipped (2026-08-09)
+
+Option A, as recommended. Steps 1-3 all landed; a few things differed from
+the plan above and are worth recording.
+
+**Steps 2 and 3 could not be separated.** The plan lists them as sequential.
+They aren't: deleting `moa_pending_tasks` without persisting the streak means
+every resume rebuilds a fresh `CascadeCircuitBreaker`, silently zeroing the
+protection. Shipping step 2 alone would have left the tree in exactly the
+state this document warns about, so both went in together.
+
+**`graph.get_state()` had to become `await graph.aget_state()` everywhere.**
+Not in the plan because it isn't visible until you try it: `AsyncPostgresSaver`
+rejects synchronous access from the running loop outright
+(`InvalidStateError: Synchronous calls to AsyncPostgresSaver are only allowed
+from a different thread`). The sync form keeps working against `InMemorySaver`,
+so tests would have stayed green while production failed at the moment a human
+clicked approve.
+
+**Autogenerate tried to delete the checkpointer's tables.** They're created by
+the library's own `.setup()`, so they're absent from `Base.metadata` and look
+like tables someone removed from the models. The first generated revision
+contained `drop_table()` for all four — applying it would have destroyed every
+paused approval. `alembic/env.py` now filters them via `include_object`.
+
+**The breaker went in its own table, not into MOAGraphState.** Folding it into
+the graph state would have been durable for free, but
+`GET /governance/circuit-breaker` aggregates across tasks and would then have
+had to scan and deserialise every thread's latest checkpoint. A row per paused
+task answers it with an ordinary query. See `db/models/moa_task_breaker.py`.
+
+**ITSM needed no companion table.** `itsm_pending_proposals` is gone too, but
+that flow has no breaker, so the checkpoint is the whole of the state and
+"still pending?" is answered by whether the thread is interrupted
+(`snapshot.next`).
+
+**Durable state broke test isolation.** The old dict was rebuilt per
+TestClient, so isolation was free. Rows are not: `backend/tests/conftest.py`
+now truncates `moa_task_breakers`, which is why three governance tests began
+failing only when run as a file.
+
+Proof, in `backend/tests/test_moa_durability.py`: restart survival, approving
+through a second replica, rejection-after-restart still not invoking the
+connector, a resolved task 404ing rather than re-executing, and the streak
+surviving a cold read. All five were confirmed to fail against the old
+behaviour before being kept.

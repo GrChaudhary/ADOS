@@ -459,9 +459,25 @@ def route_after_reason(state: MOAGraphState) -> str:
     return "end"  # give_up — not_configured or error, already terminal
 
 
-def build_graph(hub: Optional[IntegrationHub] = None, cascade_breaker: Optional[CascadeCircuitBreaker] = None):
+def build_graph(
+    hub: Optional[IntegrationHub] = None,
+    cascade_breaker: Optional[CascadeCircuitBreaker] = None,
+    checkpointer=None,
+):
+    """checkpointer defaults to a fresh InMemorySaver, which is right for
+    tests and for any single-process use: the graph itself is pure structure,
+    so what makes a paused task durable is entirely which saver it compiles
+    against. The app passes db/checkpointer.py's AsyncPostgresSaver instead
+    (backend/app/routers/moa.py), which is what lets a task be resumed by a
+    process that never ran it.
+
+    Note that a *fresh* InMemorySaver means a rebuilt graph starts with no
+    history — so anything that rebuilds and expects to resume must hand the
+    same saver back in. That is not a concern for the Postgres saver, where
+    the state lives in the database rather than in the object."""
     hub = hub if hub is not None else default_hub()
     cascade_breaker = cascade_breaker if cascade_breaker is not None else CascadeCircuitBreaker()
+    checkpointer = checkpointer if checkpointer is not None else InMemorySaver()
     builder = StateGraph(MOAGraphState)
     builder.add_node("reason", _make_reason_node(hub))
     builder.add_node("act", _make_act_node(hub, cascade_breaker))
@@ -474,7 +490,7 @@ def build_graph(hub: Optional[IntegrationHub] = None, cascade_breaker: Optional[
     )
     builder.add_edge("act", "reason")
 
-    return builder.compile(checkpointer=InMemorySaver())
+    return builder.compile(checkpointer=checkpointer)
 
 
 async def run_moa_task(
@@ -484,13 +500,18 @@ async def run_moa_task(
     hub: Optional[IntegrationHub] = None,
     task_id: Optional[str] = None,
     cascade_breaker: Optional[CascadeCircuitBreaker] = None,
+    checkpointer=None,
 ):
     """Returns (result, graph, config). result is None when the graph
     paused on a proposed-action interrupt — call resume_moa_task() with the
-    human's decision to continue."""
+    task_id and the human's decision to continue.
+
+    The returned graph is a convenience for the caller that just ran the
+    task; it is deliberately NOT required to resume, because the process that
+    resumes may not be the one that started it."""
     task_id = task_id or str(uuid.uuid4())
     cascade_breaker = cascade_breaker if cascade_breaker is not None else CascadeCircuitBreaker()
-    graph = build_graph(hub, cascade_breaker)
+    graph = build_graph(hub, cascade_breaker, checkpointer=checkpointer)
     config = {"configurable": {"thread_id": task_id}}
     initial: MOAGraphState = {
         "task_id": task_id,
@@ -510,9 +531,27 @@ async def run_moa_task(
 
 
 async def resume_moa_task(
-    graph, config, decision: str, approved_by: Optional[str] = None, edited_arguments: Optional[Dict[str, Any]] = None,
+    task_id: str,
+    decision: str,
+    approved_by: Optional[str] = None,
+    edited_arguments: Optional[Dict[str, Any]] = None,
+    hub: Optional[IntegrationHub] = None,
+    cascade_breaker: Optional[CascadeCircuitBreaker] = None,
+    checkpointer=None,
 ):
-    """decision: "approved" | "rejected". edited_arguments, when given,
+    """Resumes a paused task by id, rebuilding the graph rather than being
+    handed the original object. That is the whole point: compiling a graph is
+    cheap and deterministic, so the only thing a resuming process actually
+    needs is the task_id plus a checkpointer pointing at the same storage.
+    Previously this took the live `graph` object, which meant only the exact
+    process that started a task could finish it.
+
+    cascade_breaker must be the task's RESTORED breaker
+    (backend/app/moa_breaker_store.py), not a fresh one — passing a new
+    instance would reset the auto-approval streak that vision §5.3 exists to
+    count, without any visible symptom.
+
+    decision: "approved" | "rejected". edited_arguments, when given,
     lets a human override the LLM's own proposed_action["arguments"]
     before the action actually executes (e.g. correcting a wrong value the
     model picked) — validated HERE, against proposed_action["input_schema"],
@@ -533,10 +572,17 @@ async def resume_moa_task(
     an incomplete/malformed edited_arguments to be wrong about; validating
     it anyway would block a plain rejection for a reason that has nothing
     to do with rejecting."""
+    graph = build_graph(hub, cascade_breaker, checkpointer=checkpointer)
+    config = {"configurable": {"thread_id": task_id}}
+
     if edited_arguments is not None and decision == "approved":
         if not isinstance(edited_arguments, dict):
             raise ValueError("edited_arguments must be a JSON object")
-        proposed = graph.get_state(config).values.get("proposed_action") or {}
+        # aget_state, not get_state: an async checkpointer rejects synchronous
+        # calls from the running loop outright (InvalidStateError), so the sync
+        # form would work in tests against InMemorySaver and fail in production
+        # at the moment a human clicked approve.
+        proposed = (await graph.aget_state(config)).values.get("proposed_action") or {}
         missing = _missing_required_params(proposed.get("input_schema") or {}, edited_arguments)
         if missing:
             raise ValueError(f"edited_arguments is missing required parameter(s): {sorted(missing)}")

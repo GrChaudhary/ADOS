@@ -20,12 +20,16 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from contracts import PolicyTier
+from db.checkpointer import checkpointer
+from db.session import get_db_session
 from orchestrate.cascade_breaker import CascadeCircuitBreaker
 from orchestrate.moa import graph as moa_graph
 from orchestrate.async_approvals import publish_pending_approval_event, publish_approval_decision_event
 
+from .. import moa_breaker_store
 from ..auth import get_current_user
 from ..rbac import Role, User
 
@@ -63,7 +67,12 @@ def _app_bus(request: Request):
 
 
 @router.post("/tasks")
-async def create_moa_task(body: MOATaskRequest, request: Request, current_user: User = Depends(get_current_user)):
+async def create_moa_task(
+    body: MOATaskRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
     if current_user.role == Role.AUDITOR:
         raise HTTPException(status_code=403, detail="Auditors have read-only access and cannot start MOA tasks")
     valid_domains = {"hr", "it", "finance", "manufacturing", "mfg", "cross-domain", "all", "multi"}
@@ -73,14 +82,27 @@ async def create_moa_task(body: MOATaskRequest, request: Request, current_user: 
 
     hub = request.app.state.integration_hub
     cascade_breaker = CascadeCircuitBreaker()
-    result, graph, config = await moa_graph.run_moa_task(
-        body.employee_name, body.instruction, domain=domain_clean, hub=hub, cascade_breaker=cascade_breaker
-    )
+    # The saver has to stay open across ainvoke(), not just graph construction
+    # — see db/checkpointer.py on why this is a fresh connection per request
+    # rather than a pool held on app.state.
+    async with checkpointer() as saver:
+        result, graph, config = await moa_graph.run_moa_task(
+            body.employee_name, body.instruction, domain=domain_clean, hub=hub,
+            cascade_breaker=cascade_breaker, checkpointer=saver,
+        )
 
-    if result is None:
-        task_id = config["configurable"]["thread_id"]
-        request.app.state.moa_pending_tasks[task_id] = (graph, config, cascade_breaker)
-        proposed = graph.get_state(config).values.get("proposed_action") or {}
+        if result is None:
+            task_id = config["configurable"]["thread_id"]
+            snapshot = await graph.aget_state(config)
+            proposed = snapshot.values.get("proposed_action") or {}
+            trajectory_log = snapshot.values.get("trajectory_log", [])
+            # A row here is what makes the task resumable by ANY replica; the
+            # graph's own state is already in the checkpointer above.
+            await moa_breaker_store.save(session, task_id, cascade_breaker, domain=domain_clean)
+        else:
+            task_id = None
+
+    if task_id is not None:
         asyncio.create_task(
             publish_pending_approval_event(
                 task_id=task_id,
@@ -97,7 +119,7 @@ async def create_moa_task(body: MOATaskRequest, request: Request, current_user: 
             "status": "pending_approval",
             "taskId": task_id,
             "proposedAction": proposed,
-            "trajectoryLog": graph.get_state(config).values.get("trajectory_log", []),
+            "trajectoryLog": trajectory_log,
         }
 
     return {
@@ -109,11 +131,19 @@ async def create_moa_task(body: MOATaskRequest, request: Request, current_user: 
     }
 
 
-def _pop_pending_or_404(request: Request, task_id: str):
-    pending = request.app.state.moa_pending_tasks.pop(task_id, None)
-    if pending is None:
+async def _load_breaker_or_404(session: AsyncSession, task_id: str) -> CascadeCircuitBreaker:
+    """The presence of a breaker row is what "this task is paused" means now
+    — the durable equivalent of finding an entry in the old pending dict.
+
+    Unlike that dict this does NOT pop: the row is removed only once the task
+    actually reaches a final answer. That difference is what makes the two
+    failure paths below (unauthorized, invalid edit) safe without explicitly
+    putting anything back — the session rolls back and the task is left
+    exactly as paused as it was."""
+    breaker = await moa_breaker_store.load(session, task_id)
+    if breaker is None:
         raise HTTPException(status_code=404, detail="no pending MOA task for this task id")
-    return pending
+    return breaker
 
 
 def _authorize_decision(user: User, proposed_action: dict) -> None:
@@ -137,43 +167,64 @@ def _authorize_decision(user: User, proposed_action: dict) -> None:
 
 
 async def _decide(
-    request: Request, task_id: str, decision: str, current_user: User, edited_arguments: Optional[Dict[str, Any]] = None,
+    request: Request,
+    session: AsyncSession,
+    task_id: str,
+    decision: str,
+    current_user: User,
+    edited_arguments: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    graph, config, cascade_breaker = _pop_pending_or_404(request, task_id)
-    proposed = graph.get_state(config).values.get("proposed_action") or {}
-    try:
+    hub = request.app.state.integration_hub
+    # The RESTORED breaker, carrying this task's accumulated auto-approval
+    # streak. Constructing a fresh CascadeCircuitBreaker here instead would
+    # zero the count vision §5.3 exists to keep, with nothing to show for it
+    # in any log or response.
+    cascade_breaker = await _load_breaker_or_404(session, task_id)
+
+    async with checkpointer() as saver:
+        graph = moa_graph.build_graph(hub, cascade_breaker, checkpointer=saver)
+        config = {"configurable": {"thread_id": task_id}}
+        proposed = (await graph.aget_state(config)).values.get("proposed_action") or {}
         _authorize_decision(current_user, proposed)
-    except HTTPException:
-        request.app.state.moa_pending_tasks[task_id] = (graph, config, cascade_breaker)
-        raise
 
-    asyncio.create_task(
-        publish_approval_decision_event(
-            task_id=task_id,
-            decision=decision,
-            approved_by=current_user.username,
-            role=current_user.role.value,
-            bus=_app_bus(request),
+        asyncio.create_task(
+            publish_approval_decision_event(
+                task_id=task_id,
+                decision=decision,
+                approved_by=current_user.username,
+                role=current_user.role.value,
+                bus=_app_bus(request),
+            )
         )
-    )
 
-    try:
-        result, graph, config = await moa_graph.resume_moa_task(
-            graph, config, decision=decision,
-            approved_by=f"{current_user.display_name} ({current_user.role.value})",
-            edited_arguments=edited_arguments,
-        )
-    except ValueError as e:
-        # Invalid edited_arguments (bad shape, missing a required param) —
-        # resume_moa_task validates BEFORE ever calling graph.ainvoke(), so
-        # the task is still genuinely paused exactly as before; restore it
-        # so the human can retry with a corrected edit, same recovery
-        # pattern _authorize_decision's failure above already uses.
-        request.app.state.moa_pending_tasks[task_id] = (graph, config, cascade_breaker)
-        raise HTTPException(status_code=422, detail=str(e))
+        try:
+            result, graph, config = await moa_graph.resume_moa_task(
+                task_id, decision=decision,
+                approved_by=f"{current_user.display_name} ({current_user.role.value})",
+                edited_arguments=edited_arguments,
+                hub=hub, cascade_breaker=cascade_breaker, checkpointer=saver,
+            )
+        except ValueError as e:
+            # Invalid edited_arguments (bad shape, missing a required param) —
+            # resume_moa_task validates BEFORE ever calling graph.ainvoke(), so
+            # the task is still genuinely paused exactly as before. Nothing to
+            # restore: the breaker row was never deleted, and raising rolls the
+            # session back, so the human can just retry with a corrected edit.
+            raise HTTPException(status_code=422, detail=str(e))
+
+        if result is None:
+            next_proposed = (await graph.aget_state(config)).values.get("proposed_action") or {}
+            next_trajectory = (await graph.aget_state(config)).values.get("trajectory_log", [])
+            # Still paused, one action further along — persist the breaker's
+            # advanced streak over the previous snapshot.
+            await moa_breaker_store.save(session, task_id, cascade_breaker, domain=next_proposed.get("domain", "hr"))
+        else:
+            # Reached a final answer: the task is no longer live, so it stops
+            # counting toward the governance aggregate. Same moment the old
+            # code left the popped dict entry unrestored.
+            await moa_breaker_store.delete(session, task_id)
+
     if result is None:
-        next_proposed = graph.get_state(config).values.get("proposed_action") or {}
-        request.app.state.moa_pending_tasks[task_id] = (graph, config, cascade_breaker)
         asyncio.create_task(
             publish_pending_approval_event(
                 task_id=task_id,
@@ -190,7 +241,7 @@ async def _decide(
             "status": "pending_approval",
             "taskId": task_id,
             "proposedAction": next_proposed,
-            "trajectoryLog": graph.get_state(config).values.get("trajectory_log", []),
+            "trajectoryLog": next_trajectory,
         }
 
     return {
@@ -222,11 +273,21 @@ async def _parse_approval_body(request: Request) -> MOAApprovalRequest:
 
 
 @router.post("/tasks/{task_id}/approve")
-async def approve_moa_task(task_id: str, request: Request, current_user: User = Depends(get_current_user)):
+async def approve_moa_task(
+    task_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
     body = await _parse_approval_body(request)
-    return await _decide(request, task_id, "approved", current_user, edited_arguments=body.edited_arguments)
+    return await _decide(request, session, task_id, "approved", current_user, edited_arguments=body.edited_arguments)
 
 
 @router.post("/tasks/{task_id}/reject")
-async def reject_moa_task(task_id: str, request: Request, current_user: User = Depends(get_current_user)):
-    return await _decide(request, task_id, "rejected", current_user)
+async def reject_moa_task(
+    task_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    return await _decide(request, session, task_id, "rejected", current_user)

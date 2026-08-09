@@ -29,6 +29,31 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Tables owned by langgraph-checkpoint-postgres, created by its own .setup()
+# from db/checkpointer.py rather than by a migration in this directory.
+#
+# They are not in Base.metadata, so without this filter autogenerate reads
+# them as tables that were deleted from the models and emits drop_table() for
+# each one — which, applied, would destroy every paused MOA approval in the
+# database. That is not hypothetical: revision 914fa0dfe821 was generated with
+# exactly those four drops in it and had to be edited by hand.
+_LIBRARY_OWNED_TABLES = {
+    "checkpoints",
+    "checkpoint_blobs",
+    "checkpoint_writes",
+    "checkpoint_migrations",
+}
+
+
+def include_object(object, name, type_, reflected, compare_to):
+    """Keeps autogenerate from touching tables this project doesn't own."""
+    if type_ == "table" and name in _LIBRARY_OWNED_TABLES:
+        return False
+    # Indexes come through separately and would otherwise still be dropped.
+    if type_ == "index" and getattr(object, "table", None) is not None:
+        return object.table.name not in _LIBRARY_OWNED_TABLES
+    return True
+
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
 # my_important_option = config.get_main_option("my_important_option")
@@ -53,6 +78,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -60,7 +86,11 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_object=include_object,
+    )
 
     with context.begin_transaction():
         context.run_migrations()

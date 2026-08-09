@@ -60,6 +60,20 @@ async def _clean_onboarding_sessions_table():
 
 
 @pytest.fixture(autouse=True)
+async def _clean_moa_task_breakers_table():
+    """Paused-MOA-task state used to live in app.state.moa_pending_tasks,
+    which TestClient's lifespan rebuilt for every test, so isolation came
+    free. It is now a real table (backend/app/moa_breaker_store.py), so a
+    task left paused by one test would otherwise still count as "live" in
+    the next one's GET /governance/circuit-breaker aggregate — which is
+    exactly how these tests started failing only when run as a file."""
+    async with async_session_factory() as session:
+        await session.execute(text("TRUNCATE moa_task_breakers CASCADE"))
+        await session.commit()
+    yield
+
+
+@pytest.fixture(autouse=True)
 async def _clean_llm_provider_settings_table():
     """Same isolation reasoning as _clean_users_table, for
     test_settings.py — also resets local_llm_client's in-memory cache,
