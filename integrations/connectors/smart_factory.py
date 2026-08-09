@@ -34,6 +34,40 @@ class SmartFactoryConnector(Connector):
     def is_configured(self) -> bool:
         return True
 
+    def _respond(self, call: CapabilityCall, resp: httpx.Response) -> CapabilityResponse:
+        """One place where an HTTP reply becomes a capability outcome.
+
+        The HTTP status is checked. Every branch previously called resp.json()
+        and returned SUCCEEDED unconditionally, so a 400 or a 500 from the
+        factory gateway was recorded as a completed action — the gateway's own
+        error body ended up filed as the result of a successful reroute.
+
+        `output=`, not `result=`. CapabilityResponse has no `result` field, so
+        the original `result=data` was silently dropped by pydantic and every
+        smart-factory capability returned SUCCEEDED with an EMPTY payload. The
+        telemetry, the risk score and the station acknowledgement never reached
+        the caller, and nothing anywhere reported a problem.
+        """
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {"raw": resp.text[:2000]}
+
+        if not resp.is_success:
+            return CapabilityResponse(
+                request_id=call.request_id,
+                status=CallStatus.FAILED,
+                connector=self.name,
+                output=data if isinstance(data, dict) else {"raw": data},
+                error=f"smart factory gateway returned HTTP {resp.status_code}",
+            )
+        return CapabilityResponse(
+            request_id=call.request_id,
+            status=CallStatus.SUCCEEDED,
+            connector=self.name,
+            output=data if isinstance(data, dict) else {"raw": data},
+        )
+
     async def execute(self, call: CapabilityCall) -> CapabilityResponse:
         base_url = self._base_url()
         capability = call.capability
@@ -43,67 +77,31 @@ class SmartFactoryConnector(Connector):
             try:
                 if capability == Capability.EVALUATE_GNN_RISK:
                     resp = await client.get("/api/v1/factory/twin/gnn-risk")
-                    data = resp.json()
-                    return CapabilityResponse(
-                        request_id=call.request_id,
-                        status=CallStatus.SUCCEEDED,
-                        connector=self.name,
-                        result=data,
-                    )
+                    return self._respond(call, resp)
 
                 elif capability == Capability.READ_RUL_TELEMETRY:
                     resp = await client.get("/api/v1/factory/twin/rul")
-                    data = resp.json()
-                    return CapabilityResponse(
-                        request_id=call.request_id,
-                        status=CallStatus.SUCCEEDED,
-                        connector=self.name,
-                        result=data,
-                    )
+                    return self._respond(call, resp)
 
                 elif capability == Capability.REROUTE_STATION:
                     payload = {"action": "reroute", "target": target, "parameters": call.input}
                     resp = await client.post("/api/v1/factory/stations/vgr/action", json=payload)
-                    data = resp.json()
-                    return CapabilityResponse(
-                        request_id=call.request_id,
-                        status=CallStatus.SUCCEEDED,
-                        connector=self.name,
-                        result=data,
-                    )
+                    return self._respond(call, resp)
 
                 elif capability == Capability.SORT_WORKPIECE:
                     payload = {"action": "sort", "target": target, "parameters": call.input}
                     resp = await client.post("/api/v1/factory/stations/sm/action", json=payload)
-                    data = resp.json()
-                    return CapabilityResponse(
-                        request_id=call.request_id,
-                        status=CallStatus.SUCCEEDED,
-                        connector=self.name,
-                        result=data,
-                    )
+                    return self._respond(call, resp)
 
                 elif capability == Capability.UPDATE_MES:
                     payload = {"action": "update_mes", "target": target, "parameters": call.input}
                     resp = await client.post("/api/v1/factory/stations/mm/action", json=payload)
-                    data = resp.json()
-                    return CapabilityResponse(
-                        request_id=call.request_id,
-                        status=CallStatus.SUCCEEDED,
-                        connector=self.name,
-                        result=data,
-                    )
+                    return self._respond(call, resp)
 
                 elif capability == Capability.RESERVE_INVENTORY:
                     payload = {"action": "reserve_inventory", "target": target, "parameters": call.input}
                     resp = await client.post("/api/v1/factory/stations/hbw/action", json=payload)
-                    data = resp.json()
-                    return CapabilityResponse(
-                        request_id=call.request_id,
-                        status=CallStatus.SUCCEEDED,
-                        connector=self.name,
-                        result=data,
-                    )
+                    return self._respond(call, resp)
 
                 else:
                     return CapabilityResponse(
@@ -114,15 +112,20 @@ class SmartFactoryConnector(Connector):
                     )
 
             except Exception as ex:
-                # Simulation fallback mode when gateway server is not live
+                # FAILED, not SUCCEEDED. This previously returned SUCCEEDED with
+                # a "simulated" payload whenever the gateway was unreachable,
+                # which means an unplugged factory and a completed reroute were
+                # indistinguishable in the audit trail — ADOS would record the
+                # workpiece as re-dispatched because nothing threw on our side.
+                #
+                # A connector that cannot reach its system has not performed the
+                # action, and saying otherwise is the same failure as the blank
+                # ServiceNow ticket recorded as SUCCEEDED. If a simulation mode
+                # is wanted for demos it needs to be an explicit, opt-in flag
+                # that is visible in the response — never the exception handler.
                 return CapabilityResponse(
                     request_id=call.request_id,
-                    status=CallStatus.SUCCEEDED,
+                    status=CallStatus.FAILED,
                     connector=self.name,
-                    result={
-                        "status": "simulated",
-                        "capability": capability.value,
-                        "target": target,
-                        "message": f"Smart Factory simulation executed '{capability.value}' for '{target}' (Gateway offline fallback: {str(ex)})",
-                    },
+                    error=f"smart factory gateway unreachable: {type(ex).__name__}: {ex}",
                 )
