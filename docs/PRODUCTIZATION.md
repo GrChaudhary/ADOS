@@ -89,7 +89,16 @@ a hackathon never needs and a product cannot exist without.
 
 [In plain terms: today the system is architecturally a single-person tool. Not by accident — several deliberate MVP shortcuts add up to "one process, one user, one restart away from losing work." This stage is what makes it a real server.]
 
-- [ ] **Durable MOA / agent state.** Every paused LangGraph lives in
+- [x] **Durable MOA / agent state.** DONE 2026-08-09 — see
+  [DESIGN_DURABLE_MOA_STATE.md](DESIGN_DURABLE_MOA_STATE.md)'s "What actually
+  shipped" section. Both dicts are gone; paused MOA and ITSM approvals live in
+  a Postgres LangGraph checkpointer, and the cascade breaker's streak — the
+  one piece a rebuilt graph cannot reconstruct — in a `moa_task_breakers`
+  table. Restart survival and cross-replica approval are covered by
+  `backend/tests/test_moa_durability.py`, each test confirmed failing against
+  the old behaviour first. Original description follows.
+
+  Every paused LangGraph lived in
   `InMemorySaver` (`orchestrate/moa/graph.py:477`,
   `orchestrate/langgraph_agents/itsm_agent.py:245`) with the live graph object
   held in a plain process dict (`app.state.moa_pending_tasks`,

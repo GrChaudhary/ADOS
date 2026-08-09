@@ -54,3 +54,6 @@ agent/
 
 # Logs
 *.log
+
+# Playwright run state / artifacts (build output, not source)
+frontend-next/test-results/
