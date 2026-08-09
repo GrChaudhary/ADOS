@@ -2,7 +2,13 @@
 
 from .event_envelope import EventEnvelope
 from .agent_events import AgentCompletedPayload, IncidentDetectedPayload, PendingApprovalPayload, ApprovalDecisionPayload
-from .capabilities import Capability, CallStatus, PolicyTier
+from .capabilities import (
+    CONFIRMED_STATUSES,
+    UNRESOLVED_STATUSES,
+    CallStatus,
+    Capability,
+    PolicyTier,
+)
 from .capability_call import CapabilityCall, CapabilityResponse, GovernanceInfo
 from .incident_record import CausalChainEntry, IncidentRecord
 from .incident_state import IncidentState
@@ -17,6 +23,8 @@ __all__ = [
     "ApprovalDecisionPayload",
     "Capability",
     "CallStatus",
+    "CONFIRMED_STATUSES",
+    "UNRESOLVED_STATUSES",
     "PolicyTier",
     "CapabilityCall",
     "CapabilityResponse",

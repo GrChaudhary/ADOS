@@ -20,6 +20,24 @@ SMART_FACTORY_CAPABILITIES = {
     Capability.RESERVE_INVENTORY,
 }
 
+#: Capabilities that move something in the physical plant. For these, losing
+#: contact AFTER the request went out is genuinely ambiguous — the gripper may
+#: have moved. The read-only ones (risk scores, telemetry) carry no such doubt:
+#: a lost response to a GET means we simply do not know the value, and asking
+#: again is free.
+_SIDE_EFFECTING = {
+    Capability.REROUTE_STATION,
+    Capability.SORT_WORKPIECE,
+    Capability.UPDATE_MES,
+    Capability.RESERVE_INVENTORY,
+}
+
+#: Failures where the request provably never reached the gateway. Nothing
+#: happened, so these are plainly FAILED and a retry is safe.
+#: httpx raises ConnectError/ConnectTimeout before a byte is written, and
+#: PoolTimeout before a connection is even acquired.
+_NEVER_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
 
 class SmartFactoryConnector(Connector):
     name = "smart_factory"
@@ -111,21 +129,49 @@ class SmartFactoryConnector(Connector):
                         error=f"Unsupported capability '{capability}' for SmartFactoryConnector",
                     )
 
-            except Exception as ex:
-                # FAILED, not SUCCEEDED. This previously returned SUCCEEDED with
-                # a "simulated" payload whenever the gateway was unreachable,
-                # which means an unplugged factory and a completed reroute were
-                # indistinguishable in the audit trail — ADOS would record the
-                # workpiece as re-dispatched because nothing threw on our side.
+            except _NEVER_SENT as ex:
+                # The request provably never left. Nothing happened in the
+                # plant, so this is an honest FAILED and a retry is safe.
                 #
-                # A connector that cannot reach its system has not performed the
-                # action, and saying otherwise is the same failure as the blank
-                # ServiceNow ticket recorded as SUCCEEDED. If a simulation mode
-                # is wanted for demos it needs to be an explicit, opt-in flag
-                # that is visible in the response — never the exception handler.
+                # This handler previously returned SUCCEEDED with a "simulated"
+                # payload for EVERY exception, which made an unplugged factory
+                # and a completed reroute indistinguishable in the audit trail:
+                # ADOS recorded the workpiece as re-dispatched because nothing
+                # threw on our side. A simulation mode, if wanted for demos,
+                # needs an explicit opt-in flag visible in the response — never
+                # an except clause.
                 return CapabilityResponse(
                     request_id=call.request_id,
                     status=CallStatus.FAILED,
                     connector=self.name,
-                    error=f"smart factory gateway unreachable: {type(ex).__name__}: {ex}",
+                    error=f"smart factory gateway unreachable, request never sent: "
+                          f"{type(ex).__name__}: {ex}",
+                )
+
+            except Exception as ex:
+                # Contact was lost with the request already in flight. For a
+                # side-effecting capability the plant MAY have acted, and both
+                # binary answers are wrong: SUCCEEDED claims an effect nobody
+                # observed, FAILED invites a retry that could re-dispatch a
+                # workpiece a second time.
+                #
+                # UNKNOWN is the honest answer, and it is a debt — something has
+                # to reconcile it against the plant's own state before this call
+                # can be called done.
+                if call.capability in _SIDE_EFFECTING:
+                    return CapabilityResponse(
+                        request_id=call.request_id,
+                        status=CallStatus.UNKNOWN,
+                        connector=self.name,
+                        error=f"contact lost after the command was sent; the plant may or "
+                              f"may not have executed it — verify before retrying "
+                              f"({type(ex).__name__}: {ex})",
+                    )
+                # Read-only: a lost response means we don't have the value.
+                # Nothing changed out there, so asking again is free.
+                return CapabilityResponse(
+                    request_id=call.request_id,
+                    status=CallStatus.FAILED,
+                    connector=self.name,
+                    error=f"smart factory read failed: {type(ex).__name__}: {ex}",
                 )

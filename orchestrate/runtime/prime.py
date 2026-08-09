@@ -60,6 +60,12 @@ _EVENT_MAP = {
     "tool_execution_end": "runtime.tool.finished",
     "turn_end": "runtime.turn.completed",
     "agent_end": "runtime.session.completed",
+    # Carries the model's own token accounting (input/output/cacheRead/
+    # cacheWrite/totalTokens). Without it a slow run is unattributable: "the
+    # turn took 697 seconds" says nothing about whether the prompt grew, the
+    # provider queued, or the kernel blocked. Two acceptance runs were spent
+    # guessing at that before this was mapped.
+    "message_end": "runtime.model.message",
     # Provider failures. Without these a rate-limited or rejected model
     # call is invisible and the run just reports "it did nothing" — which
     # is true but useless. Two acceptance runs were spent rediscovering a
@@ -395,6 +401,20 @@ class PrimeAgentRuntime:
         detail = {k: event[k] for k in keep if k in event}
         if event.get("type") == "tool_execution_end":
             detail["result_preview"] = str(event.get("result"))[:500]
+            # Size of what the tool handed back to the MODEL, which is what
+            # actually lands in the next turn's prompt. A capability returning
+            # a large payload is charged to context on every subsequent turn.
+            detail["result_chars"] = len(str(event.get("result") or ""))
+        if event.get("type") == "message_end":
+            usage = (event.get("message") or {}).get("usage") or {}
+            if usage:
+                # cacheRead is kept deliberately: a provider that does not cache
+                # prompts re-sends and re-bills the entire context every turn,
+                # and cacheRead == 0 across a whole run is the evidence for it.
+                detail["usage"] = {
+                    k: usage.get(k)
+                    for k in ("input", "output", "cacheRead", "cacheWrite", "totalTokens")
+                }
         for key in ("errorMessage", "finalError"):
             if event.get(key):
                 detail[key] = str(event[key])[:300]

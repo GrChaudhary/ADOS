@@ -58,15 +58,32 @@ class CapabilityCall(BaseModel):
 
 
 class CapabilityResponse(BaseModel):
-    """Response envelope returned once a capability call executes."""
+    """Response envelope returned once a capability call executes.
 
-    model_config = ConfigDict(populate_by_name=True)
+    `status` answers stage 5 of the six execution stages in
+    contracts/capabilities.py — *did the action really happen out there* — not
+    stage 3, "did our connector return without raising". A connector that
+    cannot confirm the effect must say FAILED or UNKNOWN, never SUCCEEDED.
+
+    extra="forbid" is a scar. SmartFactoryConnector passed `result=data` on all
+    six of its capabilities; there is no `result` field, so pydantic's default
+    (extra="ignore") dropped it silently and every factory call returned
+    SUCCEEDED with output == {}. The risk scores, the RUL telemetry and the
+    station acknowledgements never reached a caller, nothing raised, no test
+    failed, and the audit trail recorded six healthy executions. A misspelled
+    field is now a construction-time error instead of a silent empty payload.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     request_id: str = Field(..., alias="requestId")
     status: CallStatus
     connector: Optional[str] = Field(
         default=None, description="Connector that fulfilled the call"
     )
+    #: The remote system's own answer. For a SUCCEEDED call this is the
+    #: evidence that the action happened; an empty output on a SUCCEEDED
+    #: response means the connector is asserting an effect it cannot show.
     output: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
     compensating_action_ran: bool = Field(

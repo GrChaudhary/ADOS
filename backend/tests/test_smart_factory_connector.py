@@ -11,9 +11,12 @@ import httpx
 import pytest
 
 from contracts import (
+    CONFIRMED_STATUSES,
+    UNRESOLVED_STATUSES,
     CallStatus,
     Capability,
     CapabilityCall,
+    CapabilityResponse,
     GovernanceInfo,
     PolicyTier,
 )
@@ -99,7 +102,10 @@ async def test_an_unreachable_gateway_is_a_failure_not_a_simulation():
     SUCCEEDED with a "simulated" payload whenever the gateway was unreachable,
     which made an unplugged factory and a completed physical action identical
     in the audit trail. ADOS would have recorded the workpiece as re-dispatched
-    because nothing threw on our side."""
+    because nothing threw on our side.
+
+    ConnectError specifically: the request never left, so nothing happened in
+    the plant and FAILED is the honest answer."""
 
     def refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused", request=request)
@@ -108,7 +114,64 @@ async def test_an_unreachable_gateway_is_a_failure_not_a_simulation():
     response = await connector.execute(_call(Capability.REROUTE_STATION, target="Line_2_VGR"))
 
     assert response.status is CallStatus.FAILED
-    assert "unreachable" in (response.error or "")
+    assert "never sent" in (response.error or "")
+    assert response.output == {}
+    # The old behaviour, pinned so it cannot come back: a "simulated" payload
+    # dressed up as a real one.
+    assert "simulated" not in str(response.output)
+
+
+async def test_contact_lost_mid_command_is_UNKNOWN_not_a_guess():
+    """The third outcome. A ReadTimeout on a POST means the command was sent
+    and the reply never came: the gripper may have moved.
+
+    SUCCEEDED would claim an effect nobody observed. FAILED is worse — it
+    invites a retry that could re-dispatch the same workpiece twice. Neither
+    binary answer is true, so ADOS records the uncertainty instead."""
+
+    def drop_after_send(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("response never arrived", request=request)
+
+    connector = SmartFactoryConnector(transport=_transport(drop_after_send))
+    response = await connector.execute(_call(Capability.REROUTE_STATION, target="Line_2_VGR"))
+
+    assert response.status is CallStatus.UNKNOWN
+    assert response.status not in CONFIRMED_STATUSES
+    assert response.status in UNRESOLVED_STATUSES
+    assert "verify before retrying" in (response.error or "")
+
+
+async def test_a_lost_read_is_plain_failure_not_UNKNOWN():
+    """UNKNOWN is reserved for calls that could have changed the world.
+    Over-applying it would flood the reconciliation queue with reads that
+    changed nothing and can simply be asked again."""
+
+    def drop_after_send(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("response never arrived", request=request)
+
+    connector = SmartFactoryConnector(transport=_transport(drop_after_send))
+    response = await connector.execute(_call(Capability.READ_RUL_TELEMETRY))
+
+    assert response.status is CallStatus.FAILED
+
+
+async def test_an_unknown_response_field_cannot_silently_vanish():
+    """Defect 1 at the contract level, not the connector level.
+
+    `result=` is not a field on CapabilityResponse. With pydantic's default
+    extra="ignore" it was dropped in silence and the response came back
+    SUCCEEDED with an empty output — six capabilities' worth of factory data
+    lost with nothing raised and no test failing. extra="forbid" turns a
+    misspelled field into a construction-time error."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        CapabilityResponse(
+            request_id="r1",
+            status=CallStatus.SUCCEEDED,
+            connector="smart_factory",
+            result={"global_risk_score": 0.15},   # the original typo
+        )
 
 
 async def test_smart_factory_connector_registered_in_default_hub():
