@@ -31,6 +31,14 @@ ADOS                                     Prime Agent (in container)
  |<--- {"type":"agent_end","messages":[...]}    <-- terminal for this prompt
 ```
 
+**`isError` on that stream is not the kernel's verdict.** It answers "did the
+tool function throw?" — Prime Agent's core hardcodes `isError: false` on every
+path where the tool returns at all, discarding the value the ipython tool
+computed. A cell that raised `SyntaxError` arrives here as `isError: false` with
+`result.details.status == "error"`. ADOS reads the status; see
+`classify_tool_execution()` and
+[14-known-limitations.md](14-known-limitations.md).
+
 Framing rule from `docs/rpc.md`, and it is load-bearing: **split on `\n` only.**
 Generic line readers that also split on U+2028/U+2029 are explicitly
 non-compliant, because those characters are legal inside JSON strings.

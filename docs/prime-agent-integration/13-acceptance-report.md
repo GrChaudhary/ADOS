@@ -148,6 +148,13 @@ exactly the substitution `evaluate_mission()` exists to refuse:
 model completion != mission completion
 ```
 
+**The later kernel-verdict fix does not change this run**, and the distinction
+is worth keeping straight. Here the kernel genuinely succeeded: it executed a
+shell escape that printed `Couldn't find program: 'python'` and reported
+`status: 'ok'`, because a subprocess's exit code is not a Python exception.
+`classify_tool_execution()` still scores it `ok` — correctly. Only the
+capability-rows check caught this one, and it is still the only check that can.
+
 ## Performance
 
 | Metric | Value |

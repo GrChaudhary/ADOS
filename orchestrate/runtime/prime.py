@@ -76,6 +76,81 @@ _EVENT_MAP = {
     "auto_retry_end": "runtime.provider.retry_end",
 }
 
+# The kernel's own verdict on a cell. `ipython.d.ts`: status is
+# "ok" | "error" | "aborted" | "starting" — "starting" appears only on partial
+# `tool_execution_update` results, never on a finished execution.
+_KERNEL_OK = "ok"
+_KERNEL_FAILED = frozenset({"error", "aborted"})
+
+
+def classify_tool_execution(event: Dict[str, Any]) -> str:
+    """Did this kernel execution actually run? -> "ok" | "error" | "unknown".
+
+    WHY THIS IS NOT `event["isError"]`
+    ----------------------------------
+    Because `isError` on a finished tool execution does not mean what its name
+    says. Prime Agent's core sets it in exactly one place:
+
+        // executePreparedToolCall, dist/bundle/chunk-VNU2AJHD.js
+        return { result, isError: false };      // <- hardcoded
+        ...
+        } catch (error) { ... isError: true }
+
+    So it answers "did the tool function throw?", not "did the code run?". The
+    ipython tool computes the real answer — `isError: r.status === "error" ||
+    r.status === "aborted"` (dist/core/tools/ipython.js) — puts it on the result
+    it returns, and the core then discards it in favour of its own `false`.
+
+    The kernel's verdict survives only in `result.details.status`.
+
+    This was found by an end-to-end run that reported `tools=4 ok=4 err=0` while
+    three of the four cells raised `SyntaxError: '(' was never closed`. It
+    matters well beyond the counter: `SessionOutcome.did_real_work` is
+    `tool_success_count > 0`, and it is the check that catches a runtime which
+    could not act and wrote a confident report anyway. Counting dispatches as
+    successes made that check blind to the exact failure it exists to catch.
+
+    UNKNOWN, AND WHY IT IS NOT "ok"
+    -------------------------------
+    A result carrying no verdict is not a success. Prime Agent's throw path
+    (`createErrorToolResult`) returns `details: {}` with `isError: true`, which
+    is caught above; anything else with no `status` is a shape we do not
+    recognise, and the standing invariant is that ADOS never infers success from
+    the absence of an error. Unknown executions count toward neither successes
+    nor failures, mirroring `CallStatus.UNKNOWN` in the connector layer.
+
+    A future non-kernel agent tool would land here as "unknown" and fail its
+    mission loudly. That is deliberate: adding a tool means teaching this
+    function how that tool reports failure, rather than inheriting a permissive
+    default that silently scores its errors as work done.
+    """
+    # The tool threw, was aborted, or never dispatched. `details` is `{}` here,
+    # so this branch must come first — there is no status to consult.
+    if event.get("isError"):
+        return "error"
+
+    result = event.get("result")
+    if not isinstance(result, dict):
+        return "unknown"
+
+    details = result.get("details")
+    status = details.get("status") if isinstance(details, dict) else None
+
+    if status == _KERNEL_OK:
+        return "ok"
+    if status in _KERNEL_FAILED:
+        return "error"
+    if status is not None:
+        return "unknown"  # an upstream status we have not been taught
+
+    # No kernel verdict. The tool's own flag survives on the result object
+    # unless a `tool_result` extension hook rewrote it (agent-session.js
+    # rebuilds the result without `isError` in that case), so it is worth
+    # consulting — but only ever to find a failure, never to claim a success.
+    if result.get("isError") is True:
+        return "error"
+    return "unknown"
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -245,6 +320,7 @@ class PrimeAgentRuntime:
         tool_calls = 0
         tool_ok = 0
         tool_err = 0
+        tool_unknown = 0
         final_answer: Optional[str] = None
         runtime_session_id: Optional[str] = None
         failure: Optional[str] = None
@@ -275,10 +351,13 @@ class PrimeAgentRuntime:
                     self.state = SessionState.WAITING_FOR_CAPABILITY
                 if etype == "tool_execution_end":
                     self.state = SessionState.RUNNING
-                    if event.get("isError"):
+                    verdict = classify_tool_execution(event)
+                    if verdict == "ok":
+                        tool_ok += 1
+                    elif verdict == "error":
                         tool_err += 1
                     else:
-                        tool_ok += 1
+                        tool_unknown += 1
                 if etype == "agent_end":
                     final_answer = self._extract_final_text(event)
                 if etype in ("auto_retry_start", "auto_retry_end"):
@@ -310,12 +389,15 @@ class PrimeAgentRuntime:
             if provider_error:
                 failure += f" (provider error: {provider_error[:300]})"
         elif tool_ok == 0:
-            # Every attempt errored. The agent will still produce a fluent
-            # final answer explaining why it could not proceed, and taking that
-            # at face value is how a broken environment gets recorded as a
-            # completed mission.
+            # Not one execution actually ran. The agent will still produce a
+            # fluent final answer explaining why it could not proceed, and
+            # taking that at face value is how a broken environment gets
+            # recorded as a completed mission.
             state = SessionState.FAILED
-            failure = f"all {tool_err} kernel tool executions failed — the runtime could not act"
+            failure = (
+                f"none of {tool_calls} kernel tool executions succeeded "
+                f"({tool_err} failed, {tool_unknown} indeterminate) — the runtime could not act"
+            )
             if provider_error:
                 failure += f" (provider error: {provider_error[:300]})"
         elif not final_answer:
@@ -332,6 +414,7 @@ class PrimeAgentRuntime:
             tool_execution_count=tool_calls,
             tool_success_count=tool_ok,
             tool_error_count=tool_err,
+            tool_unknown_count=tool_unknown,
             failure_reason=failure,
             # Read here, while the workspace still exists — teardown deletes it.
             runtime_session_id=runtime_session_id or self.recover_runtime_session_id(),
@@ -444,6 +527,18 @@ class PrimeAgentRuntime:
             if code:
                 detail["code"] = str(code)[:600]
         if event.get("type") == "tool_execution_end":
+            # The kernel's own verdict, recorded explicitly rather than left to
+            # be recovered from a truncated preview. `isError` is kept alongside
+            # it on purpose: the two disagreeing is the signature of the defect
+            # this field exists to make visible, and an audit row that shows
+            # only the corrected value hides that history.
+            detail["kernel_verdict"] = classify_tool_execution(event)
+            result = event.get("result")
+            details = result.get("details") if isinstance(result, dict) else None
+            if isinstance(details, dict):
+                detail["kernel_status"] = details.get("status")
+                if details.get("errorEname"):
+                    detail["kernel_error"] = str(details["errorEname"])[:120]
             detail["result_preview"] = str(event.get("result"))[:500]
             # Size of what the tool handed back to the MODEL, which is what
             # actually lands in the next turn's prompt. A capability returning

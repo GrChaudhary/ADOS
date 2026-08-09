@@ -183,21 +183,29 @@ open.**
 
 ## What this run also exposed
 
-Both are recorded in [14-known-limitations.md](14-known-limitations.md) and both
-are open.
+Two defects, neither of which affected this verdict — it rests on capability
+rows, which miscounting cannot forge — but the first meant a check designed to
+catch fabricated reports was not doing its job, and the second meant a
+working-looking audit trail had a dead link in it. **Both were fixed on
+2026-08-10**; full write-ups in [14-known-limitations.md](14-known-limitations.md).
 
-1. **Kernel errors are counted as tool successes.** `ok=4 err=0` when three of
-   the four executions raised `SyntaxError`. `isError` was `false` on all four;
-   the kernel's real verdict was in `details.status`. `evaluate_mission()`'s
-   `did_real_work` check is therefore currently blind to kernel failures.
-2. **The request id written into the ticket resolves to nothing.** The gateway
-   mints one id for the audit row and a different one for the `CapabilityCall`,
-   and the ticket carries the latter.
+1. **Kernel errors were counted as tool successes.** `ok=4 err=0` when three of
+   the four executions raised `SyntaxError`. The cause is upstream: the ipython
+   tool computes `isError` correctly and Prime Agent's core discards it,
+   hardcoding `isError: false` whenever the tool function does not throw. The
+   kernel's verdict survives only in `result.details.status`. Fixed by
+   `classify_tool_execution()`, which adds a third outcome — `unknown` — so a
+   result carrying no verdict is never counted as work done.
+2. **The request id written into the ticket resolved to nothing.** The gateway
+   minted one id for the audit row and another for the `CapabilityCall`, and the
+   ticket carried the latter. Fixed by threading the row's key through as a
+   required argument.
 
-Neither affects this verdict — it rests on capability rows, which cannot be
-forged by miscounting — but the first means a check designed to catch fabricated
-reports is not currently doing its job, and the second means a working-looking
-audit trail has a dead link in it.
+**The numbers in this report are as recorded on the day**, before either fix.
+Re-run under the current code, the same session would report
+`tools=4 ok=1 err=3` and the ticket would carry a resolvable id. The verdict
+would be unchanged: `ACCEPTED`, for the same reason — both required capabilities
+have `executed` rows written by the gateway that performed them.
 
 ## What this run does NOT prove
 

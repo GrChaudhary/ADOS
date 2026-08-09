@@ -95,7 +95,8 @@ def evaluate_mission(
         reasons.append("the runtime produced no kernel tool executions — it did nothing")
     elif not outcome.did_real_work:
         reasons.append(
-            f"all {outcome.tool_error_count} kernel tool executions failed — "
+            f"none of {outcome.tool_execution_count} kernel tool executions succeeded "
+            f"({outcome.tool_error_count} failed, {outcome.tool_unknown_count} indeterminate) — "
             "the runtime could not act, so any report it produced is unsourced"
         )
 
@@ -121,6 +122,7 @@ def evaluate_mission(
             "tool_executions": outcome.tool_execution_count,
             "tool_successes": outcome.tool_success_count,
             "tool_errors": outcome.tool_error_count,
+            "tool_indeterminate": outcome.tool_unknown_count,
             "capabilities_executed_by_ados": executed,
             "required_capabilities": list(required_capabilities),
             "session_state": outcome.state.value,

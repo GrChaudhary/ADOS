@@ -123,7 +123,7 @@ Pinned by `backend/tests/test_prime_runtime_image.py`, which parses Prime
 Agent's own source so an upstream addition fails a test rather than silently
 disabling the runtime.
 
-### Kernel errors are counted as tool successes — OPEN
+### ~~Kernel errors are counted as tool successes~~ — FIXED 2026-08-10
 
 Found by the end-to-end ServiceNow run (mission `6a7c5991`), which reported
 `tools=4 ok=4 err=0` when only **one** of the four executions actually ran. The
@@ -136,48 +136,87 @@ Cell In[5], line 2
 SyntaxError: '(' was never closed
 ```
 
-The MCP result carried `details.status = 'error'` and `errorEname =
-'SyntaxError'`, and **`isError` was `false`** on all four. The adapter
-(`orchestrate/runtime/prime.py:278`) counts successes from `isError` alone, so
-it scored 4/4.
+The result carried `details.status = 'error'` and `errorEname = 'SyntaxError'`,
+and **`isError` was `false`** on all four.
 
-Prime Agent's `isError` means the tool call was *dispatched* successfully, not
-that the code *ran*. This is the same confusion as run #4's `!python`, one layer
-up: there IPython reported a missing program as `status: 'ok'`, here the MCP
-envelope reports a kernel exception as a successful call.
+**Why `isError` was false is the interesting part, and it is upstream.** The
+ipython tool computes the right answer and returns it:
 
-Why it matters beyond the counter: `evaluate_mission()`'s first check is
-`did_real_work` (`tool_success_count > 0`), which exists to catch a runtime that
-could not act and wrote confident fiction anyway. **That check is currently
-blind to kernel errors.** A run in which every cell raised would pass it. The
-mission verdict was still correct here — check #2 reads `capability_requests`,
-which no amount of miscounting can forge — but that is defence in depth doing
-the work of a broken first check, not a working first check.
+```js
+// dist/core/tools/ipython.js
+isError: r.status === "error" || r.status === "aborted",
+```
 
-Fix is in the adapter, not the image: read `details.status`/`errorEname` from
-the tool result rather than trusting `isError`.
+and Prime Agent's core then throws that away:
 
-### The request id in a ServiceNow ticket resolves to nothing — OPEN
+```js
+// executePreparedToolCall, dist/bundle/chunk-VNU2AJHD.js
+    return { result, isError: false };        // <- hardcoded
+  } catch (error) { ...  isError: true }
+```
 
-The gateway writes `CapabilityRequestRow` (its own `request_id` primary key,
-`backend/app/mcp_gateway.py:211`), then separately constructs a `CapabilityCall`
-whose `request_id` is its own `uuid4` default (`:318`). Two ids for one action.
+So `isError` on a finished execution answers **"did the tool function throw?"**,
+not "did the code run". The kernel's verdict survives only in
+`result.details.status`. This is the same confusion as run #4's `!python`, one
+layer up: there IPython reported a missing program as `status: 'ok'`, here the
+core reports a kernel exception as a successful call.
 
-The ticket's provenance block carries the **call's** id, which appears in no
-table:
+It mattered well beyond the counter. `did_real_work` is
+`tool_success_count > 0`, and it is the check that catches a runtime which could
+not act and wrote confident fiction anyway — **counting dispatches as successes
+made it blind to exactly that.** A run in which every cell raised would have
+passed it. The verdict was still correct for this run because check #2 reads
+`capability_requests`, which miscounting cannot forge, but that was defence in
+depth doing a broken check's job.
+
+Fixed in the adapter, not the image, by `classify_tool_execution()`
+(`orchestrate/runtime/prime.py`):
+
+```
+isError true                     -> error   (throw path; details is {})
+details.status == "ok"           -> ok
+details.status error|aborted     -> error
+details.status unrecognised      -> unknown
+no status, result.isError true   -> error
+otherwise                        -> unknown
+```
+
+`unknown` is a third outcome, not a synonym for success — a result carrying no
+verdict is never counted as work done, mirroring `CallStatus.UNKNOWN` in the
+connector layer. `SessionOutcome.tool_unknown_count` reports them separately,
+and the audit row now carries `kernel_verdict`, `kernel_status` and
+`kernel_error` alongside the raw `isError`, deliberately: the two disagreeing is
+the signature of this defect, and a row showing only the corrected value would
+hide that it ever happened.
+
+Covered by `backend/tests/test_kernel_execution_semantics.py` (19 tests),
+including a negative control that restores the old `isError`-only rule and
+demonstrates it scoring four SyntaxErrors as 4/4 successes.
+
+### ~~The request id in a ServiceNow ticket resolves to nothing~~ — FIXED 2026-08-10
+
+The gateway wrote `CapabilityRequestRow` (its own `request_id` primary key,
+`backend/app/mcp_gateway.py:211`), then separately constructed a
+`CapabilityCall` whose `request_id` was its own `uuid4` default. Two ids for one
+action, and connectors write the *call's* id into the systems they touch:
 
 ```
 ticket description : Capability request: c0258072-47d5-409a-a036-f5050cc8b37b
 capability_requests: request_id       = cf4522b4-b3b3-4662-a907-9b763af6e4f5
 ```
 
-So an operator who opens the incident, reads the id ADOS wrote there, and looks
-it up finds nothing. Provenance that does not resolve is worse than absent —
-it looks like a working audit trail. The mission id in the same block *does*
-resolve, which is what saved traceability for this run.
+An operator who opened INC0010027, read the id ADOS wrote there, and looked it
+up found nothing. Provenance that does not resolve is worse than absent — it
+looks like a working audit trail. The mission id in the same block *did*
+resolve, which is what saved traceability for that run.
 
-Fix: pass `request_id=row.request_id` when constructing the `CapabilityCall`, so
-one action has one id.
+Fixed by threading the row's key through: `_execute_capability` now takes
+`request_id` as a **required** keyword argument and passes it to the
+`CapabilityCall`, so the contract's `uuid4` default can no longer fire on this
+path. Covered by `backend/tests/test_capability_request_provenance.py`, which
+drives the real `request_capability` gateway entry point against a mocked
+ServiceNow, extracts the id from the posted ticket body, and resolves it back to
+the row — plus a structural guard that the argument stays required.
 
 ### No approval round trip yet
 

@@ -241,7 +241,8 @@ async def request_capability(
     # executor raises — so no request can be stranded at pending_approval.
     try:
         result = await _execute_capability(
-            capability, arguments, mission_id=mission.mission_id, tier=tier
+            capability, arguments, mission_id=mission.mission_id, tier=tier,
+            request_id=request_id,
         )
     except Exception as exc:  # noqa: BLE001 - last-resort guard, see above
         result = {"ok": False, "capability": capability, "error": f"{type(exc).__name__}: {exc}"}
@@ -293,7 +294,12 @@ async def get_capability_request(request_id: str) -> Dict[str, Any]:
 
 
 async def _execute_capability(
-    capability: str, arguments: Dict[str, Any], *, mission_id: uuid.UUID, tier: PolicyTier
+    capability: str,
+    arguments: Dict[str, Any],
+    *,
+    mission_id: uuid.UUID,
+    tier: PolicyTier,
+    request_id: uuid.UUID,
 ) -> Dict[str, Any]:
     """Run the capability through the real ADOS path.
 
@@ -306,6 +312,16 @@ async def _execute_capability(
     escape here would leave the request row stranded at pending_approval
     forever — a tier-0 call that neither executed nor failed. That exact bug
     was observed the first time this ran against a real MCP client.
+
+    `request_id` is the CapabilityRequestRow's primary key, passed in rather
+    than minted here. One governed request, one id, everywhere it appears.
+    Letting `CapabilityCall` fall back to its own `uuid4` default produced two
+    ids for a single action, and connectors write the *call's* id into the
+    systems they touch: a real ServiceNow incident (INC0010027) carried
+    `Capability request: c0258072-…` while the audit row's key was
+    `cf4522b4-…`. An operator following that pointer back into ADOS found
+    nothing. Provenance that does not resolve is worse than none, because it
+    looks like a working audit trail.
     """
     # default_hub(), not a bare IntegrationHub(): the bare constructor has NO
     # connectors registered, so every capability comes back
@@ -317,6 +333,8 @@ async def _execute_capability(
     try:
         call = CapabilityCall(
             capability=Capability(capability),
+            # The audit row's own key — NOT a fresh uuid4. See the docstring.
+            request_id=str(request_id),
             input={k: v for k, v in arguments.items() if not k.startswith("_")},
             requested_by=f"prime-runtime:mission:{mission_id}",
             incident_id=str(mission_id),

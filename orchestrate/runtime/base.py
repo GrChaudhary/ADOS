@@ -92,11 +92,24 @@ class SessionOutcome:
     # that as a completed mission. Counting attempts is not counting work.
     tool_success_count: int = 0
     tool_error_count: int = 0
+    # Executions whose outcome could not be determined — a result carrying no
+    # verdict ADOS recognises. Neither a success nor a failure, and deliberately
+    # not folded into either: silently counting them as successes is precisely
+    # the bug that made an `ok=4 err=0` run out of four cells, three of which
+    # raised SyntaxError. Mirrors CallStatus.UNKNOWN in the connector layer.
+    # See orchestrate/runtime/prime.py:classify_tool_execution.
+    tool_unknown_count: int = 0
     capability_request_count: int = 0
     failure_reason: Optional[str] = None
     runtime_session_id: Optional[str] = None
 
     @property
     def did_real_work(self) -> bool:
-        """Did anything actually SUCCEED inside the runtime?"""
+        """Did anything actually SUCCEED inside the runtime?
+
+        Successes only — an indeterminate execution is not work done. This is
+        the invariant that catches a runtime which could not act and produced a
+        confident report anyway, so it must never be satisfiable by an
+        execution ADOS merely failed to prove had failed.
+        """
         return self.tool_success_count > 0
