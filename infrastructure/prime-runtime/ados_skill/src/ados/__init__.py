@@ -17,12 +17,46 @@ because no field here is trusted for authorization.
 """
 
 import asyncio
+import json
 import os
 from typing import Any, Dict, Optional
 
 from rlm import McpIntegration
 
 __all__ = ["ados", "Ados", "CapabilityDenied", "CapabilityTimeout"]
+
+
+def _decoded(result: Any) -> Any:
+    """Normalize what `McpIntegration.call_tool` hands back.
+
+    `rlm.mcp_base._parse_result` prefers the MCP response's `structuredContent`
+    and returns it as a dict — but when the server sends only text blocks (which
+    is what FastMCP emits for these tools) it falls back to joining them, and
+    the caller gets a JSON **string**.
+
+    Without this, `run_capability` called `.get("status")` on a str and raised
+
+        AttributeError: 'str' object has no attribute 'get'
+
+    from inside this module, on every single call. The capability itself had
+    already executed — the audit trail showed three successful
+    FetchIncidentEvidence rows — so ADOS did the work and the agent never
+    received the answer. The model diagnosed it correctly and could not fix it,
+    because the exception is raised in here before anything is returned.
+
+    Handles both shapes rather than depending on which one the server happens to
+    produce, since that is a property of the MCP server's schema declarations
+    and can change without notice.
+    """
+    if isinstance(result, (bytes, bytearray)):
+        result = result.decode("utf-8", "replace")
+    if isinstance(result, str):
+        try:
+            return json.loads(result)
+        except ValueError:
+            # Genuinely not JSON: hand it back untouched rather than guess.
+            return result
+    return result
 
 
 class CapabilityDenied(RuntimeError):
@@ -46,7 +80,7 @@ class Ados(McpIntegration):
 
         Ask before assuming: the grant is per-mission and resolved server-side,
         so it is not guessable from the objective text."""
-        return await self.call_tool("list_capabilities", {})
+        return _decoded(await self.call_tool("list_capabilities", {}))
 
     async def run_capability(
         self,
@@ -72,7 +106,7 @@ class Ados(McpIntegration):
         if idempotency_key:
             payload["idempotency_key"] = idempotency_key
 
-        res = await self.call_tool("request_capability", payload)
+        res = _decoded(await self.call_tool("request_capability", payload))
 
         if res.get("status") == "denied":
             raise CapabilityDenied(f"{capability}: {res.get('reason', 'no reason given')}")
@@ -83,7 +117,9 @@ class Ados(McpIntegration):
         deadline = asyncio.get_event_loop().time() + timeout_seconds
         while asyncio.get_event_loop().time() < deadline:
             await asyncio.sleep(poll_seconds)
-            state = await self.call_tool("get_capability_request", {"request_id": request_id})
+            state = _decoded(
+                await self.call_tool("get_capability_request", {"request_id": request_id})
+            )
             status = state.get("status")
             if status == "denied":
                 raise CapabilityDenied(f"{capability}: {state.get('reason', 'rejected by approver')}")

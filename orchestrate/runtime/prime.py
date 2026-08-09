@@ -399,6 +399,15 @@ class PrimeAgentRuntime:
         be megabytes and would bloat the mission's evidence trail."""
         keep = ("id", "toolName", "toolCallId", "isError")
         detail = {k: event[k] for k in keep if k in event}
+        if event.get("type") == "tool_execution_start":
+            # The code the model actually ran. Every runtime failure so far has
+            # been diagnosable only from this, and three of them cost a
+            # container teardown to recover it — the workspace is disposable, so
+            # if ADOS does not record the code, it is gone. Truncated, because
+            # this is an audit trail, not a transcript.
+            code = (event.get("args") or {}).get("code")
+            if code:
+                detail["code"] = str(code)[:600]
         if event.get("type") == "tool_execution_end":
             detail["result_preview"] = str(event.get("result"))[:500]
             # Size of what the tool handed back to the MODEL, which is what

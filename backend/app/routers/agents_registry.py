@@ -235,15 +235,32 @@ BUILTIN_AGENTS: List[AgentRegistryEntry] = [
         label="Prime RLM Agent",
         icon="🧬",
         color="purple",
-        description="Self-improving RLM coding and research agent (Prime Intellect). Performs recursive root-cause debugging, continuous IPython sandbox execution, and harness prompt/tool auto-refinement.",
-        model="Prime Agent RLM Harness (Recursive Continual Learning)",
+        # Description rewritten to match what has actually been demonstrated.
+        # It previously claimed "self-improving", "harness prompt/tool
+        # auto-refinement" and "auto-fix bugs" — none of which exist. This entry
+        # is still backed by PrimeAgentClient.execute_rlm_task(), which returns
+        # a hardcoded trace; the real containerized runtime is
+        # orchestrate/runtime/prime.py and is NOT wired to this registry entry.
+        # See docs/prime-agent-integration/13-acceptance-report.md.
+        description=(
+            "Runs a task inside a containerized Prime Agent, whose only tool is a "
+            "persistent IPython kernel. Reaches ADOS solely through the governed MCP "
+            "capability gateway. NOTE: this registry entry still routes to the "
+            "simulated execute_rlm_task() facade — the real runtime is not yet wired to it."
+        ),
+        model="Prime Agent (containerized, model/provider configurable)",
         inputSchema="RLMTaskPrompt { prompt, domain, max_iterations }",
-        outputSchema="RLMExecutionResult { taskId, status, harness, kernelTrace, harnessRefinements }",
+        outputSchema="RLMExecutionResult { taskId, status, harness, kernelTrace }",
         memoryRAG=True,
         targetTier="Tier 1 (Engineer Approval)",
         stage="Reasoning",
         isBuiltIn=True,
-        instructions="Execute recursive continual learning passes across code and scripts in an IPython kernel sandbox. Auto-fix bugs, log kernel trace, and refine execution harness.",
+        instructions=(
+            "Work inside the persistent IPython kernel. Write Python source directly; "
+            "top-level await is supported. Do not use shell escapes or invoke python as "
+            "a program. Request organizational actions and data only through the ADOS "
+            "capability skill, which is the audited route."
+        ),
         createdAt="2026-08-09T00:00:00+00:00",
     ),
 ]
