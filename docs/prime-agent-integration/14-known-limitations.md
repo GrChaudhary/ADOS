@@ -123,6 +123,62 @@ Pinned by `backend/tests/test_prime_runtime_image.py`, which parses Prime
 Agent's own source so an upstream addition fails a test rather than silently
 disabling the runtime.
 
+### Kernel errors are counted as tool successes — OPEN
+
+Found by the end-to-end ServiceNow run (mission `6a7c5991`), which reported
+`tools=4 ok=4 err=0` when only **one** of the four executions actually ran. The
+other three raised `SyntaxError` inside the kernel:
+
+```
+Cell In[5], line 2
+  r = await ados.run_capability('FetchIncidentEvidence', {}
+                               ^
+SyntaxError: '(' was never closed
+```
+
+The MCP result carried `details.status = 'error'` and `errorEname =
+'SyntaxError'`, and **`isError` was `false`** on all four. The adapter
+(`orchestrate/runtime/prime.py:278`) counts successes from `isError` alone, so
+it scored 4/4.
+
+Prime Agent's `isError` means the tool call was *dispatched* successfully, not
+that the code *ran*. This is the same confusion as run #4's `!python`, one layer
+up: there IPython reported a missing program as `status: 'ok'`, here the MCP
+envelope reports a kernel exception as a successful call.
+
+Why it matters beyond the counter: `evaluate_mission()`'s first check is
+`did_real_work` (`tool_success_count > 0`), which exists to catch a runtime that
+could not act and wrote confident fiction anyway. **That check is currently
+blind to kernel errors.** A run in which every cell raised would pass it. The
+mission verdict was still correct here — check #2 reads `capability_requests`,
+which no amount of miscounting can forge — but that is defence in depth doing
+the work of a broken first check, not a working first check.
+
+Fix is in the adapter, not the image: read `details.status`/`errorEname` from
+the tool result rather than trusting `isError`.
+
+### The request id in a ServiceNow ticket resolves to nothing — OPEN
+
+The gateway writes `CapabilityRequestRow` (its own `request_id` primary key,
+`backend/app/mcp_gateway.py:211`), then separately constructs a `CapabilityCall`
+whose `request_id` is its own `uuid4` default (`:318`). Two ids for one action.
+
+The ticket's provenance block carries the **call's** id, which appears in no
+table:
+
+```
+ticket description : Capability request: c0258072-47d5-409a-a036-f5050cc8b37b
+capability_requests: request_id       = cf4522b4-b3b3-4662-a907-9b763af6e4f5
+```
+
+So an operator who opens the incident, reads the id ADOS wrote there, and looks
+it up finds nothing. Provenance that does not resolve is worse than absent —
+it looks like a working audit trail. The mission id in the same block *does*
+resolve, which is what saved traceability for this run.
+
+Fix: pass `request_id=row.request_id` when constructing the `CapabilityCall`, so
+one action has one id.
+
 ### No approval round trip yet
 
 The denial path is tested; a full human-approval pause/resume through a runtime

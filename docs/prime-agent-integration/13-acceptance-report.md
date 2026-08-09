@@ -172,6 +172,12 @@ run, where kernel tool execution accounted for 1.2s out of 3,225s (0.04%).
   tier, connector selection, audit row — but **no IT helpdesk was actually
   notified**. What is proven is the *governed path*, not a real downstream
   side effect. A real helpdesk connector is not configured.
+
+  *Superseded for the final step only:* a later run of the same mission with
+  ServiceNow configured created, verified and closed a real incident
+  (`INC0010027`, mission `6a7c5991`) — see
+  [16-external-side-effect-run.md](16-external-side-effect-run.md). This report
+  describes the run it describes, and that run's helpdesk step was simulated.
 * `FetchIncidentEvidence` is genuinely real: `mission-evidence` reads ADOS's own
   database and returned the actual stored payload.
 * One mission, one model, one provider, one run. Not a stability claim.
