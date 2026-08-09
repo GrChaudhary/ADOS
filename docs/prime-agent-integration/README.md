@@ -23,6 +23,13 @@ dictionaries and no runtime existed at all.
 
 ## Architecture
 
+![ADOS + Prime Agent Runtime architecture](architecture.png)
+
+The diagram is deliberately colour-coded by what is *proven*: green for
+demonstrated, amber for simulated or partial, red for not built. Regenerate it
+from `docs/prime-agent-integration/architecture.html` after any change that
+alters those claims — a diagram that overstates is worse than no diagram.
+
 ```
    ADOS (control plane)                         Prime Agent (execution plane)
    ─────────────────────                        ────────────────────────────

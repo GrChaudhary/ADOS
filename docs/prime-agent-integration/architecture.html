@@ -1,0 +1,218 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 44px;
+    background: #0f1117; color: #e8eaf0;
+    font: 14px/1.45 -apple-system, "SF Pro Text", Inter, "Segoe UI", sans-serif;
+    width: 1680px;
+  }
+  h1 { font-size: 27px; margin: 0 0 4px; letter-spacing: -0.5px; }
+  .sub { color: #8b93a7; font-size: 14px; margin-bottom: 26px; }
+  .sub b { color: #cdd3e0; font-weight: 600; }
+
+  .planes { display: grid; grid-template-columns: 1fr 92px 1fr; gap: 0; align-items: start; }
+
+  .plane { border-radius: 14px; padding: 18px 20px 20px; border: 1.5px solid; }
+  .control { background: #121a2b; border-color: #2d4a7c; }
+  .exec    { background: #1a1526; border-color: #5a3f7a; }
+
+  .ptitle { font-size: 16px; font-weight: 700; margin-bottom: 2px; }
+  .ptag { font-size: 12px; color: #8b93a7; margin-bottom: 14px; }
+  .control .ptitle { color: #7fb2ff; }
+  .exec .ptitle { color: #c49bf5; }
+
+  .box { background: #182031; border: 1px solid #2f3d57; border-radius: 9px;
+         padding: 10px 12px; margin-bottom: 9px; }
+  .exec .box { background: #221a30; border-color: #4a3866; }
+  .box .t { font-weight: 650; font-size: 13.5px; margin-bottom: 3px; }
+  .box .d { color: #98a1b5; font-size: 12.2px; }
+  .mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 11.5px; color: #6f7c94; }
+
+  .chain { background: #101728; border: 1px solid #2b3a55; border-radius: 9px; padding: 11px 12px; }
+  .chain .step { display: flex; gap: 8px; align-items: baseline; padding: 3px 0;
+                 font-size: 12.4px; color: #c3cad9; }
+  .chain .n { color: #4d7fd6; font-weight: 700; font-size: 11px; min-width: 15px; }
+
+  .mid { display: flex; flex-direction: column; align-items: center; padding-top: 120px; gap: 6px; }
+  .arrow { font-size: 22px; color: #4d7fd6; line-height: 1; }
+  .alabel { font-size: 10.5px; color: #7c869b; text-align: center; letter-spacing: 0.3px; }
+  .arrow.up { color: #a06fd8; }
+
+  .green { color: #4ec98a; } .amber { color: #e0a94a; } .red { color: #e0685f; }
+
+  .legend { margin-top: 24px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  .lcard { border-radius: 10px; padding: 13px 15px; border: 1px solid; }
+  .l-ok   { background: #10241a; border-color: #2c5c40; }
+  .l-part { background: #241f10; border-color: #5c4c2c; }
+  .l-no   { background: #241313; border-color: #5c2f2c; }
+  .lcard h3 { margin: 0 0 7px; font-size: 13px; letter-spacing: 0.2px; }
+  .lcard ul { margin: 0; padding-left: 16px; }
+  .lcard li { font-size: 12.2px; color: #b4bccb; margin-bottom: 3px; }
+
+  .invariant { margin-top: 22px; background: #0d1421; border: 1.5px solid #2d4a7c;
+               border-radius: 11px; padding: 14px 18px; }
+  .invariant h3 { margin: 0 0 8px; font-size: 13.5px; color: #7fb2ff; }
+  .inv-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  .inv { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 11.4px;
+         color: #98a1b5; background: #131c2c; border-radius: 6px; padding: 7px 9px; }
+  .inv b { color: #e0685f; font-weight: 600; }
+  .foot { margin-top: 18px; color: #6f7c94; font-size: 11.6px; }
+</style>
+
+<h1>ADOS &nbsp;+&nbsp; Prime Agent Runtime</h1>
+<div class="sub">
+  <b>ADOS decides what is allowed. Prime Agent decides what to do.</b>
+  &nbsp;·&nbsp; state as of 2026-08-10 &nbsp;·&nbsp; governed execution demonstrated end-to-end; not production ready
+</div>
+
+<div class="planes">
+
+  <!-- CONTROL PLANE -->
+  <div class="plane control">
+    <div class="ptitle">ADOS — Control Plane</div>
+    <div class="ptag">system of record · survives the runtime</div>
+
+    <div class="box">
+      <div class="t">Missions &amp; Grants</div>
+      <div class="d"><span class="mono">missions.allowed_capabilities</span> is the authoritative allow-list.
+      <span class="mono">missions.evidence</span> holds the case file.</div>
+    </div>
+
+    <div class="box">
+      <div class="t">MCP Capability Gateway <span class="mono">:8077/mcp/</span></div>
+      <div class="d">MCP is the <i>transport</i>, not the authorization layer.</div>
+      <div class="chain" style="margin-top:9px">
+        <div class="step"><span class="n">1</span><span>authenticate session token — identity only</span></div>
+        <div class="step"><span class="n">2</span><span>resolve grant <b>server-side</b> from the mission row</span></div>
+        <div class="step"><span class="n">3</span><span>membership check → deny if outside grant</span></div>
+        <div class="step"><span class="n">4</span><span>idempotency — replay returns the original result</span></div>
+        <div class="step"><span class="n">5</span><span>policy tier + risk class (shared with the MOA)</span></div>
+        <div class="step"><span class="n">6</span><span>execute via IntegrationHub, or park for a human</span></div>
+        <div class="step"><span class="n">7</span><span>audit row written <b>by the executor</b></span></div>
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="t">Connectors</div>
+      <div class="d">
+        <span class="green">●</span> <span class="mono">mission-evidence</span> — real, reads ADOS's DB<br>
+        <span class="green">●</span> <span class="mono">prime-runtime</span> — real, starts a container<br>
+        <span class="green">●</span> <span class="mono">servicenow / sap / smart_factory</span> — real<br>
+        <span class="amber">●</span> <span class="mono">console</span> — <b>simulates</b>; registered last as fallback
+      </div>
+    </div>
+
+    <div class="box">
+      <div class="t">Audit &amp; Acceptance</div>
+      <div class="d"><span class="mono">capability_requests</span> · <span class="mono">runtime_sessions</span> · <span class="mono">missions</span><br>
+      <span class="mono">evaluate_mission()</span> decides from these rows — it has <b>no parameter</b> for the agent's text.</div>
+    </div>
+  </div>
+
+  <!-- ARROWS -->
+  <div class="mid">
+    <div class="arrow">→</div>
+    <div class="alabel">docker run<br>+ exec RPC<br><span class="mono">JSONL</span></div>
+    <div style="height:56px"></div>
+    <div class="arrow up">←</div>
+    <div class="alabel">HTTP MCP<br>Bearer token<br><span class="mono">ados</span> skill</div>
+  </div>
+
+  <!-- EXECUTION PLANE -->
+  <div class="plane exec">
+    <div class="ptitle">Prime Agent — Execution Plane</div>
+    <div class="ptag">containerized · disposable · non-root uid 10001</div>
+
+    <div class="box">
+      <div class="t">Container <span class="mono">ados-prime-&lt;session&gt;</span></div>
+      <div class="d">image <span class="mono">ados-prime-runtime:0.7.1</span> · <span class="mono">--memory 2g --cpus 2 --pids-limit 512</span><br>
+      network <span class="mono">ados-runtime-net</span> — <span class="amber">placement, not egress filtering</span></div>
+    </div>
+
+    <div class="box">
+      <div class="t">IPython Kernel — the <i>only</i> tool</div>
+      <div class="d">Model-generated Python runs here. Top-level <span class="mono">await</span>. Variables persist
+      across turns, so evidence stays in the kernel rather than in the model's context.<br>
+      <span class="mono">No <b>!</b> escapes · no %%bash · no `python` on PATH</span></div>
+    </div>
+
+    <div class="box">
+      <div class="t"><span class="mono">ados</span> Python skill</div>
+      <div class="d">The ONLY route back into ADOS.
+      <span class="mono">await ados.run_capability(...)</span><br>
+      Can ask for anything; authorizes nothing.</div>
+    </div>
+
+    <div class="box">
+      <div class="t">Workspace <span class="mono">/work</span></div>
+      <div class="d">Disposable temp dir, deleted on teardown. <b>Seeded with no facts</b> — evidence must be
+      fetched through a governed capability.</div>
+    </div>
+
+    <div class="box" style="border-color:#6b4a3a; background:#241a14">
+      <div class="t">Injected secrets — exactly two</div>
+      <div class="d">LLM provider key &nbsp;·&nbsp; <span class="mono">ADOS_MCP_TOKEN</span> (opaque, identity-only, stored as SHA-256)<br>
+      <span class="red">No DB URL · no connector credentials · no ADOS user identity</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- INVARIANTS -->
+<div class="invariant">
+  <h3>Execution semantics — enforced repo-wide by an AST audit (test_execution_semantics.py)</h3>
+  <div class="inv-grid">
+    <div class="inv">tool attempt <b>≠</b> tool success</div>
+    <div class="inv">process exit 0 <b>≠</b> mission success</div>
+    <div class="inv">HTTP 200 <b>≠</b> capability success</div>
+    <div class="inv">agent narrative <b>≠</b> evidence</div>
+    <div class="inv">model completion <b>≠</b> mission completion</div>
+  </div>
+  <div style="margin-top:9px; font-size:12.2px; color:#98a1b5">
+    Six stages, never collapsed: <span class="mono">1 accepted → 2 authorized → 3 connector invoked → 4 remote acked → 5 execution confirmed → 6 mission success</span>.
+    A connector returning normally proves stage&nbsp;3. <span class="mono">SUCCEEDED</span> asserts stage&nbsp;5.
+    <span class="mono">CallStatus.UNKNOWN</span> exists for external actions whose effect cannot be observed.
+  </div>
+</div>
+
+<!-- STATUS -->
+<div class="legend">
+  <div class="lcard l-ok">
+    <h3 class="green">✔ DEMONSTRATED — governed execution</h3>
+    <ul>
+      <li>Real container, real IPython kernel, real model inference</li>
+      <li><span class="mono">FetchIncidentEvidence</span> → real payload from ADOS's DB</li>
+      <li>Agent reasoned from retrieved evidence, not pre-loaded facts</li>
+      <li><span class="mono">NotifyITHelpdesk</span> executed through governance</li>
+      <li>Mission accepted on ADOS rows — 281.6s of an 1800s budget</li>
+      <li>Denial, unknown-token rejection, idempotent replay verified</li>
+    </ul>
+  </div>
+  <div class="lcard l-part">
+    <h3 class="amber">◐ PARTIAL / SIMULATED</h3>
+    <ul>
+      <li><span class="mono">NotifyITHelpdesk</span> ran on the <b>console</b> connector — <b>no helpdesk was notified</b></li>
+      <li>Network is placement only; no destination-level egress filtering</li>
+      <li>Nested runtimes get an <b>empty</b> grant and cannot recurse (by design)</li>
+      <li>No prompt caching on any provider tested (<span class="mono">cacheRead: 0</span>)</li>
+    </ul>
+  </div>
+  <div class="lcard l-no">
+    <h3 class="red">✘ NOT BUILT — do not claim</h3>
+    <ul>
+      <li>Real external side effect (next milestone: ServiceNow)</li>
+      <li>Human-approval round trip (denial path only)</li>
+      <li>Resume after restart · multi-session missions</li>
+      <li>Subagents · messaging · heartbeats · schedules</li>
+      <li>Self-improvement · harness auto-refinement</li>
+      <li><b>Production readiness</b></li>
+    </ul>
+  </div>
+</div>
+
+<div class="foot">
+  Milestone reached: <b>Prime Agent reasoning → ADOS governance → governed capability execution → ADOS acceptance.</b>
+  &nbsp; Next: <b>… → REAL external side effect → durable audit → verification.</b>
+  &nbsp;·&nbsp; docs/prime-agent-integration/
+</div>
