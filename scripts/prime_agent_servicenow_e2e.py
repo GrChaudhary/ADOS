@@ -52,6 +52,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from typing import Dict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -105,6 +106,49 @@ def _rule(title: str) -> None:
     print("\n" + "=" * 78)
     print(title)
     print("=" * 78)
+
+
+_BOUNDARY_PROBE = r"""
+import socket, sys
+gw_host, gw_port, m_host, m_port = sys.argv[1], int(sys.argv[2]), sys.argv[3], int(sys.argv[4])
+def reach(host, port):
+    try:
+        s = socket.create_connection((host, port), timeout=4); s.close(); return "REACHABLE"
+    except Exception as e:
+        return f"BLOCKED({type(e).__name__})"
+def resolves(name):
+    try:
+        return socket.gethostbyname(name)
+    except Exception as e:
+        return f"NO-RESOLVE({type(e).__name__})"
+print("ROUTE_COUNT", open("/proc/net/route").read().count("\n") - 1)
+print("DNS_EXTERNAL", resolves("example.com"))
+print("IP_DIRECT_1111", reach("1.1.1.1", 443))
+print("IP_DIRECT_8888", reach("8.8.8.8", 53))
+print("ALLOWED_GATEWAY", reach(gw_host, gw_port))
+print("ALLOWED_MODEL", reach(m_host, m_port))
+print("HOST_POSTGRES_5432", reach(gw_host, 5432))
+print("HOST_SSH_22", reach(gw_host, 22))
+"""
+
+
+async def _probe_boundary(runtime: PrimeAgentRuntime) -> Dict[str, str]:
+    """Measure the network boundary from inside the live mission container."""
+    destinations = runtime.egress.destinations
+    gateway = destinations[0]
+    model = destinations[1] if len(destinations) > 1 else destinations[0]
+    proc = await asyncio.create_subprocess_exec(
+        "docker", "exec", runtime.container_name,
+        "/home/prime/kernel-venv/bin/python", "-c", _BOUNDARY_PROBE,
+        gateway.host, str(gateway.port), model.host, str(model.port),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await asyncio.wait_for(proc.communicate(), timeout=90)
+    return dict(
+        line.split(" ", 1)
+        for line in out.decode(errors="replace").splitlines()
+        if " " in line
+    )
 
 
 async def _preflight(connector: ServiceNowConnector) -> None:
@@ -247,6 +291,29 @@ async def main() -> int:
               f"(--internal; egress allowlist: "
               f"{', '.join(f'{d.host}:{d.port}' for d in runtime.egress.destinations)})")
         print(f"[4] workspace  {runtime.workspace} (empty of facts)")
+
+        # The egress boundary, probed from INSIDE the live mission container —
+        # not from its configuration. A `--network` argument is a claim; what
+        # matters is what this process can open a socket to while the mission
+        # is actually running.
+        boundary = await _probe_boundary(runtime)
+        print("[4b] egress boundary, measured inside the running container:")
+        for key, value in boundary.items():
+            print(f"       {key:34} {value}")
+        if boundary.get("ROUTE_COUNT") != "1":
+            raise RunFailed(f"the runtime has a default route — the boundary is not in force: {boundary}")
+        if not boundary.get("DNS_EXTERNAL", "").startswith("NO-RESOLVE"):
+            raise RunFailed(f"external DNS resolves inside the runtime: {boundary}")
+        for probe in ("IP_DIRECT_1111", "IP_DIRECT_8888"):
+            if not boundary.get(probe, "").startswith("BLOCKED"):
+                raise RunFailed(f"{probe} is reachable — arbitrary egress is not blocked: {boundary}")
+        for probe in ("ALLOWED_GATEWAY", "ALLOWED_MODEL"):
+            if boundary.get(probe) != "REACHABLE":
+                raise RunFailed(
+                    f"{probe} is not reachable; the mission cannot run and the boundary is "
+                    f"blocking what it is supposed to permit: {boundary}"
+                )
+
         async with async_session_factory() as db:
             row = await db.get(RuntimeSessionRow, session_id)
             row.state, row.container_name = "running", runtime.container_name
@@ -317,7 +384,28 @@ async def main() -> int:
     print(f"runtime_session_id : {s.runtime_session_id}")
     print(f"session state      : {s.state}")
     print(f"kernel executions  : {outcome.tool_execution_count} "
-          f"(ok {outcome.tool_success_count}, err {outcome.tool_error_count})")
+          f"(ok {outcome.tool_success_count}, err {outcome.tool_error_count}, "
+          f"indeterminate {outcome.tool_unknown_count})")
+
+    # Per-execution kernel verdicts, taken from `details.status` rather than
+    # `isError`. The previous run reported 4/4 successes while three cells
+    # raised SyntaxError, because `isError` answers "did the tool throw?".
+    print("\nkernel verdicts (from details.status, NOT isError):")
+    for event in outcome.events:
+        if event.type == "runtime.tool.finished":
+            detail = event.detail or {}
+            print(f"  verdict={detail.get('kernel_verdict')!s:<8} "
+                  f"details.status={detail.get('kernel_status')!s:<8} "
+                  f"isError={detail.get('isError')!s:<6} "
+                  f"{('error=' + str(detail.get('kernel_error'))) if detail.get('kernel_error') else ''}")
+
+    print("\nmodel calls:")
+    for event in outcome.events:
+        if event.type == "runtime.model.message":
+            usage = (event.detail or {}).get("usage") or {}
+            if usage:
+                print(f"  in={usage.get('input')} out={usage.get('output')} "
+                      f"cacheRead={usage.get('cacheRead')} total={usage.get('totalTokens')}")
     for e in outcome.events:
         if e.type == "runtime.tool.started":
             code = (e.detail or {}).get("code")
@@ -390,7 +478,29 @@ async def main() -> int:
             raise RunFailed(
                 "provenance missing: an operator could not trace this ticket to its mission"
             )
-        print("\nVERIFIED: sys_id, number, marker, and mission id all match.")
+
+        # The canonical request id, followed the way an operator would: take the
+        # id ADOS wrote into the ticket and look it up. The previous run's
+        # ticket carried an id that resolved to nothing (fixed in 4edbb6b);
+        # this is the check that would have caught it.
+        description = record.get("description") or ""
+        if "Capability request: " not in description:
+            raise RunFailed("the ticket carries no capability request id")
+        in_ticket = description.split("Capability request: ")[1].split("\n")[0].strip()
+        async with async_session_factory() as db:
+            resolved = await db.get(CapabilityRequestRow, uuid.UUID(in_ticket))
+        if resolved is None:
+            raise RunFailed(
+                f"the request id in the ticket ({in_ticket}) resolves to no capability_requests "
+                "row — provenance that does not resolve is worse than none"
+            )
+        if str(resolved.request_id) != str(notify_row.request_id):
+            raise RunFailed(
+                f"the ticket points at {in_ticket}, but the executing row is {notify_row.request_id}"
+            )
+        print(f"\nVERIFIED: sys_id, number, marker, and mission id all match.")
+        print(f"VERIFIED: ticket request id {in_ticket} resolves to the executing audit row "
+              f"({resolved.capability}, status={resolved.status}).")
 
         _rule("6. WHAT ADOS RECORDED")
         print(f"mission.status         : {m.status}")
