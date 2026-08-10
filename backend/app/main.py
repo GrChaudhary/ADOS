@@ -20,7 +20,7 @@ from .config import settings
 from .mcp_gateway import mcp_http_app
 from .eventbus import get_event_bus
 from .observability import RequestIdMiddleware, configure_logging
-from .routers import ai_services, agents_registry, auth, capabilities, capability_onboarding, copilot, digital_twin, events, events_stream, executive, governance, health, incidents, integrations, knowledge_graph, langgraph_agents, learning, memory, moa, settings as settings_router
+from .routers import ai_services, agents_registry, auth, capabilities, capability_onboarding, copilot, digital_twin, events, events_stream, executive, governance, health, incidents, integrations, knowledge_graph, langgraph_agents, learning, memory, moa, runtime_approvals, settings as settings_router
 
 _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
@@ -257,7 +257,7 @@ _ROUTERS = (
     events_stream.router, knowledge_graph.router, integrations.router,
     ai_services.router, agents_registry.router, governance.router,
     settings_router.router, copilot.router, langgraph_agents.router, moa.router,
-    capability_onboarding.router,
+    capability_onboarding.router, runtime_approvals.router,
 )
 
 for _router in _ROUTERS:

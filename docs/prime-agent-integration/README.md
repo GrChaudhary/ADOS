@@ -18,6 +18,7 @@ dictionaries and no runtime existed at all.
 | [13-acceptance-report.md](13-acceptance-report.md) | The end-to-end acceptance run, with its full trace |
 | [14-known-limitations.md](14-known-limitations.md) | Everything observed to be limited, incomplete, or provider-specific |
 | [15-provider-benchmark.md](15-provider-benchmark.md) | NVIDIA NIM vs Groq vs local Ollama, measured |
+| [16-external-side-effect-run.md](16-external-side-effect-run.md) | The end-to-end run that created a real ServiceNow incident, and the two defects it exposed |
 
 ---
 
@@ -71,6 +72,12 @@ because it is not on that path.
    speaks HTTP MCP to the gateway.
 7. The gateway authenticates, re-resolves the grant server-side, applies policy,
    executes through `IntegrationHub`, and writes the audit row itself.
+   A Tier 1/2 capability is **parked** instead: the request row is durable, the
+   agent's HTTP call is not held open against a human's attention span, and the
+   `ados` skill polls until ADOS decides. A human decides through
+   `/runtime/capability-requests/{id}/approve|reject`, and approval executes via
+   that same gateway choke point — there is only ever one place where a
+   capability becomes a real side effect.
 8. ADOS consumes the event stream, persists normalized events, and decides the
    mission's outcome from its own records.
 9. Teardown always runs: container removed, workspace deleted.
@@ -178,13 +185,21 @@ through `FetchIncidentEvidence`, reasoned over it in the kernel, and invoked
 accepted by `evaluate_mission()` on those rows. Full trace, including the exact
 model-generated code, in [13-acceptance-report.md](13-acceptance-report.md).
 
-Read that report's caveats. In particular, `NotifyITHelpdesk` resolved to the
-**console** connector and returned `"[console] simulated NotifyITHelpdesk"` — the
-governed path is real end to end, but no IT helpdesk was actually notified. What
-is demonstrated is the control path, not a real downstream side effect.
+In that run `NotifyITHelpdesk` resolved to the **console** connector and
+returned `"[console] simulated NotifyITHelpdesk"` — the governed path was real
+end to end, but no IT helpdesk was actually notified.
+
+A later explicit run closed that gap: with ServiceNow configured, the same
+mission created, independently verified and closed a **real** incident
+(`INC0010027`) through the whole chain — container, kernel, MCP, governance,
+connector, external record. See
+[16-external-side-effect-run.md](16-external-side-effect-run.md). That run also
+exposed two defects, both since fixed and both written up in the limitations
+document; the numbers in its report are as recorded on the day, before the
+fixes.
 
 **This is not production ready, and is not described as such.** Production
 hardening is a separate phase. The honest inventory of what is missing is in
 [14-known-limitations.md](14-known-limitations.md) — including no egress
-filtering, no approval round trip, single-session missions only, and a NULL
-`runtime_session_id`.
+filtering, an approval round trip that no live runtime has yet been driven
+through, and single-session missions only.

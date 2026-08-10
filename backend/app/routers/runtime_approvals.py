@@ -1,0 +1,309 @@
+"""
+The human half of the Prime Agent approval round trip.
+
+A Tier 1/2 capability request from a runtime is parked by the MCP gateway as a
+durable `capability_requests` row with `status='pending_approval'`, and the
+gateway deliberately does NOT hold the agent's HTTP call open against a human's
+attention span — the agent polls `get_capability_request`. Until these
+endpoints existed, nothing ever moved such a row: `mcp_gateway.py` was the only
+writer of that table and had no path out of `pending_approval`. Every Tier 1/2
+request parked forever and the agent eventually raised `CapabilityTimeout`.
+
+    runtime asks  ->  gateway parks the row  ->  HUMAN DECIDES HERE
+                                                      |
+                             approve -> executed via the gateway's own
+                                        _execute_capability, audited, and the
+                                        agent's next poll returns the result
+                             reject  -> denied, with a reason, and no side effect
+
+WHAT THIS FILE DELIBERATELY DOES NOT DO
+---------------------------------------
+**It does not execute anything itself.** Approval calls
+`mcp_gateway._execute_capability` — the same choke point the autonomous path
+uses, and the same one that writes the audit row. A second execution path here
+would be a second place for a capability to become a real side effect, which is
+exactly the shape of every false-success defect this integration has hit.
+
+**It is not reachable by the runtime.** These are ADOS user endpoints behind
+`get_current_user`, requiring a real JWT with a role. The runtime holds only an
+opaque, identity-only session token that names a session and carries no claims,
+and the MCP surface exposes no approve tool. An agent cannot release its own
+Tier 1/2 request by any route, which is the entire point of parking it.
+
+**It does not re-derive the tier.** The tier on the row was assigned by
+`orchestrate/governance.py` when the request arrived. Recomputing it here would
+let a later code change silently downgrade an already-parked request.
+"""
+
+import uuid
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
+from db.session import get_db_session
+from orchestrate.async_approvals import publish_approval_decision_event
+
+from ..auth import get_current_user
+from ..mcp_gateway import _LIVE_STATES, _execute_capability
+from ..rbac import User, authorize_governance_decision
+
+router = APIRouter(
+    prefix="/runtime/capability-requests",
+    tags=["runtime-approvals"],
+    dependencies=[Depends(get_current_user)],
+)
+
+
+def _estimated_cost(row: CapabilityRequestRow) -> float:
+    """What the runtime claimed this would cost, used for the approver's limit
+    check. It is the same value `assign_policy_tier` used to decide the tier in
+    the first place, so approver limits and tier assignment cannot disagree
+    about what action they are talking about.
+
+    Note this is the *agent's* number. It is not evidence of anything and is
+    not treated as such — it only ever makes approval harder, never easier,
+    because a larger claimed cost narrows the set of people who may approve.
+    """
+    try:
+        return float((row.arguments or {}).get("_estimated_cost_usd", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _view(row: CapabilityRequestRow) -> Dict[str, Any]:
+    return {
+        "requestId": str(row.request_id),
+        "missionId": str(row.mission_id),
+        "sessionId": str(row.session_id),
+        "capability": row.capability,
+        "arguments": row.arguments,
+        "status": row.status,
+        "policyTier": row.policy_tier,
+        "riskClass": row.risk_class,
+        "estimatedCostUsd": _estimated_cost(row),
+        "decidedBy": row.decided_by,
+        "reason": row.reason,
+        "result": row.result,
+        "createdAt": row.created_at.isoformat() if row.created_at else None,
+        "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+@router.get("")
+async def list_capability_requests(
+    status_filter: str = "pending_approval",
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """The approver's queue. Defaults to what is actually waiting on a human."""
+    rows = (
+        await session.execute(
+            select(CapabilityRequestRow)
+            .where(CapabilityRequestRow.status == status_filter)
+            .order_by(CapabilityRequestRow.created_at)
+        )
+    ).scalars().all()
+    return {"status": status_filter, "count": len(rows), "requests": [_view(r) for r in rows]}
+
+
+@router.get("/{request_id}")
+async def get_capability_request_detail(
+    request_id: str, session: AsyncSession = Depends(get_db_session)
+) -> Dict[str, Any]:
+    return _view(await _load_pending_or_404(session, request_id, require_pending=False))
+
+
+async def _load_pending_or_404(
+    session: AsyncSession, request_id: str, *, require_pending: bool = True
+) -> CapabilityRequestRow:
+    """Loads the row, taking a row lock when a decision is about to be made.
+
+    `SELECT ... FOR UPDATE` rather than a plain read, because the
+    already-decided check below is otherwise check-then-act: two approvers
+    clicking at the same moment would both read `pending_approval` and both
+    execute, and for `NotifyITHelpdesk` that is two real tickets. The lock is
+    held until this request's transaction ends, which means the connector call
+    happens inside it — the autonomous path in `mcp_gateway.py` deliberately
+    does the opposite, executing outside its DB session so a slow connector
+    cannot hold a transaction open.
+
+    The difference is intentional. That path is driven by an agent and can be
+    hot; this one is driven by a human clicking approve, where correctness is
+    worth more than the connection. The alternative — claim the row, commit,
+    then execute — would need an intermediate status, and the `ados` skill
+    polls with `if status != "pending_approval": return`, so any new state
+    would hand the agent a non-final answer as though it were the result.
+    """
+    try:
+        request_uuid = uuid.UUID(request_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="malformed request_id")
+
+    query = select(CapabilityRequestRow).where(CapabilityRequestRow.request_id == request_uuid)
+    if require_pending:
+        query = query.with_for_update()
+    row = (await session.execute(query)).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="no such capability request")
+    if require_pending and row.status != "pending_approval":
+        # 409, not 200. Deciding an already-decided request must not execute it
+        # a second time — a double approval of `NotifyITHelpdesk` would raise
+        # two real tickets, and of a payment capability, worse.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"request is already '{row.status}' and cannot be decided again",
+        )
+    return row
+
+
+async def _live_session_or_409(
+    session: AsyncSession, row: CapabilityRequestRow
+) -> RuntimeSessionRow:
+    """A dead session's parked request must not execute.
+
+    The agent that asked is gone: the container is torn down, its workspace
+    deleted, and nothing will consume the result. Executing anyway would create
+    a real external side effect on behalf of a mission that already ended, and
+    no one would be watching for it. Refusing is the honest outcome, and it is
+    visible rather than silent.
+    """
+    runtime_session = await session.get(RuntimeSessionRow, row.session_id)
+    if runtime_session is None:
+        raise HTTPException(status_code=404, detail="the runtime session no longer exists")
+    if runtime_session.state not in _LIVE_STATES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"runtime session is '{runtime_session.state}' — the agent that requested this "
+                "is gone, so approving would act with nobody waiting for the result"
+            ),
+        )
+    return runtime_session
+
+
+async def _release_session_if_nothing_else_pending(
+    session: AsyncSession, runtime_session: RuntimeSessionRow
+) -> None:
+    """Back to 'running' only when this session has nothing else parked.
+
+    A session may have more than one request awaiting a human, and flipping the
+    state on the first decision would misreport the others as unblocked.
+    """
+    remaining = (
+        await session.execute(
+            select(CapabilityRequestRow).where(
+                CapabilityRequestRow.session_id == runtime_session.session_id,
+                CapabilityRequestRow.status == "pending_approval",
+            )
+        )
+    ).scalars().all()
+    if not remaining and runtime_session.state == "waiting_approval":
+        runtime_session.state = "running"
+
+
+@router.post("/{request_id}/approve")
+async def approve_capability_request(
+    request_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Dict[str, Any]:
+    """Release a parked request, and execute it through the governed path."""
+    row = await _load_pending_or_404(session, request_id)
+    runtime_session = await _live_session_or_409(session, row)
+
+    authorize_governance_decision(
+        current_user,
+        policy_tier=row.policy_tier or 0,
+        estimated_cost_usd=_estimated_cost(row),
+        subject="runtime capability request",
+    )
+
+    mission = await session.get(MissionRow, row.mission_id)
+    if mission is None:
+        raise HTTPException(status_code=404, detail="the mission no longer exists")
+    # The grant is re-checked at decision time, not trusted from when the
+    # request was parked. A mission's grant can be narrowed while a request
+    # waits, and the narrower answer must win.
+    if row.capability not in set(mission.allowed_capabilities or []):
+        row.status = "denied"
+        row.decided_by = f"user:{current_user.username}"
+        row.reason = (
+            f"'{row.capability}' is no longer in this mission's capability grant; "
+            "approval refused"
+        )
+        await _release_session_if_nothing_else_pending(session, runtime_session)
+        await session.commit()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=row.reason)
+
+    from contracts import PolicyTier  # local: keeps the module import graph flat
+
+    result = await _execute_capability(
+        row.capability,
+        row.arguments or {},
+        mission_id=row.mission_id,
+        tier=PolicyTier(row.policy_tier or 0),
+        request_id=row.request_id,
+        approved_by=current_user.username,
+    )
+
+    # Written from the executor's own answer, exactly as the autonomous path
+    # does. "The approver said yes" is not "the action succeeded".
+    row.status = "executed" if result.get("ok") else "failed"
+    row.result = result
+    row.reason = None if result.get("ok") else result.get("error")
+    row.decided_by = f"user:{current_user.username}"
+    await _release_session_if_nothing_else_pending(session, runtime_session)
+    await session.commit()
+    await session.refresh(row)
+
+    await publish_approval_decision_event(
+        task_id=str(row.request_id),
+        decision="approved",
+        approved_by=current_user.username,
+        role=current_user.role.value,
+        bus=getattr(request.app.state, "event_bus", None),
+    )
+    return _view(row)
+
+
+@router.post("/{request_id}/reject")
+async def reject_capability_request(
+    request_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    body: Optional[Dict[str, Any]] = Body(default=None),
+) -> Dict[str, Any]:
+    """Refuse a parked request. Nothing executes, and the agent is told why."""
+    row = await _load_pending_or_404(session, request_id)
+    runtime_session = await _live_session_or_409(session, row)
+
+    authorize_governance_decision(
+        current_user,
+        policy_tier=row.policy_tier or 0,
+        estimated_cost_usd=_estimated_cost(row),
+        subject="runtime capability request",
+    )
+
+    given = (body or {}).get("reason") or "no reason given"
+    row.status = "denied"
+    row.decided_by = f"user:{current_user.username}"
+    row.reason = f"rejected by {current_user.username}: {given}"
+    # `result` stays None. There is no outcome to report because nothing ran,
+    # and writing a success-shaped payload here is the exact false-success the
+    # rest of this system is built to prevent.
+    await _release_session_if_nothing_else_pending(session, runtime_session)
+    await session.commit()
+    await session.refresh(row)
+
+    await publish_approval_decision_event(
+        task_id=str(row.request_id),
+        decision="rejected",
+        approved_by=current_user.username,
+        role=current_user.role.value,
+        bus=getattr(request.app.state, "event_bus", None),
+    )
+    return _view(row)

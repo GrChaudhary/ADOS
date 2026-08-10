@@ -127,6 +127,44 @@ def get_current_user(
     return user
 
 
+def authorize_governance_decision(
+    user: "User",
+    *,
+    policy_tier: int,
+    estimated_cost_usd: float = 0.0,
+    subject: str = "action",
+) -> None:
+    """May this user decide this governed action? Raises 403 if not.
+
+    Extracted from backend/app/routers/moa.py, which had the only copy, when
+    Prime Agent runtime capability requests needed the same rule. There is one
+    implementation deliberately: two would drift, and the cheap direction for
+    them to drift is permissive. `moa.py::_authorize_decision` now delegates
+    here rather than keeping a parallel copy.
+
+    The rule is unchanged from the MOA path:
+      * auditors decide nothing — the role is read-only everywhere;
+      * Tier 2 (executive-approval) needs EXECUTIVE or ADMIN;
+      * the action's estimated cost must be within the approver's own limit.
+    """
+    if user.role == Role.AUDITOR:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Auditors have read-only access and cannot decide {subject}s",
+        )
+    if policy_tier == 2 and user.role not in (Role.EXECUTIVE, Role.ADMIN):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Role '{user.role.value}' cannot decide Tier 2 (executive-approval) {subject}s",
+        )
+    if user.approval_limit_usd < estimated_cost_usd:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Approval limit ${user.approval_limit_usd:,.0f} is below this action's "
+            f"${estimated_cost_usd:,.0f} estimated cost",
+        )
+
+
 def require_role(*allowed: Role):
     """Dependency factory for endpoints only some roles may call (e.g.
     user management is ADMIN-only). Layers on top of get_current_user

@@ -300,6 +300,7 @@ async def _execute_capability(
     mission_id: uuid.UUID,
     tier: PolicyTier,
     request_id: uuid.UUID,
+    approved_by: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run the capability through the real ADOS path.
 
@@ -340,8 +341,11 @@ async def _execute_capability(
             incident_id=str(mission_id),
             # The tier ADOS decided, carried into the call the connectors see —
             # so the governance record travels with the action rather than
-            # being asserted separately.
-            governance=GovernanceInfo(policy_tier=tier),
+            # being asserted separately. `approved_by` is the verified username
+            # of the human who released a Tier 1/2 request, never a value the
+            # runtime supplied; None on the autonomous path, which is what the
+            # contract means by "null for Tier 0".
+            governance=GovernanceInfo(policy_tier=tier, approved_by=approved_by),
         )
         # hub.invoke(), the same entry point orchestrate/moa/graph.py uses —
         # one execution path for agents and for the MOA, not a parallel one.

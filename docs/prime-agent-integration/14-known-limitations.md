@@ -218,12 +218,44 @@ drives the real `request_capability` gateway entry point against a mocked
 ServiceNow, extracts the id from the posted ticket body, and resolves it back to
 the row — plus a structural guard that the argument stays required.
 
-### No approval round trip yet
+### ~~No approval round trip yet~~ — BUILT 2026-08-10, not yet exercised by a live runtime
 
-The denial path is tested; a full human-approval pause/resume through a runtime
-session is not. `WAITING_FOR_APPROVAL` is a state of the **ADOS session row**,
-not of the Prime process — Prime Agent has no suspend primitive, so the agent
-polls while ADOS holds the decision.
+`WAITING_FOR_APPROVAL` is a state of the **ADOS session row**, not of the Prime
+process — Prime Agent has no suspend primitive, so the agent polls while ADOS
+holds the decision. That half was always there, and so was the `ados` skill's
+polling loop. What was missing was anyone to answer: `mcp_gateway.py` was the
+only writer of `capability_requests` and had no path out of `pending_approval`,
+so every Tier 1/2 request parked forever and the agent raised
+`CapabilityTimeout`.
+
+`backend/app/routers/runtime_approvals.py` closes it:
+
+```
+GET  /runtime/capability-requests              the approver's queue
+POST /runtime/capability-requests/{id}/approve executes via the gateway's own
+                                               _execute_capability, audited
+POST /runtime/capability-requests/{id}/reject  denied, with a reason, nothing runs
+```
+
+Approval does **not** execute anything itself — it calls
+`mcp_gateway._execute_capability`, the same choke point the autonomous path
+uses, so there is still exactly one place where a capability becomes a real side
+effect. The RBAC rule is the one `moa.py` already had, extracted to
+`rbac.authorize_governance_decision()` and now shared rather than copied.
+
+Guards, each pinned by a test that fails when the guard is removed: a decided
+request cannot be decided again (409, so a double approval cannot raise two
+tickets); the mission grant is re-checked at decision time, not trusted from
+when the request parked; a request whose runtime session has ended is refused
+rather than fired into the void; auditors decide nothing; the approver's limit
+must cover the claimed cost. The approver's verified username travels to the
+connector as `GovernanceInfo.approved_by`, and Tier 0 still records `None` —
+a negative-control test pins that, because a default that stamped somebody in
+would make every autonomous action look human-approved.
+
+**Still open:** no live Prime Agent container has been driven through this. The
+round trip is proven at the gateway/API level with the real skill-side polling
+contract, not by a running model waiting on a human. That run has not been done.
 
 ### Single-session missions only
 

@@ -187,12 +187,13 @@
       <li><span class="mono">NotifyITHelpdesk</span> executed through governance</li>
       <li>Mission accepted on ADOS rows — 281.6s of an 1800s budget</li>
       <li>Denial, unknown-token rejection, idempotent replay verified</li>
+      <li><b>Real ServiceNow incident</b> INC0010027 — created, GET-verified, closed</li>
     </ul>
   </div>
   <div class="lcard l-part">
     <h3 class="amber">◐ PARTIAL / SIMULATED</h3>
     <ul>
-      <li><span class="mono">NotifyITHelpdesk</span> ran on the <b>console</b> connector — <b>no helpdesk was notified</b></li>
+      <li>Human-approval round trip: <b>built and tested at the API level</b>, never yet driven by a live container</li>
       <li>Network is placement only; no destination-level egress filtering</li>
       <li>Nested runtimes get an <b>empty</b> grant and cannot recurse (by design)</li>
       <li>No prompt caching on any provider tested (<span class="mono">cacheRead: 0</span>)</li>
@@ -201,8 +202,6 @@
   <div class="lcard l-no">
     <h3 class="red">✘ NOT BUILT — do not claim</h3>
     <ul>
-      <li>Real external side effect (next milestone: ServiceNow)</li>
-      <li>Human-approval round trip (denial path only)</li>
       <li>Resume after restart · multi-session missions</li>
       <li>Subagents · messaging · heartbeats · schedules</li>
       <li>Self-improvement · harness auto-refinement</li>
@@ -212,7 +211,7 @@
 </div>
 
 <div class="foot">
-  Milestone reached: <b>Prime Agent reasoning → ADOS governance → governed capability execution → ADOS acceptance.</b>
-  &nbsp; Next: <b>… → REAL external side effect → durable audit → verification.</b>
+  Milestone reached: <b>Prime Agent reasoning → ADOS governance → governed capability execution → REAL external side effect → independent verification → ADOS acceptance.</b>
+  &nbsp; Next: <b>egress filtering · reliability matrix · a live approval round trip.</b>
   &nbsp;·&nbsp; docs/prime-agent-integration/
 </div>

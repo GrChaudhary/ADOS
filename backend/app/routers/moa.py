@@ -31,7 +31,7 @@ from orchestrate.async_approvals import publish_pending_approval_event, publish_
 
 from .. import moa_breaker_store
 from ..auth import get_current_user
-from ..rbac import Role, User
+from ..rbac import Role, User, authorize_governance_decision
 
 router = APIRouter(prefix="/moa", tags=["moa"], dependencies=[Depends(get_current_user)])
 
@@ -147,23 +147,14 @@ async def _load_breaker_or_404(session: AsyncSession, task_id: str) -> CascadeCi
 
 
 def _authorize_decision(user: User, proposed_action: dict) -> None:
-    if user.role == Role.AUDITOR:
-        raise HTTPException(status_code=403, detail="Auditors have read-only access and cannot decide MOA tasks")
-    if proposed_action.get("policy_tier") == PolicyTier.EXECUTIVE_APPROVAL.value and user.role not in (
-        Role.EXECUTIVE,
-        Role.ADMIN,
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail=f"Role '{user.role.value}' cannot decide Tier 2 (executive-approval) MOA actions",
-        )
-    estimated_cost = proposed_action.get("estimated_cost_usd", 0.0)
-    if user.approval_limit_usd < estimated_cost:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Approval limit ${user.approval_limit_usd:,.0f} is below this action's "
-            f"${estimated_cost:,.0f} estimated cost",
-        )
+    """Delegates to the shared rule in rbac.py. Prime Agent runtime capability
+    requests need the identical check, and two copies would drift permissively."""
+    authorize_governance_decision(
+        user,
+        policy_tier=proposed_action.get("policy_tier", PolicyTier.AUTONOMOUS.value),
+        estimated_cost_usd=proposed_action.get("estimated_cost_usd", 0.0),
+        subject="MOA action",
+    )
 
 
 async def _decide(
