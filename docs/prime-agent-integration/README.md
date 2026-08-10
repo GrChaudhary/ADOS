@@ -204,8 +204,17 @@ exposed two defects, both since fixed and both written up in the limitations
 document; the numbers in its report are as recorded on the day, before the
 fixes.
 
+Since then, three further live runs: a full autonomous mission behind the P5
+egress boundary (`INC0010028`), a **98.1-second human approval hold** on a Tier 2
+capability released through the real approval endpoint (`CHG0030499`), and **two
+concurrent sessions** proven mutually unreachable by probes run inside both live
+containers. The consolidated statement of what is and is not proven — with a
+requirement-by-requirement matrix and an evidence ledger — is
+[17-final-acceptance-report.md](17-final-acceptance-report.md).
+
 **This is not production ready, and is not described as such.** Production
 hardening is a separate phase. The honest inventory of what is missing is in
-[14-known-limitations.md](14-known-limitations.md) — including no egress
-filtering, an approval round trip that no live runtime has yet been driven
-through, and single-session missions only.
+[14-known-limitations.md](14-known-limitations.md) — including orphan sweeping
+that is recorded but never consumed, single-session missions only, no resume
+after restart, and an operational hazard the system cannot self-detect: a
+gateway process serving code older than HEAD.
