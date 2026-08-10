@@ -34,6 +34,8 @@ alters those claims — a diagram that overstates is worse than no diagram.
 ```
    ADOS (control plane)                         Prime Agent (execution plane)
    ─────────────────────                        ────────────────────────────
+                                                 (per-session --internal network:
+                                                  no default route, no external DNS)
    missions, policy, risk,
    approvals, audit, connectors
 
@@ -113,8 +115,12 @@ loop. See [15-provider-benchmark.md](15-provider-benchmark.md).
   with the permissions of whoever runs it, and its README states the kernel is
   not a security sandbox. Nothing here ever runs it on the host.
 * Non-root (uid 10001), `--memory 2g --cpus 2 --pids-limit 512`.
-* Dedicated bridge network with no other ADOS service on it. **This is network
-  placement, not egress filtering** — see the limitations document.
+* **Enforced egress allowlist.** Per-session `--internal` Docker network with
+  no default route and no external DNS, plus a destination-pinned relay. The
+  runtime reaches the ADOS gateway and the configured model endpoint; arbitrary
+  internet hosts, the Docker host, and other missions' runtimes are unreachable.
+  Proved from inside the real image — see the limitations document for the
+  before/after measurements.
 * Workspace is a disposable temp directory, never the ADOS repo and never `$HOME`.
 * Exactly two secrets injected: the LLM provider key and an identity-only
   session token that is opaque, carries no claims, and is stored hashed.

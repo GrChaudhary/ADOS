@@ -11,7 +11,16 @@ asyncio_mode = "auto"
 #
 # A test that writes to someone's ServiceNow instance should require you to
 # have typed the words "external" first.
-addopts = "-m 'not external'"
+#
+# `docker` tests build real networks and containers to prove the runtime's
+# egress boundary from inside it. They need Docker and the runtime images, and
+# take ~30s, so a laptop or CI job running plain `pytest` should not be
+# required to have them. Run deliberately:
+#
+#     pytest -m docker
+#
+addopts = "-m 'not external and not docker'"
 markers = [
     "external: mutates a real external system (ServiceNow). Deselected by default.",
+    "docker: builds real containers/networks to prove the egress boundary. Deselected by default.",
 ]

@@ -91,15 +91,61 @@ persisted to `runtime_sessions`. Covered by
 `backend/tests/test_runtime_session_id.py`, including a structural test that the
 dead `_EVENT_MAP["session"]` entry stays gone.
 
-### Network egress is placement, not filtering
+### ~~Network egress is placement, not filtering~~ — ENFORCED 2026-08-10
 
-The container sits on a dedicated bridge network (`ados-runtime-net`) with no
-other ADOS service on it, and no host network access. It **can still reach
-arbitrary internet hosts** — it must, to call an LLM API.
+The container used to sit on a shared bridge (`ados-runtime-net`) with
+`--add-host host.docker.internal:host-gateway`. That kept it off ADOS's compose
+network but left it a default route and working DNS, so it could reach any host
+on the internet. It was recorded here as a gap rather than claimed as an
+allowlist.
 
-This is deliberately **not** described as an egress allowlist. A real one needs
-a filtering proxy with agent traffic forced through it and only the LLM endpoint
-plus the ADOS gateway permitted. Recorded as a gap, not claimed as done.
+It is now a per-session `--internal` network with **no default route at all**,
+plus a destination-pinned relay. See `orchestrate/runtime/egress.py`.
+
+Measured from inside the real runtime image, same probe, both topologies:
+
+| probe | before (shared bridge) | now (enforced) |
+|---|---|---|
+| default routes | 2 | **1** (on-link only) |
+| resolve `example.com` | `104.20.23.154` | **NO-RESOLVE** |
+| TCP `1.1.1.1:443` | REACHABLE | **BLOCKED** |
+| TCP `8.8.8.8:53` | REACHABLE | **BLOCKED** |
+| resolve `host.docker.internal` | `192.168.65.254` (the host) | **NO-RESOLVE** |
+| host port 5432 (Postgres) | **REACHABLE** | **BLOCKED** |
+| the allowed destination | reachable | reachable, `HTTP 200` |
+
+**The old topology could open a TCP connection to the Docker host's port 5432.**
+The previous note said the runtime "cannot reach Postgres, Kafka, or any other
+internal service" on the grounds that it was not on ADOS's compose network —
+but published ports plus a host-gateway entry defeated that. It never had
+database credentials, so this was a reachable port rather than a breach, and it
+is closed now.
+
+**What enforces it is the absence of a route, not the relay.** A component that
+can be bypassed by ignoring it is decoration; here there is nowhere else to
+send a packet. The relay decides which upstreams exist, the kernel decides that
+nothing else is reachable.
+
+**Why a relay rather than an HTTP proxy.** A proxy takes the destination from
+the client (`CONNECT host:port`), which makes the client's cooperation part of
+the security model. It would also simply not work: Prime Agent reaches
+OpenAI-compatible providers through the OpenAI SDK on Node 22, whose fetch does
+not honour `HTTP_PROXY`/`HTTPS_PROXY` — enforcing policy that way would mean
+patching Prime Agent's networking. Each relay listener is pinned at start-up to
+exactly one upstream, so **there is no field in which a caller can name a
+destination**, and open-proxy abuse, redirect escape and connect-by-IP are all
+excluded by construction rather than by validation.
+
+Allowlist entries must be **hostnames, not IP literals** — the redirect works
+through `/etc/hosts`, which cannot redirect an address. An IP-literal
+destination is refused at construction rather than accepted into a policy where
+it would silently be unreachable.
+
+**Still open:** no full mission has been run through the boundary. What is
+demonstrated is the boundary itself, from inside the real runtime image, not a
+model completing work behind it. TLS is deliberately end-to-end, so this
+constrains *where* the runtime can talk and not *what it says* — a permitted
+destination can still receive anything the runtime chooses to send it.
 
 ### The kernel is not a security sandbox
 

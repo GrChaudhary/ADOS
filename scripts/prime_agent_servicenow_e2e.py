@@ -243,7 +243,9 @@ async def main() -> int:
     report = None
     try:
         await runtime.start(spec, token)
-        print(f"[3] container  {runtime.container_name} on ados-runtime-net")
+        print(f"[3] container  {runtime.container_name} on {runtime.egress.internal_network} "
+              f"(--internal; egress allowlist: "
+              f"{', '.join(f'{d.host}:{d.port}' for d in runtime.egress.destinations)})")
         print(f"[4] workspace  {runtime.workspace} (empty of facts)")
         async with async_session_factory() as db:
             row = await db.get(RuntimeSessionRow, session_id)

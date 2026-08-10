@@ -128,7 +128,7 @@
     <div class="box">
       <div class="t">Container <span class="mono">ados-prime-&lt;session&gt;</span></div>
       <div class="d">image <span class="mono">ados-prime-runtime:0.7.1</span> · <span class="mono">--memory 2g --cpus 2 --pids-limit 512</span><br>
-      network <span class="mono">ados-runtime-net</span> — <span class="amber">placement, not egress filtering</span></div>
+      network <span class="mono">ados-rt-&lt;session&gt;</span> — <span class="green">--internal: no default route, no external DNS</span><br>egress via a <b>destination-pinned relay</b>; allowlist = ADOS gateway + model endpoint only</div>
     </div>
 
     <div class="box">
@@ -188,13 +188,13 @@
       <li>Mission accepted on ADOS rows — 281.6s of an 1800s budget</li>
       <li>Denial, unknown-token rejection, idempotent replay verified</li>
       <li><b>Real ServiceNow incident</b> INC0010027 — created, GET-verified, closed</li>
+      <li><b>Enforced egress</b> — internet/host/DB unreachable from inside the real image</li>
     </ul>
   </div>
   <div class="lcard l-part">
     <h3 class="amber">◐ PARTIAL / SIMULATED</h3>
     <ul>
       <li>Human-approval round trip: <b>built and tested at the API level</b>, never yet driven by a live container</li>
-      <li>Network is placement only; no destination-level egress filtering</li>
       <li>Nested runtimes get an <b>empty</b> grant and cannot recurse (by design)</li>
       <li>No prompt caching on any provider tested (<span class="mono">cacheRead: 0</span>)</li>
     </ul>
@@ -212,6 +212,6 @@
 
 <div class="foot">
   Milestone reached: <b>Prime Agent reasoning → ADOS governance → governed capability execution → REAL external side effect → independent verification → ADOS acceptance.</b>
-  &nbsp; Next: <b>egress filtering · reliability matrix · a live approval round trip.</b>
+  &nbsp; Next: <b>reliability matrix · a live approval round trip · a mission run behind the egress boundary.</b>
   &nbsp;·&nbsp; docs/prime-agent-integration/
 </div>

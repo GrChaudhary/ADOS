@@ -34,16 +34,21 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from .base import AgentSessionSpec, RuntimeEvent, SessionOutcome, SessionState
+from .egress import Destination, EgressBoundary, build_allowlist
 from .prime_image import IMAGE_TAG
 
 logger = logging.getLogger("ados.runtime.prime")
 
-# Dedicated network: the runtime sits on its own bridge, not on ADOS's compose
-# network, so it cannot reach Postgres, Kafka, or any other internal service.
-# It is NOT an egress allowlist — the container can still reach the public
-# internet, which it must, to call the LLM. Narrowing that needs a filtering
-# proxy and is deliberately not claimed here.
-NETWORK_NAME = "ados-runtime-net"
+# Networking lives in orchestrate/runtime/egress.py. The runtime container now
+# sits on a per-session `--internal` Docker network with NO default route and
+# no external DNS, reaching exactly two destinations — the ADOS gateway and the
+# configured model endpoint — through a destination-pinned relay.
+#
+# This used to be a shared bridge named `ados-runtime-net` plus
+# `--add-host host.docker.internal:host-gateway`, which kept the runtime off
+# ADOS's compose network but left it able to reach the whole internet. That was
+# placement, not filtering, and was documented as such rather than claimed as
+# an allowlist.
 
 _CONTAINER_PREFIX = "ados-prime-"
 
@@ -169,10 +174,13 @@ async def _run(*args: str, timeout: float = 60.0) -> tuple[int, str]:
     return proc.returncode, out.decode(errors="replace")
 
 
-async def ensure_network() -> None:
-    code, _ = await _run("docker", "network", "inspect", NETWORK_NAME, timeout=20.0)
-    if code != 0:
-        await _run("docker", "network", "create", NETWORK_NAME, timeout=30.0)
+def _egress_destinations(runtime: "PrimeAgentRuntime") -> List[Destination]:
+    """This session's allowlist: the ADOS gateway and the model endpoint."""
+    return build_allowlist(
+        mcp_url=runtime.mcp_url,
+        models_json=runtime.models_json,
+        provider=runtime.provider,
+    )
 
 
 class PrimeAgentRuntime:
@@ -207,6 +215,7 @@ class PrimeAgentRuntime:
 
         self.container_name: Optional[str] = None
         self.workspace: Optional[Path] = None
+        self.egress: Optional[EgressBoundary] = None
         self.state: SessionState = SessionState.CREATED
 
     # -- workspace ---------------------------------------------------------
@@ -265,7 +274,12 @@ class PrimeAgentRuntime:
 
     async def start(self, spec: AgentSessionSpec, token: str) -> None:
         self.state = SessionState.STARTING
-        await ensure_network()
+
+        # The boundary comes up BEFORE the runtime does. Starting the container
+        # first and confining it afterwards would leave a window in which
+        # model-generated code runs with unrestricted egress.
+        self.egress = EgressBoundary(spec.session_id, _egress_destinations(self))
+        await self.egress.start()
 
         self.container_name = f"{_CONTAINER_PREFIX}{spec.session_id[:12]}"
         self.workspace = self._prepare_workspace(spec, token)
@@ -288,10 +302,11 @@ class PrimeAgentRuntime:
         args = [
             "docker", "run", "-d",
             "--name", self.container_name,
-            "--network", NETWORK_NAME,
-            # host-gateway so the container can reach the ADOS gateway running
-            # on the host without host networking.
-            "--add-host", "host.docker.internal:host-gateway",
+            # Per-session internal network + hosts entries pointing each allowed
+            # name at the relay. There is deliberately no host-gateway entry:
+            # that is what used to give the runtime a path to the host and to
+            # everything else it could route to.
+            *self.egress.container_args(),
             "--memory", self.memory,
             "--cpus", self.cpus,
             "--pids-limit", self.pids_limit,
@@ -565,6 +580,10 @@ class PrimeAgentRuntime:
         if self.container_name:
             await _run("docker", "rm", "-f", self.container_name, timeout=60.0)
             logger.info("Runtime container removed", extra={"container": self.container_name})
+        # After the runtime container, not before: the networks cannot be
+        # removed while anything is still attached to them.
+        if self.egress:
+            await self.egress.teardown()
         if self.workspace and self.workspace.exists():
             shutil.rmtree(self.workspace, ignore_errors=True)
         self.state = SessionState.TORN_DOWN

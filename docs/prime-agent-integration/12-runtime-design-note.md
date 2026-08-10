@@ -70,7 +70,8 @@ create workspace       host temp dir -> bind-mounted at /work
    |
 docker run -d          name=ados-prime-<session_id>
    |                   --memory / --cpus / --pids-limit
-   |                   --network ados-runtime-net
+   |                   --network ados-rt-<session>   (--internal: no default route)
+   |                   --add-host <allowed-host>:<relay ip>   (the only way out)
    |                   -e ADOS_MCP_TOKEN / -e provider key
    |                   -w /work
    |                   holds `sleep infinity`; the RPC process is exec'd in
@@ -97,7 +98,7 @@ container that cannot run. So this is a sibling runner, not a reuse:
 
 | | onboarding sandbox | prime runtime |
 |---|---|---|
-| network | `none` | dedicated bridge, egress required |
+| network | `none` | per-session `--internal` net + pinned relay |
 | lifetime | one call | a session |
 | stdio | collect output | bidirectional RPC |
 | credentials | none | LLM key + session token only |
@@ -105,13 +106,18 @@ container that cannot run. So this is a sibling runner, not a reuse:
 Shared where genuinely shared: docker availability probing, image build/caching,
 subprocess timeout handling.
 
-**Honest limit on "restricted network".** Docker gives us network *placement*,
-not per-destination egress filtering. Slice 1 uses a dedicated user-defined
-bridge network with no other ADOS services on it, and no host network access.
-It does **not** prevent the container reaching arbitrary internet hosts. A
-real egress allowlist needs a filtering proxy (agent traffic forced through it,
-only the LLM endpoint + the gateway permitted). Recorded as a gap, not claimed
-as done.
+**"Restricted network" — what it means now.** Slice 1 used a dedicated bridge,
+which is network *placement*: no other ADOS service on it, but a working default
+route and DNS, so the container could reach any internet host. That was recorded
+here as a gap rather than claimed as an allowlist.
+
+It is now enforced. Each session gets its own `--internal` network — **no
+default route, no external DNS** — and reaches its two permitted destinations
+(the ADOS gateway, the configured model endpoint) through a relay whose
+listeners are pinned to one upstream each. The client cannot name a
+destination, so there is nothing to lie about. `orchestrate/runtime/egress.py`;
+measurements from inside the real image in
+[14-known-limitations.md](14-known-limitations.md).
 
 ## C. Runtime session state machine
 
@@ -393,5 +399,5 @@ acceptance rule grounded in ADOS's own rows, mission result persisted, clean
 teardown.
 
 **Out:** resume after ADOS restart, heartbeats, schedules, subagents, agent
-messaging, `/refine`, multi-session missions, egress allowlist proxy, human
+messaging, `/refine`, multi-session missions, human
 approval round trip (denial path tested; full pause/resume next).
