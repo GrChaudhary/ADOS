@@ -264,7 +264,42 @@ drives the real `request_capability` gateway entry point against a mocked
 ServiceNow, extracts the id from the posted ticket body, and resolves it back to
 the row — plus a structural guard that the argument stays required.
 
-### ~~No approval round trip yet~~ — BUILT 2026-08-10, not yet exercised by a live runtime
+### ~~A change_request carried no canonical request id at all~~ — FIXED 2026-08-11, not yet live-verified
+
+The fix above threaded the right id through the gateway, and P6-A confirmed it
+end-to-end on INC0010028. It did not reach `CreateChangeRequest`, and the P6-B
+run measured that directly: `CHG0030499` came back with
+`canonical request-id provenance in the ticket: ABSENT`.
+
+The cause is one early return. `servicenow_fields.build_record()` dispatches on
+whether the caller supplied `short_description`, and if so returns
+`_passthrough(call_input)` — which took no `context` parameter, so the
+`{mission_id, request_id, requested_by}` dict the connector had already
+assembled was discarded. `NotifyITHelpdesk` builds its record through
+`_helpdesk_record()`, which always wrote the provenance block; that is precisely
+why the gap survived P6-A unnoticed. Every capability on the passthrough path
+was affected, including the Tier 2 human-approved one whose paper trail matters
+most.
+
+`_passthrough` now takes the context and **appends** the block: the caller's own
+prose is extended, never overwritten, and a record already naming its request id
+is left alone so a retry cannot stack duplicates. Provenance is emitted only for
+fields that genuinely resolve — `itsm_agent.py` calls `build_record` with no
+context at all, and padding its ticket with `Capability request: unknown` would
+be noise rather than provenance. A byte-identical-passthrough test pins that.
+
+Covered by six tests in `tests/test_servicenow_fields.py`, one of which asserts
+the id on the wire (in the body actually POSTed, not merely in the dict
+`build_record` returned). Negative-controlled: restoring the pre-fix behaviour
+fails exactly those four provenance tests while all 14 pre-existing tests,
+including the byte-identical control, still pass.
+
+**Not yet live-verified.** No new external record was created to confirm this
+against a real instance — deliberately, since doing so would mean raising a
+ticket purely to re-prove a path P6-A already demonstrated. The next external
+run will show it as `PRESENT`; until then this is TESTED, not DEMONSTRATED.
+
+### ~~No approval round trip yet~~ — DEMONSTRATED LIVE 2026-08-11
 
 `WAITING_FOR_APPROVAL` is a state of the **ADOS session row**, not of the Prime
 process — Prime Agent has no suspend primitive, so the agent polls while ADOS
@@ -299,9 +334,30 @@ connector as `GovernanceInfo.approved_by`, and Tier 0 still records `None` —
 a negative-control test pins that, because a default that stamped somebody in
 would make every autonomous action look human-approved.
 
-**Still open:** no live Prime Agent container has been driven through this. The
-round trip is proven at the gateway/API level with the real skill-side polling
-contract, not by a running model waiting on a human. That run has not been done.
+**Closed 2026-08-11 by the P6-B run** (`scripts/prime_agent_approval_e2e.py`,
+mission `d00ff47c`, request `01dcf9c3`). A real container running
+`qwen3-4b-16k` behind the P5 boundary called `CreateChangeRequest` (tier 2,
+risk `high`), ADOS parked it, and the agent sat in its poll loop for **98.1
+seconds** while a human decided. `sophia` approved through the real HTTP
+endpoint with a real JWT; `CHG0030499` was created only after that.
+
+The first attempt at this run passed with a **3.1-second** gap between parking
+and approval, which is not evidence of anything — it does not distinguish an
+agent waiting for a human from a call that was slightly slow. Hence
+`ADOS_APPROVAL_HOLD_SECONDS` (default 90): the approver deliberately refuses to
+decide for longer than one skill poll interval.
+
+What the hold measures matters as much as its length. Sampling the request's
+own `status` column would only prove ADOS's opinion of itself, so each of the
+15 polls also re-queried **ServiceNow directly** and re-checked that the row
+carried no result — 15 independent external checks, all empty. A single check
+at the start of the hold could not tell "nothing executed" from "something
+executed a second later".
+
+Negative controls in the same run: the agent's own session token was refused
+(401) — an agent that can release its own Tier 2 request makes parking it
+theatre — an auditor was refused (403), and a second approval got 409 rather
+than raising a second change request.
 
 ### Single-session missions only
 

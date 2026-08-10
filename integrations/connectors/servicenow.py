@@ -136,14 +136,26 @@ class ServiceNowConnector(Connector):
 
         async with httpx.AsyncClient(transport=self._transport, base_url=instance_url) as client:
             try:
+                # close_code is omitted entirely when it resolves to empty.
+                # Pass close_code="" to force that. Needed for change_request:
+                # its close_code choice list differs from incident's, and a
+                # Business Rule refuses state=3 (Closed) outright because a
+                # change must walk its lifecycle — measured on this instance:
+                #   PATCH state=3 close_code=successful -> 403 "aborted by
+                #   Business Rule", PATCH state=4 (Canceled) -> 200.
+                # Sending an incident's close_code to a change_request would
+                # fail for a second, unrelated reason and make that confusing.
+                resolved_code = (
+                    close_code
+                    if close_code is not None
+                    else os.environ.get("SERVICENOW_CLOSE_CODE", "Resolved by caller")
+                )
+                body = {"state": state, "close_notes": close_notes}
+                if resolved_code:
+                    body["close_code"] = resolved_code
                 response = await client.patch(
                     f"/api/now/table/{table}/{sys_id}",
-                    json={
-                        "state": state,
-                        "close_code": close_code
-                        or os.environ.get("SERVICENOW_CLOSE_CODE", "Resolved by caller"),
-                        "close_notes": close_notes,
-                    },
+                    json=body,
                     headers={
                         "Authorization": f"Basic {self._auth_header(username, password)}",
                         "Accept": "application/json",

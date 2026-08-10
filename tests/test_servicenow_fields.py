@@ -158,3 +158,102 @@ async def test_the_body_actually_posted_for_an_offboarding_is_a_real_record(serv
     assert "Jane Doe" in captured["body"]
     assert "short_description" in captured["body"]
     assert "employee_name" not in captured["body"]
+
+
+# --------------------------------------------------------------------------
+# Canonical request-id provenance on the passthrough path
+#
+# Found by the P6-B live approval run, not by a unit test: CHG0030499 was
+# created by a real Tier 2 human-approved capability and carried NO way back
+# to the capability_requests row that authorized it. build_record() returned
+# _passthrough(call_input) as soon as short_description was present — which
+# CreateChangeRequest always sets — and that early return dropped `context`
+# on the floor. NotifyITHelpdesk had provenance all along (INC0010028, P6-A),
+# which is exactly why the gap went unnoticed.
+#
+# The invariant these pin down is one of the acceptance semantics: a
+# provenance id printed on an external record must resolve back to the
+# canonical ADOS request.
+# --------------------------------------------------------------------------
+
+_CTX = {
+    "mission_id": "d00ff47c-6c1a-46d0-802f-e4f4ed3d4b96",
+    "request_id": "01dcf9c3-0cb4-4954-bf79-b9bb6c4b8e01",
+    "requested_by": "prime-runtime:mission:d00ff47c",
+}
+
+
+def test_a_change_request_carries_the_canonical_request_id():
+    """The exact shape CreateChangeRequest sends: caller-supplied
+    short_description, which used to bypass provenance entirely."""
+    record = build_record(
+        Capability.CREATE_CHANGE_REQUEST,
+        {"short_description": "Restore DB_POOL_SIZE", "description": "Mission prose."},
+        _CTX,
+    )
+    assert _CTX["request_id"] in record["description"]
+    assert _CTX["mission_id"] in record["description"]
+    assert _CTX["requested_by"] in record["description"]
+    # The caller's own prose survives; provenance is appended, not substituted.
+    assert "Mission prose." in record["description"]
+
+
+def test_provenance_is_appended_when_the_caller_sent_no_description():
+    record = build_record(
+        Capability.CREATE_CHANGE_REQUEST, {"short_description": "No prose"}, _CTX
+    )
+    assert _CTX["request_id"] in record["description"]
+    assert not record["description"].startswith("\n")
+
+
+def test_a_record_that_already_names_its_request_id_is_not_stamped_twice():
+    """A retry must not stack duplicate provenance blocks."""
+    record = build_record(
+        Capability.CREATE_CHANGE_REQUEST,
+        {"short_description": "x", "description": f"Capability request: {_CTX['request_id']}"},
+        _CTX,
+    )
+    assert record["description"].count(_CTX["request_id"]) == 1
+
+
+def test_passthrough_without_context_is_still_byte_identical():
+    """NEGATIVE CONTROL for the fix itself. itsm_agent.py calls build_record
+    with no context at all; padding its record with 'Capability request:
+    unknown' would be noise, not provenance. This is what keeps the fix from
+    quietly rewriting an unrelated caller's ticket."""
+    record = build_record(
+        Capability.CREATE_INCIDENT,
+        {"short_description": "Printer on fire", "description": "The whole thing"},
+    )
+    assert record == {"short_description": "Printer on fire", "description": "The whole thing"}
+
+
+def test_partial_context_names_only_what_resolves():
+    record = build_record(
+        Capability.CREATE_CHANGE_REQUEST,
+        {"short_description": "x"},
+        {"mission_id": "m-1"},
+    )
+    assert "Mission: m-1" in record["description"]
+    assert "unknown" not in record["description"]
+    assert "Capability request:" not in record["description"]
+
+
+@pytest.mark.asyncio
+async def test_the_request_id_reaches_servicenow_in_the_posted_body(servicenow_env):
+    """End of the chain, asserted on the wire: the id ADOS assigns to the
+    capability request is in the body actually POSTed, not merely in the dict
+    build_record returned."""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = request.read().decode()
+        return httpx.Response(201, json={"result": {"sys_id": "s1", "number": "CHG0099999"}})
+
+    connector = ServiceNowConnector(transport=httpx.MockTransport(handler))
+    call = _call(Capability.CREATE_CHANGE_REQUEST, short_description="Restore pool size")
+    response = await connector.execute(call)
+
+    assert response.status == CallStatus.SUCCEEDED
+    assert str(call.request_id) in captured["body"]
+    assert call.incident_id in captured["body"]

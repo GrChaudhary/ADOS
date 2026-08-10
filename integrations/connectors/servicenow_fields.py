@@ -59,6 +59,34 @@ _HR_OFFBOARDING_SUMMARY = {
 _SHORT_DESCRIPTION_LIMIT = 160
 
 
+_PROVENANCE_HEADER = "Raised automatically by ADOS and approved through its governance layer."
+_PROVENANCE_FIELDS = (
+    ("Mission", "mission_id"),
+    ("Capability request", "request_id"),
+    ("Requested by", "requested_by"),
+)
+
+
+def _provenance_lines(context: Dict[str, Any], *, fill_unknown: bool) -> list[str]:
+    """The lines that let a human reading the ticket find the ADOS records.
+
+    `fill_unknown` differs by caller on purpose. A record ADOS composed itself
+    states "unknown" for anything missing, because a blank where the mission id
+    should be is itself worth seeing. A passed-through record from a caller that
+    supplied its own prose gets only the fields that genuinely resolve — padding
+    someone else's description with "Capability request: unknown" would add
+    noise, not provenance.
+    """
+    lines = []
+    for label, key in _PROVENANCE_FIELDS:
+        value = context.get(key)
+        if value:
+            lines.append(f"{label}: {value}")
+        elif fill_unknown:
+            lines.append(f"{label}: unknown")
+    return [_PROVENANCE_HEADER, *lines] if lines else []
+
+
 def _helpdesk_record(call_input: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """NotifyITHelpdesk -> an incident a human can act on.
 
@@ -79,12 +107,7 @@ def _helpdesk_record(call_input: Dict[str, Any], context: Dict[str, Any]) -> Dic
         summary[: _SHORT_DESCRIPTION_LIMIT - 1] + "…"
     )
 
-    provenance = [
-        "Raised automatically by ADOS and approved through its governance layer.",
-        f"Mission: {context.get('mission_id') or 'unknown'}",
-        f"Capability request: {context.get('request_id') or 'unknown'}",
-        f"Requested by: {context.get('requested_by') or 'unknown'}",
-    ]
+    provenance = _provenance_lines(context, fill_unknown=True)
     return {
         "short_description": short,
         "description": summary + "\n\n" + "\n".join(provenance),
@@ -93,11 +116,38 @@ def _helpdesk_record(call_input: Dict[str, Any], context: Dict[str, Any]) -> Dic
     }
 
 
-def _passthrough(record: Dict[str, Any]) -> Dict[str, Any]:
+def _passthrough(record: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
     """Caller already speaks ServiceNow. Strip ADOS-internal keys and post
     the rest as-is — this is the itsm_agent.py path, which has always sent
-    real field names and must keep working unchanged."""
-    return {k: v for k, v in record.items() if k not in _ADOS_INTERNAL_KEYS}
+    real field names and must keep working unchanged.
+
+    Provenance is APPENDED rather than dropped. This path used to return here
+    with the context discarded entirely, which meant every CreateChangeRequest
+    — the Tier 2, human-approved capability, the one whose paper trail matters
+    most — produced a ticket that could not be traced back to the ADOS row that
+    authorized it. Measured on CHG0030499 in the P6-B approval run: the mission
+    id appeared only because the objective text happened to embed it, and the
+    request id was unrecoverable. NotifyITHelpdesk had provenance the whole
+    time (INC0010028, P6-A); this path silently did not.
+
+    The caller's own prose is never overwritten, only extended, and a record
+    that already names its request id is left alone so a retry cannot stack
+    duplicate blocks.
+    """
+    clean = {k: v for k, v in record.items() if k not in _ADOS_INTERNAL_KEYS}
+
+    block = _provenance_lines(context, fill_unknown=False)
+    if not block:
+        return clean
+
+    existing = str(clean.get("description") or "").rstrip()
+    request_id = context.get("request_id")
+    if request_id and str(request_id) in existing:
+        return clean
+
+    appended = "\n".join(block)
+    clean["description"] = f"{existing}\n\n{appended}" if existing else appended
+    return clean
 
 
 def build_record(
@@ -120,7 +170,7 @@ def build_record(
     needs prose, not a serialized dict.
     """
     if call_input.get("short_description"):
-        return _passthrough(call_input)
+        return _passthrough(call_input, context or {})
 
     if capability is Capability.NOTIFY_IT_HELPDESK:
         return _helpdesk_record(call_input, context or {})
