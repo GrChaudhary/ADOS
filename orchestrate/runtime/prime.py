@@ -29,12 +29,12 @@ import secrets
 import shutil
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from .base import AgentSessionSpec, RuntimeEvent, SessionOutcome, SessionState
-from .egress import Destination, EgressBoundary, build_allowlist
+from .egress import Destination, EgressBoundary, build_allowlist, remove_quietly
 from .prime_image import IMAGE_TAG
 
 logger = logging.getLogger("ados.runtime.prime")
@@ -574,19 +574,60 @@ class PrimeAgentRuntime:
                 detail[key] = str(event[key])[:300]
         return detail
 
-    async def teardown(self) -> None:
-        """Always runs. The workspace is disposable by design, so anything
-        worth keeping must already have been copied into ADOS."""
+    async def teardown(self) -> List[str]:
+        """Always runs, never raises, and reports what it could not remove.
+
+        The workspace is disposable by design, so anything worth keeping must
+        already have been copied into ADOS.
+
+        WHY EVERY STEP IS GUARDED SEPARATELY
+        ------------------------------------
+        This used to be three bare awaits. `_run` raises `TimeoutError` when a
+        docker command does not return in time — which is precisely what a
+        wedged daemon does, and the daemon wedging is not hypothetical here: it
+        happened mid-run during P6-B. A `TimeoutError` from `docker rm` would
+        propagate out of the caller's `finally`, skipping the relay, both
+        networks and the workspace, and *replacing* the real failure with a
+        timeout. The one moment cleanup matters most was the one moment it
+        stopped early.
+
+        So each resource is attempted independently, and what could not be
+        removed is returned rather than logged and forgotten — the caller
+        records it on the session row so an operator can find the orphans
+        later. Returning them is not decoration: nothing else in ADOS knows
+        these names once this object is gone.
+        """
+        leftovers: List[str] = []
+
         if self.container_name:
-            await _run("docker", "rm", "-f", self.container_name, timeout=60.0)
+            leftovers += await remove_quietly(
+                "container", self.container_name,
+                "docker", "rm", "-f", self.container_name,
+            )
             logger.info("Runtime container removed", extra={"container": self.container_name})
+
         # After the runtime container, not before: the networks cannot be
         # removed while anything is still attached to them.
         if self.egress:
-            await self.egress.teardown()
+            try:
+                leftovers += await self.egress.teardown()
+            except Exception as exc:  # noqa: BLE001 — teardown must not raise
+                leftovers.append(f"egress boundary: {type(exc).__name__}: {exc}")
+
         if self.workspace and self.workspace.exists():
+            # ignore_errors=True never raises, but it also never says it
+            # failed, so the directory is re-checked rather than assumed gone.
             shutil.rmtree(self.workspace, ignore_errors=True)
+            if self.workspace.exists():
+                leftovers.append(f"workspace {self.workspace}")
+
         self.state = SessionState.TORN_DOWN
+        if leftovers:
+            logger.warning(
+                "Runtime teardown left resources behind",
+                extra={"container": self.container_name, "leftovers": leftovers},
+            )
+        return leftovers
 
 
 def mint_session_token() -> str:
@@ -594,3 +635,36 @@ def mint_session_token() -> str:
     and carries no claims, so nothing the container holds can be decoded or
     widened into a larger grant."""
     return secrets.token_urlsafe(32)
+
+
+# Container start, teardown, and clock skew between ADOS and the database. Not
+# a second budget: it exists so a session that uses its FULL wall clock is not
+# cut off a few seconds early by its own credential.
+TOKEN_GRACE_SECONDS = 300.0
+
+
+def token_expiry(max_wall_clock_seconds: float, *, now: Optional[datetime] = None) -> datetime:
+    """When this session's token stops being accepted.
+
+    The lifetime is the session's own deadline plus a bounded grace, because a
+    token that outlives the mission's wall-clock budget is a credential nobody
+    is waiting on. `run_objective` abandons the session at
+    `max_wall_clock_seconds`; anything presenting the token after that is, by
+    definition, not the run ADOS is still tracking.
+
+    WHY THIS EXISTS AT ALL
+    ----------------------
+    `token_expires_at` was on the row and checked on every capability call from
+    the day the gateway was written, and nothing ever set it. P6-C found the
+    column defaulting to NULL in every code path, which made the expiry branch
+    dead and left session *state* as the only revocation — and state is written
+    by ADOS after the fact, so a crashed mission left a permanently valid
+    credential (see `PrimeRuntimeConnector._run`, fixed alongside this).
+
+    The two guards are deliberately independent. State revokes promptly but
+    only when ADOS is alive to write it; expiry revokes unconditionally but
+    only eventually. A dead ADOS process defeats the first and not the second.
+    """
+    return (now or datetime.now(timezone.utc)) + timedelta(
+        seconds=max_wall_clock_seconds + TOKEN_GRACE_SECONDS
+    )

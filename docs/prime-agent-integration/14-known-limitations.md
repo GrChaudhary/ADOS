@@ -370,10 +370,10 @@ Negative controls in the same run: the agent's own session token was refused
 theatre — an auditor was refused (403), and a second approval got 409 rather
 than raising a second change request.
 
-### A session token has no expiry, and its session row is not always closed
+### ~~A session token has no expiry, and its session row is not always closed~~ — FIXED 2026-08-11
 
 Found by P6-C while writing the refusal tests for `_resolve_session`. Two
-findings that only matter together.
+findings that only mattered together.
 
 `RuntimeSessionRow.token_expires_at` exists, is checked on every capability
 call, and is **never set by anything**. The column defaults to `None` and no
@@ -390,15 +390,74 @@ If `run_objective` raises, or the ADOS process dies mid-mission, the container
 is destroyed but the row stays at `running` — a credential that is valid
 forever for a session that no longer exists.
 
-Bounded, not harmless: the token still resolves to one mission's grant and
-Tier 1/2 still requires a human, so the exposure is "act as this one mission,
-autonomously, within its grant". The fix is to write the terminal state in the
-`finally` beside the teardown, and to set an expiry at mint time. Neither is
-done — recorded here rather than fixed, since P6-C's scope was committed
-regression coverage. Test coverage of the guard itself is
-`test_a_token_whose_session_is_no_longer_live_is_dead` (all five non-live
-states) and `test_an_expired_token_is_refused`, both of which pass: the
-mechanism works, nothing drives it.
+Bounded, not harmless: the token still resolved to one mission's grant and
+Tier 1/2 still required a human, so the exposure was "act as this one mission,
+autonomously, within its grant".
+
+**Both halves fixed in P6-D.** `orchestrate/runtime/prime.py:token_expiry` sets
+the lifetime to the session's own `max_wall_clock_seconds` plus a bounded
+300-second grace for container start and teardown — not a flat constant, so a
+two-minute job does not mint a half-hour credential, and not shorter than the
+run, so a mission parked on a human (the skill waits up to 900s) is never cut
+off by its own token. `PrimeRuntimeConnector._run` now writes the terminal
+state from a `finally`, catching `BaseException` so a cancelled or interrupted
+mission closes its row too, and re-raising so the real failure still reaches
+the caller.
+
+The two guards are deliberately independent and neither is sufficient alone:
+state revokes promptly but only while ADOS is alive to write it; expiry revokes
+unconditionally but only eventually. A killed ADOS process defeats the first
+and not the second — which is the case
+`test_an_abandoned_session_stops_being_able_to_act_once_its_token_expires`
+pins, with the row still reading `running`.
+
+### A teardown that timed out abandoned everything after it
+
+Same phase, same file, found while testing the above. `PrimeAgentRuntime.
+teardown` was three bare awaits, and `_run` raises `TimeoutError` when a docker
+command does not return — which is what a wedged daemon does, and the daemon
+wedging is not hypothetical: it happened mid-run during P6-B. A hung
+`docker rm` on the agent container propagated out through the caller's
+`finally`, so the relay, both per-session networks and the workspace were never
+touched, and the real failure was replaced by a timeout. The one moment cleanup
+mattered most was the one moment it stopped early.
+
+Each resource is now attempted independently through `egress.remove_quietly`,
+and what could not be removed is **returned** rather than logged and forgotten:
+the caller writes it onto the session row as `orphaned …`, because nothing else
+in ADOS knows those names once the runtime object is gone. "No such container"
+counts as removed — the goal is absence. A workspace is re-checked after
+`shutil.rmtree(ignore_errors=True)`, which never raises and never reports
+failure either.
+
+### Two concurrent sessions cannot reach each other — measured 2026-08-11
+
+Per-session networks were the design from P5, but with only one boundary ever
+running, "cannot reach the other mission's runtime" was trivially true and
+completely untested — asserted only by reading the `docker network create`
+arguments. P6-D stands two full boundaries up at once and probes from inside
+both live containers. From each, measured: `DEFAULT_ROUTES 0`, its own
+permitted destination `REACHABLE` by name with `HTTP 200` through its own
+relay, its own relay `REACHABLE` by address — and the other session's runtime,
+relay and upstream all `BLOCKED(OSError)` by **address**, with the other's
+destination name `NO(gaierror)`.
+
+The positive controls are load-bearing: a container with no networking at all
+satisfies every "BLOCKED" assertion. They also caught a real defect in the
+probe itself — `docker inspect` ranges a container's networks in sorted key
+order, so it returned the relay's *upstream* address rather than its
+internal-network one, and the cross-session assertion would have passed for the
+wrong reason.
+
+### Operational: a stale gateway process has invalidated four runs
+
+Not a code defect, and the most persistent hazard in this work. `uvicorn`
+without `--reload` serves the code it imported at start. Four times now a
+gateway process older than HEAD has been caught during pre-flight — twice it
+would have invalidated the run had it not been. Nothing in ADOS reports the
+commit a running gateway was started from, so the check is manual: compare the
+process start time against `git log -1`. Recorded rather than fixed, because
+the fix is a build-identity endpoint and that is a feature, not coverage.
 
 ### Single-session missions only
 

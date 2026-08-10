@@ -195,6 +195,24 @@ async def _run(*args: str, timeout: float = 60.0) -> Tuple[int, str]:
     return proc.returncode, out.decode(errors="replace")
 
 
+async def remove_quietly(kind: str, name: str, *args: str) -> List[str]:
+    """One docker removal that cannot raise. Returns [] or a single description
+    of what is still there.
+
+    Shared by both teardown paths so "could not remove" means the same thing on
+    a relay, a network, and a runtime container. "No such X" counts as removed:
+    the goal is absence, and a resource that was never created, or that already
+    went away, satisfies it.
+    """
+    try:
+        code, out = await _run(*args, timeout=60.0)
+    except Exception as exc:  # noqa: BLE001 — including TimeoutError, see teardown()
+        return [f"{kind} {name}: {type(exc).__name__}: {exc}"]
+    if code != 0 and "no such" not in out.lower() and "not found" not in out.lower():
+        return [f"{kind} {name}: {out.strip()[:200]}"]
+    return []
+
+
 _SAFE_SUFFIX = re.compile(r"[^a-zA-Z0-9_.-]")
 
 
@@ -354,12 +372,26 @@ class EgressBoundary:
         code, out = await _run("docker", "logs", self.relay_container, timeout=20.0)
         return out if code == 0 else ""
 
-    async def teardown(self) -> None:
-        await _run("docker", "rm", "-f", self.relay_container, timeout=60.0)
+    async def teardown(self) -> List[str]:
+        """Never raises, and reports what survived.
+
+        Failures are collected, not raised: teardown runs in a `finally` and
+        must not mask the real outcome. `_run` raises `TimeoutError` on a
+        wedged daemon, so the relay removal is guarded too — without that, a
+        hung `docker rm` would skip both networks and leave a per-session
+        network attached to nothing, which is exactly the orphan shape found
+        after the P6-B daemon crash.
+        """
+        leftovers: List[str] = []
+        leftovers += await remove_quietly(
+            "relay", self.relay_container, "docker", "rm", "-f", self.relay_container
+        )
         # Networks only disappear once nothing is attached, so container
-        # removal has to come first. Failures are logged, not raised: teardown
-        # runs in a finally block and must not mask the real outcome.
+        # removal has to come first.
         for network in (self.internal_network, self.egress_network):
-            code, out = await _run("docker", "network", "rm", network, timeout=30.0)
-            if code != 0 and "not found" not in out.lower():
-                logger.warning("could not remove network %s: %s", network, out.strip()[:200])
+            leftovers += await remove_quietly(
+                "network", network, "docker", "network", "rm", network
+            )
+        for note in leftovers:
+            logger.warning("egress teardown left a resource behind: %s", note)
+        return leftovers

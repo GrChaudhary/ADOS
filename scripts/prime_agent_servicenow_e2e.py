@@ -64,7 +64,7 @@ from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRo
 from integrations.connectors.servicenow import ServiceNowConnector
 from orchestrate.runtime.acceptance import evaluate_mission
 from orchestrate.runtime.base import AgentSessionSpec
-from orchestrate.runtime.prime import PrimeAgentRuntime, mint_session_token
+from orchestrate.runtime.prime import PrimeAgentRuntime, mint_session_token, token_expiry
 
 MCP_URL = "http://host.docker.internal:8077/mcp/"
 MARKER = "[ADOS PRIME-AGENT INTEGRATION TEST]"
@@ -243,7 +243,10 @@ async def main() -> int:
         await db.flush()
         token = mint_session_token()
         sess = RuntimeSessionRow(
-            mission_id=mission_id, state="starting", token_hash=hash_token(token)
+            mission_id=mission_id, state="starting", token_hash=hash_token(token),
+            # Same lifecycle as the production path, so these runs exercise
+            # the expiry rather than a NULL that is never checked.
+            token_expires_at=token_expiry(1800.0),
         )
         db.add(sess)
         await db.commit()

@@ -154,7 +154,15 @@ class PrimeRuntimeConnector(Connector):
         from db.models.mission import MissionRow, RuntimeSessionRow
         from backend.app.mcp_gateway import hash_token
         from orchestrate.runtime.base import AgentSessionSpec
-        from orchestrate.runtime.prime import PrimeAgentRuntime, mint_session_token
+        from orchestrate.runtime.prime import (
+            PrimeAgentRuntime,
+            mint_session_token,
+            token_expiry,
+        )
+
+        wall_clock = float(
+            call.input.get("max_wall_clock_seconds", DEFAULT_WALL_CLOCK_SECONDS)
+        )
 
         async with async_session_factory() as db:
             mission = MissionRow(
@@ -171,7 +179,13 @@ class PrimeRuntimeConnector(Connector):
             await db.flush()
             token = mint_session_token()
             session = RuntimeSessionRow(
-                mission_id=mission.mission_id, state="starting", token_hash=hash_token(token)
+                mission_id=mission.mission_id,
+                state="starting",
+                token_hash=hash_token(token),
+                # Set here rather than left NULL: state alone cannot revoke a
+                # credential if the process that writes state dies. See
+                # orchestrate/runtime/prime.py:token_expiry.
+                token_expires_at=token_expiry(wall_clock),
             )
             db.add(session)
             await db.commit()
@@ -184,9 +198,7 @@ class PrimeRuntimeConnector(Connector):
             objective=objective,
             allowed_capabilities=[],
             workspace_files={},
-            max_wall_clock_seconds=float(
-                call.input.get("max_wall_clock_seconds", DEFAULT_WALL_CLOCK_SECONDS)
-            ),
+            max_wall_clock_seconds=wall_clock,
         )
 
         runtime = PrimeAgentRuntime(
@@ -197,6 +209,21 @@ class PrimeRuntimeConnector(Connector):
             provider_key=self.provider_key,
             models_json=self.models_json,
         )
+        # WHY THE TERMINAL STATE IS WRITTEN IN A `finally`
+        # ------------------------------------------------
+        # It used to be written after `run_objective` returned, with only the
+        # teardown in the `finally`. So on every failure path — the objective
+        # raising, the container dying, the ADOS process being killed — the
+        # container was destroyed while the session row stayed at `running`.
+        # `mcp_gateway._resolve_session` treats `running` as live, so that row
+        # was a permanently valid credential for a session that no longer
+        # existed. Found by P6-C while testing the states the gateway refuses.
+        #
+        # `outcome` and `failure` are captured rather than returned into the
+        # finalizer so there is ONE writer of the terminal state for both
+        # paths; a second write site is how the first one drifted.
+        outcome = None
+        failure: Optional[BaseException] = None
         try:
             await runtime.start(spec, token)
             async with async_session_factory() as db:
@@ -207,23 +234,95 @@ class PrimeRuntimeConnector(Connector):
                 await db.commit()
 
             outcome = await runtime.run_objective(spec)
+            return outcome, session_id
+        except BaseException as exc:
+            # BaseException, not Exception: a cancelled mission (CancelledError)
+            # or an interrupted process leaves exactly the same dangling
+            # credential, and is if anything the likelier way to get one.
+            failure = exc
+            raise
+        finally:
+            # Teardown first, so what it could not remove is recorded on the
+            # row in the same write as the terminal state. `teardown()` is
+            # contractually non-raising, and this catches it anyway: the whole
+            # point of this block is that the row gets closed, and inheriting a
+            # future teardown bug would put the dangling credential straight
+            # back. A guard whose correctness depends on another function
+            # keeping its promise is not a guard.
+            try:
+                leftovers = await runtime.teardown()
+            except BaseException as exc:  # noqa: BLE001 — see above
+                logger.exception("Runtime teardown raised", extra={"session_id": str(session_id)})
+                leftovers = [f"teardown raised {type(exc).__name__}: {exc}"]
+            await _finalize_session(
+                session_id, mission_id,
+                outcome=outcome, failure=failure, leftovers=leftovers,
+            )
 
-            async with async_session_factory() as db:
-                row = await db.get(RuntimeSessionRow, session_id)
+
+async def _finalize_session(
+    session_id,
+    mission_id,
+    *,
+    outcome=None,
+    failure: Optional[BaseException] = None,
+    leftovers: Optional[list] = None,
+) -> None:
+    """Write the session's terminal state. Never raises.
+
+    Runs from a `finally`, so raising here would replace the real failure with
+    a database error and hide what actually went wrong. It logs instead — and
+    the log is the only remaining signal that a row may still be live, which is
+    why it is an exception-level log rather than a warning.
+
+    A session that reaches here with neither an outcome nor an exception ended
+    in a way this code does not model. It is still closed, and closed as
+    `failed`: leaving it `running` would be inventing the more permissive of
+    two answers about a credential.
+    """
+    from db.engine import async_session_factory
+    from db.models.mission import MissionRow, RuntimeSessionRow
+
+    orphan_note = (
+        "; ".join(f"orphaned {item}" for item in leftovers) if leftovers else None
+    )
+
+    try:
+        async with async_session_factory() as db:
+            row = await db.get(RuntimeSessionRow, session_id)
+            mission = await db.get(MissionRow, mission_id)
+            if row is None:
+                return
+
+            if failure is not None:
+                row.state = "failed"
+                reason = f"{type(failure).__name__}: {failure}"
+            elif outcome is not None:
                 row.state = outcome.state.value
                 row.tool_execution_count = outcome.tool_execution_count
-                row.failure_reason = outcome.failure_reason
                 row.events = [
                     {"type": e.type, "at": e.at, "detail": e.detail} for e in outcome.events
                 ]
-                mission = await db.get(MissionRow, mission_id)
-                mission.status = "completed" if outcome.did_real_work else "failed"
-                mission.result = outcome.final_answer
-                mission.failure_reason = outcome.failure_reason
-                await db.commit()
-            return outcome, session_id
-        finally:
-            await runtime.teardown()
+                reason = outcome.failure_reason
+            else:
+                row.state = "failed"
+                reason = "session ended without an outcome or an exception"
+
+            row.failure_reason = "; ".join(p for p in (reason, orphan_note) if p) or None
+
+            if mission is not None:
+                did_work = bool(outcome is not None and outcome.did_real_work)
+                mission.status = "completed" if did_work else "failed"
+                mission.result = outcome.final_answer if outcome is not None else None
+                mission.failure_reason = row.failure_reason
+
+            await db.commit()
+    except Exception:  # noqa: BLE001 — see the docstring
+        logger.exception(
+            "Could not write the terminal state for runtime session %s — the row may "
+            "still read as live, and its token with it",
+            session_id,
+        )
 
 
 def response_for(call: CapabilityCall, outcome, *, connector: str, session_id) -> CapabilityResponse:
