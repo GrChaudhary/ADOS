@@ -171,6 +171,16 @@ def test_aborted_is_a_failure():
     {"type": "tool_execution_end", "isError": False, "result": "a string"},  # wrong shape
     _end(status=None),                                                     # no verdict
     _end(status="something-upstream-added"),                               # unrecognised
+    # A REAL status from the kernel's own vocabulary, and the dangerous one:
+    # "starting" means the cell has not finished, so it is the shape most
+    # likely to be mistaken for "no error, therefore fine". It is not a
+    # verdict at all, and must land on unknown like any other non-verdict.
+    _end(status="starting"),
+    # `details` present but not an object — a shape change upstream rather
+    # than an unrecognised value. Reaching `.get("status")` on it would raise
+    # inside the event loop instead of classifying.
+    {"type": "tool_execution_end", "isError": False,
+     "result": {"content": [], "details": ["status", "ok"]}},
 ])
 def test_a_result_with_no_verdict_ados_recognises_is_never_a_success(event):
     """The standing invariant: never infer success from the absence of an

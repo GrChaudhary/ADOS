@@ -294,6 +294,17 @@ the id on the wire (in the body actually POSTed, not merely in the dict
 fails exactly those four provenance tests while all 14 pre-existing tests,
 including the byte-identical control, still pass.
 
+P6-C added the integration-level pair in
+`backend/tests/test_capability_request_provenance.py`, which drives the same
+route the live run took — park a Tier 2 request, approve it over the real HTTP
+endpoint, read the id out of what was posted — and one adversarial case:
+`description` is a field the agent writes, so it can contain a convincing but
+invented provenance block. The canonical block is appended regardless, the real
+id resolves, and the forged one resolves to nothing. That case exists because
+the de-duplication guard skips stamping when a request id is already present;
+a test feeding it just any id would pass against a guard that skipped on *any*
+id, which would let a forgery suppress the real block entirely.
+
 **Not yet live-verified.** No new external record was created to confirm this
 against a real instance — deliberately, since doing so would mean raising a
 ticket purely to re-prove a path P6-A already demonstrated. The next external
@@ -358,6 +369,36 @@ Negative controls in the same run: the agent's own session token was refused
 (401) — an agent that can release its own Tier 2 request makes parking it
 theatre — an auditor was refused (403), and a second approval got 409 rather
 than raising a second change request.
+
+### A session token has no expiry, and its session row is not always closed
+
+Found by P6-C while writing the refusal tests for `_resolve_session`. Two
+findings that only matter together.
+
+`RuntimeSessionRow.token_expires_at` exists, is checked on every capability
+call, and is **never set by anything**. The column defaults to `None` and no
+writer in the codebase assigns it — `integrations/connectors/prime_runtime.py`
+creates the row with `token_hash` alone, as do both acceptance scripts. So the
+expiry branch is dead in production and the *only* thing that revokes a
+credential is the session leaving `_LIVE_STATES` (`starting`, `running`,
+`waiting_approval`).
+
+That would be tolerable if the state always moved. It does not on the failure
+path: in `prime_runtime.py` the row's terminal state is written *after*
+`run_objective` returns, while only `runtime.teardown()` sits in the `finally`.
+If `run_objective` raises, or the ADOS process dies mid-mission, the container
+is destroyed but the row stays at `running` — a credential that is valid
+forever for a session that no longer exists.
+
+Bounded, not harmless: the token still resolves to one mission's grant and
+Tier 1/2 still requires a human, so the exposure is "act as this one mission,
+autonomously, within its grant". The fix is to write the terminal state in the
+`finally` beside the teardown, and to set an expiry at mint time. Neither is
+done — recorded here rather than fixed, since P6-C's scope was committed
+regression coverage. Test coverage of the guard itself is
+`test_a_token_whose_session_is_no_longer_live_is_dead` (all five non-live
+states) and `test_an_expired_token_is_refused`, both of which pass: the
+mechanism works, nothing drives it.
 
 ### Single-session missions only
 
