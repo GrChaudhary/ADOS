@@ -22,6 +22,17 @@ enough), see docs/SERVICENOW_PILOT.md and run:
 That script creates a real ticket, reads it back, and prints its URL. It is
 the difference between "the request shape looks right against a mock" and
 "a ticket exists" — until someone runs it, this connector is unverified.
+
+P9: ServiceNow's Table API has no native idempotency mechanism — no
+client-supplied dedup key, no upsert-by-key, confirmed by reading the API
+this class calls (a POST always inserts). `execute()` therefore distinguishes
+"never reached the server" (FAILED — a retry is safe) from "may have reached
+the server before contact was lost" (`CallStatus.UNKNOWN` — a retry is NOT
+safe) by the specific httpx exception raised, and `find_by_request_id()`
+exists so a later, independent process can ask ServiceNow itself whether an
+ambiguous call actually landed, keyed on the canonical `request_id` already
+stamped into every record's provenance block — never on agent-authored text.
+See orchestrate/runtime/capability_reconcile.py.
 """
 
 import base64
@@ -169,6 +180,53 @@ class ServiceNowConnector(Connector):
             return False, f"ServiceNow returned {response.status_code}: {response.text[:300]}"
         return True, str(response.json().get("result", {}).get("state", ""))
 
+    async def find_by_request_id(self, table: str, request_id: str) -> tuple[bool, list]:
+        """Every record on `table` whose description carries this EXACT
+        canonical ADOS `request_id` — the reconciliation anchor
+        (orchestrate/runtime/capability_reconcile.py) for a capability_requests
+        row left `outcome_unknown` by a crash or an ambiguous response.
+
+        Deliberately searches by the same `request_id` every provenance block
+        already carries (servicenow_fields.py's `_provenance_lines`), never by
+        an agent-authored marker or free text: `description` is a field the
+        agent's own capability arguments can influence, so matching on
+        anything OTHER than the server-assigned, unforgeable request_id would
+        let a forged provenance-shaped string in the agent's own input hijack
+        reconciliation onto the wrong record. `descriptionLIKE` rather than an
+        exact match because the provenance block is APPENDED to
+        caller-supplied prose (see `_passthrough`), never the whole field.
+
+        Returns `(ok, records)`. `ok=False` means the query itself could not
+        be answered (not configured, transport error) — the caller must NOT
+        treat that the same as `ok=True, records=[]` (a real, negative
+        answer): one is "I don't know", the other is "I checked and it is not
+        there", and only the second is a fact reconciliation may act on.
+        """
+        instance_url, username, password = self._configured()
+        if not instance_url or not username or not password:
+            return False, []
+
+        async with httpx.AsyncClient(transport=self._transport, base_url=instance_url) as client:
+            try:
+                response = await client.get(
+                    f"/api/now/table/{table}",
+                    params={
+                        "sysparm_query": f"descriptionLIKE{request_id}",
+                        "sysparm_fields": "sys_id,number,state,short_description,description",
+                        "sysparm_limit": "50",
+                    },
+                    headers={
+                        "Authorization": f"Basic {self._auth_header(username, password)}",
+                        "Accept": "application/json",
+                    },
+                )
+            except httpx.HTTPError as e:
+                return False, [{"error": str(e)}]
+
+        if response.status_code >= 400:
+            return False, [{"error": f"HTTP {response.status_code}: {response.text[:300]}"}]
+        return True, response.json().get("result", [])
+
     async def fetch_record(self, table: str, sys_id: str) -> tuple[bool, dict]:
         """Read a record back. Independent verification for the explicit test:
         a 201 from the POST says ADOS sent something, not that a ticket exists.
@@ -233,12 +291,37 @@ class ServiceNowConnector(Connector):
                         "Content-Type": "application/json",
                     },
                 )
-            except httpx.HTTPError as e:
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.UnsupportedProtocol) as e:
+                # The request never left this process — nothing about it
+                # could possibly have reached ServiceNow. FAILED is an honest
+                # answer here: a retry is safe because nothing was sent.
                 return CapabilityResponse(
                     request_id=call.request_id,
                     status=CallStatus.FAILED,
                     connector=self.name,
-                    error=f"ServiceNow request failed: {e}",
+                    error=f"ServiceNow was never reached: {e}",
+                )
+            except httpx.HTTPError as e:
+                # Every other transport failure — a read/write timeout, a
+                # reset connection, a malformed response — can happen AFTER
+                # the POST has already left this process. ServiceNow's Table
+                # API is not idempotent (confirmed: no dedup header, no
+                # upsert-by-key), so ADOS cannot tell, from this exception
+                # alone, whether a record now exists. Reporting FAILED here
+                # would be the more dangerous lie CallStatus.UNKNOWN's own
+                # docstring warns about: it invites a retry that could create
+                # a second real ticket for an action that already happened.
+                # UNKNOWN is the honest answer, and it is a debt this
+                # response's caller must not silently discharge by retrying —
+                # see orchestrate/runtime/capability_reconcile.py.
+                return CapabilityResponse(
+                    request_id=call.request_id,
+                    status=CallStatus.UNKNOWN,
+                    connector=self.name,
+                    error=(
+                        f"ServiceNow request outcome unknown — the request may have "
+                        f"already reached the server before contact was lost: {e}"
+                    ),
                 )
 
         if response.status_code >= 400:

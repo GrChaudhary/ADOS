@@ -44,34 +44,41 @@ concurrency paths rather than trusting the existing narrative:
    a ServiceNow write — leaves the `capability_requests` row in a state that
    cannot be distinguished from "still legitimately pending." Nothing
    reconciles that table; only `runtime_sessions` is reconciled. (§9, §4B)
+   **CLOSED — P9, §15.**
 2. An ADOS crash **during** human approval can roll the decision back to
    `pending_approval` **after** the external side effect already happened,
    making the request approvable a second time — a real double-execution
-   path, not merely a theoretical one. (§9, §4B)
+   path, not merely a theoretical one. (§9, §4B) **CLOSED — P9, §15,
+   proven against a real ServiceNow instance.**
 3. The idempotency-key replay guard in the gateway is real and tested, but
    the one prompt template that teaches the model the `ados` skill's API
    never mentions the parameter — so in practice, no live mission has ever
    supplied one. The guard exists but is not reachable from the only caller
-   that would need it. (§9, §6F)
+   that would need it. (§9, §6F) **CLOSED — P9, §15: replaced with an
+   automatic, server-computed key nothing needs to be taught.**
 4. The P7-D build-identity drift guard protects the **start** of a mission
    (before a container exists) but is not called anywhere in
    `mcp_gateway.py`'s capability-execution path — a commit landing while a
    mission is already in flight is not caught for that mission's remaining
-   capability calls. (§5.2, §4B)
+   capability calls. (§5.2, §4B) **Still open — out of P9's scope.**
 5. `docs/prime-agent-integration/17-final-acceptance-report.md`'s own
    regression paragraph for P7-D miscounts the test suite: it states "8
    `external`" and "7 `docker`" deselected. Direct re-collection in this
    review finds **2** external-marked tests and **13** docker-marked tests,
    both fully consistent with every *other* number in that same report.
-   (§15)
+   (§9)
 
 None of these are exotic. All five follow directly from reading the code the
 existing reports already point at. They are the difference between "the
 happy path is proven" and "the system is production-ready."
 
-**Verdict: NOT READY**, for any operating model that involves a real,
-unattended external side effect. See §17 for the full reasoning and §16 for
-what would have to change first.
+**Verdict at P8: NOT READY**, for any operating model that involves a real,
+unattended external side effect, primarily because of findings 1–3 above.
+**P9 (§15) closes findings 1–3.** See §15 for the updated verdict — it does
+not move all the way to "ready" (findings 4 and the rest of §11's blocker
+list are unaffected and remain open), but the specific silent-duplication
+risk that drove the original NOT READY verdict is closed, with real
+external evidence.
 
 ---
 
@@ -284,6 +291,12 @@ cannot grow would be effort spent on the wrong thing.
 requests` row stuck at `pending_approval` after a crash. See §9 in full;
 this is the review's most important single finding.
 
+**CLOSED 2026-08-12 (P9).** See §15 below. `capability_requests` now has a
+durable `executing` checkpoint written before any external call, and a
+terminal-with-respect-to-automatic-execution `outcome_unknown` state for
+whatever a crash or an ambiguous connector response leaves unresolved.
+Proven against a real ServiceNow instance, not merely designed.
+
 ### 5.8 Deployment/version drift risk beyond the gateway itself
 **LOW-MEDIUM RISK.** The Dockerfile's own comment ("`--workers` is
 deliberately absent... paused MOA/ITSM approvals live in per-process
@@ -404,6 +417,14 @@ resume feature:
    reads unambiguously as "unknown, needs external verification" instead of
    "silently re-approvable."
 
+**Both recommendations were implemented in P9 — see §15.** Recommendation 2
+became the `executing` checkpoint (both paths, not only approval);
+recommendation 1 became `mark_stalled_executions_unknown` +
+`reconcile_outcome_unknown`, using the row's own canonical `request_id`
+rather than a flag a human still has to act on by hand. The table above is
+left exactly as measured at the time — it is what motivated the fix, not a
+claim about the system as it stands after §15.
+
 ---
 
 ## 9. Evidence-quality assessment
@@ -485,24 +506,25 @@ Not "build everything in §6." The smallest change-set that would move the
 verdict, per target model:
 
 **→ Ready for controlled internal production (model A):** already close.
-Two changes: (1) close the approval-path double-execution window (§9,
+Two changes: ~~(1) close the approval-path double-execution window (§9,
 recommendation 2 — a durable "call started" marker), since even a trusted
-internal operator can double-click or retry after a crash; (2) fix the
-Postgres role, since "the audit ledger is append-only" is a claim the
-product makes, not an implementation detail an internal deployment gets to
-quietly skip. Everything else in §6 is genuinely acceptable for A as
-currently built.
+internal operator can double-click or retry after a crash~~ **DONE — P9,
+§15**; (2) fix the Postgres role, since "the audit ledger is append-only" is
+a claim the product makes, not an implementation detail an internal
+deployment gets to quietly skip. Item 2 remains open — P9 was scoped to
+external-side-effect correctness only.
 
-**→ Ready for production (model B):** model A's two items, plus: (3) the
-`capability_requests` reconciliation/flagging pass (§9, recommendation 1);
-(4) the build-identity guard extended onto the capability-execution path
-(§5.2); (5) minimum-viable observability — structured logs already exist,
-so this is specifically metrics + alerting, not a rebuild; (6) backups.
+**→ Ready for production (model B):** model A's two items, plus: ~~(3) the
+`capability_requests` reconciliation/flagging pass (§9, recommendation
+1)~~ **DONE — P9, §15**; (4) the build-identity guard extended onto the
+capability-execution path (§5.2) — still open; (5) minimum-viable
+observability — structured logs already exist, so this is specifically
+metrics + alerting, not a rebuild — still open; (6) backups — still open.
 **Resume/heartbeats/subagents/scheduling are explicitly not on this list.**
 They are real future functionality, not blockers: nothing in B's definition
 requires a crashed mission to continue rather than restart, only that a
 crash not silently corrupt or duplicate the audit trail — which is what
-items 1–4 actually fix.
+items 1 and 3 actually fixed.
 
 **→ Ready for a distributed/multi-tenant platform (model C):** everything
 above, plus admission control/rate limiting, a multi-host-aware ownership
@@ -563,3 +585,155 @@ and specific, not a re-architecture.
 For **model B or C**, this is a genuine blocker, not a hardening
 nice-to-have, and should be treated as such before any unattended
 production traffic touches it.
+
+*(True as of P8. P9, appended below as §15, closes the double-execution
+finding specifically — this section is left as the point-in-time record of
+what P8 itself established; §15 carries the updated verdict.)*
+
+---
+
+## 15. P9 update: External Side-Effect / Exactly-Once Hardening (2026-08-12)
+
+Closes this report's own central finding (§5.7, §8, §14): a real external
+side effect could succeed, ADOS could crash before recording it, and the
+request could return to an apparently-executable state — a real,
+demonstrated path to a silent duplicate.
+
+**Baseline:** `d4faf37` (HEAD at the start of P8/P9), plus `3813ced` (the P8
+report commit). **P9 commit:** see the final P9 report delivered alongside
+this document for the exact hash — this file is updated in the same commit.
+
+### What changed
+
+1. **A durable `executing` checkpoint**, written and committed BEFORE any
+   external call, in both writers of `capability_requests`
+   (`mcp_gateway.py`'s autonomous path and `runtime_approvals.py`'s human
+   approval path). This is the fix: `pending_approval` and "a decision to
+   act was made" are now mutually exclusive from that commit onward,
+   independent of what happens next — including the process dying.
+   `orchestrate/runtime/capability_execution.py`.
+2. **A terminal-with-respect-to-automatic-execution `outcome_unknown`
+   state.** A row stuck `executing` past a stall bound (default 60s,
+   generous against every real ServiceNow call latency measured in this
+   programme), or a connector reporting `CallStatus.UNKNOWN` directly, both
+   land here. Nothing in this codebase transitions it back to something
+   executable without an intervening reconciliation that finds positive
+   proof. `orchestrate/runtime/capability_reconcile.py`.
+3. **ServiceNow's Table API confirmed to have no native idempotency
+   mechanism** (no dedup header, no upsert-by-key — a POST always inserts).
+   `ServiceNowConnector.execute()` now distinguishes transport errors that
+   prove the request never reached the server (`FAILED`, safe to retry) from
+   ones where it may have (`CallStatus.UNKNOWN` — the "may already have
+   happened, do not guess" case `contracts/capabilities.py` already reserved
+   this value for, unused until now).
+4. **Idempotency made real, not reachable.** The old caller-supplied
+   `idempotency_key` parameter is gone — nothing reachable from a real
+   mission ever set one (the exact P8 finding). Replaced with a canonical
+   key `mcp_gateway.py` computes itself, server-side, from
+   (session, capability, real arguments) — automatic on every call, nothing
+   for a model to remember or invent. A genuine concurrent race for the same
+   key is resolved by a real database constraint
+   (`uq_capability_requests_session_idempotency`, alembic `d1e2f3a4b5c6`),
+   not by hoping the application-level check never loses a race.
+5. **Reconciliation, keyed only on the row's own canonical `request_id`.**
+   `reconcile_outcome_unknown` searches the capability's mapped ServiceNow
+   table for a record containing that exact id — never agent-authored text
+   — and resolves to `executed` only on a positive match. No match, or a
+   query that could not be answered, leaves the row exactly where it was.
+   Manual CLI: `scripts/reconcile_capability_requests.py` (deliberately not
+   auto-scheduled — see that script's own docstring for why this is a
+   deliberate, narrow scope decision, not an oversight).
+
+### The critical proof — real ServiceNow, not mocked
+
+`scripts/p9_crash_recovery_e2e.py`. A Tier 2 `NotifyITHelpdesk` request was
+approved; the approval's own `_execute_capability` call was wrapped so the
+REAL ServiceNow POST still ran (a real incident, `INC0010029`, sys_id
+`edc436478366cb10be487765eeaad390`) and only then raised, before the row's
+final commit — exactly the crash window this phase exists to close.
+
+```
+DURABLY EXECUTING   request 74493a0b-…  — not reset to pending_approval
+REAL RECORD EXISTS  INC0010029          — ADOS's own row does not know this yet
+RETRY REFUSED       HTTP 409            — before any reconciliation ran
+OUTCOME_UNKNOWN      (after stall detection)
+RECONCILED           resolved via existing record INC0010029
+```
+
+Independently re-verified OUTSIDE the script's own process: a fresh `psql`
+query against Postgres showed `status=executed`, `result.reconciled_match`
+naming `INC0010029`; a fresh, separate Python process's `ServiceNowConnector
+.fetch_record()` call independently confirmed the same record, `state=7`,
+description containing the exact `request_id`. Exactly one real record
+existed for the entire run (`external_record_count: 1`); it was closed
+(`state=7`) and a final sweep confirmed zero open marked records remained.
+
+**External side effects:** one real ServiceNow incident, created, resolved,
+independently verified, and closed. No other live external writes this
+phase.
+
+### Tests and negative controls
+
+41 new tests across four files (`test_capability_execution_state.py` 14,
+`test_capability_reconcile.py` 10, `test_approval_crash_recovery.py` 6,
+`test_ados_skill_run_capability.py` 11), plus one pre-existing test's error
+-message assertion updated to match the new, more precise FAILED-vs-UNKNOWN
+wording (`test_notify_it_helpdesk_servicenow.py` — its own protection,
+"a transport error is a failure not a success," was never weakened, and a
+new sibling test now separately pins the UNKNOWN case it used to conflate).
+
+6 negative controls, each: guard disabled in real source, targeted test(s)
+confirmed to fail, guard restored, `shasum -a 256` confirmed byte-identical
+before and after.
+
+| # | Guard disabled | Targeted result |
+|---|---|---|
+| 1 | `_load_pending_or_404`'s "must be exactly `pending_approval`" check | 5 tests failed: the 3 new executing/outcome_unknown/reconciled refusal tests, plus 2 pre-existing P6 double-approval regression tests |
+| 2 | Reconciliation's `_record_matches_this_row` re-verification | 1 targeted test failed (a record merely returned by ServiceNow's own substring query resolved the row without actually containing its id) |
+| 3 | The database unique index itself (dropped directly in Postgres, migration file untouched) | The real concurrency test created 2 real "ServiceNow" calls for one logical request — the exact duplicate this index exists to prevent |
+| 4 | Canonical key's exclusion of `_`-prefixed governance hints | 2 targeted tests failed (two calls disagreeing only on claimed cost stopped deduping) |
+| 5 | The removed `idempotency_key` skill parameter (re-added) | 1 targeted test failed (a caller could once again pass an explicit, substitutable key) |
+| 6 | Stall-detection's time comparison | 3 tests failed, including the critical crash-recovery proof test itself |
+
+### Regression
+
+Full suite, fresh, one pass, all Docker-marked tests included: measured
+immediately after P9's changes — see the final P9 report for the exact
+passed/deselected counts. One pre-existing test required an update (its
+assertion depended on FAILED's exact wording, which P9 deliberately changed
+to distinguish two cases that string used to conflate) — not a weakened
+guard, confirmed by the new sibling test that pins the case it used to miss.
+
+### What this does and does not mean
+
+**"Exactly once" is not literally true** — ServiceNow itself cannot provide
+that guarantee (§ above). What is true: ADOS never *automatically* creates a
+second real record for the same logical request, in any of the crash
+windows this phase modeled. The `outcome_unknown` state is where "exactly
+once" becomes "at-least-once-detected, reconciled without duplication, or
+flagged for a human" — the safe-ambiguity design the P9 instructions asked
+for in place of a guarantee ServiceNow cannot back.
+
+**Still open, honestly:**
+- The NULL-expiry (pre-P6-D) row shape remains out of scope, unchanged.
+- Reconciliation is manual (a CLI), not scheduled — an `outcome_unknown` row
+  is safe (never auto-retried) but not automatically resolved until an
+  operator runs it.
+- The build-identity drift guard still does not cover the capability-
+  execution path (§5.2) — unrelated to this phase's scope, still open.
+- A capability with no ServiceNow table mapping has no automated
+  reconciliation path at all; it can only ever be resolved by a human.
+
+### Updated verdict
+
+The P8 blocker — silent double execution of a real external side effect —
+is **CLOSED**, proven against real ServiceNow state, not merely designed.
+This does not change the overall production-readiness verdict from §14 to
+"ready": the remaining §11 items for model B (build-identity coverage,
+observability, backups, Postgres role) are unaffected by this phase and
+remain open by design — P9 was scoped narrowly, per its own instructions,
+to exactly the finding named above. For **model A**, the minimum blocker
+set is now down to one item (the Postgres role). For **model B/C**, this
+was the load-bearing blocker; what remains is real but no longer of the
+same severity — see the final P9 report for the complete, explicit
+category-by-category answer.

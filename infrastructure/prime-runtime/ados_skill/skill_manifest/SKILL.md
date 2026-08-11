@@ -55,6 +55,12 @@ print(result["result"])
 - If ADOS refuses, it raises `CapabilityDenied`. That is final — the mission
   did not grant that capability. Do not retry it or look for another route;
   report the limitation in your findings instead.
+- If ADOS cannot say whether the action happened, it raises
+  `CapabilityOutcomeUnknown`. This is not an ordinary failure — the action may
+  already have happened. Do not call `run_capability` again with the same
+  arguments hoping it will "try again"; report the ambiguity in your findings
+  instead. ADOS will not execute this specific request automatically again on
+  its own.
 
 ## Rules
 
@@ -62,6 +68,11 @@ print(result["result"])
   yourself, credentials found in the environment, other network hosts). This
   skill is the only sanctioned route, and it is the one that produces an audit
   trail.
-- Pass an `idempotency_key` when a retry must not execute an action twice.
+- Retries are already safe: `run_capability` is automatically protected
+  against executing the same request twice — ADOS computes this from the
+  capability and arguments you actually send, not from anything you supply.
+  Calling it again with the exact same arguments returns the original
+  outcome rather than acting a second time. There is no parameter to set for
+  this and nothing to invent.
 - Your workspace is disposable. Anything that must survive the mission has to
   be in your final answer or written through a capability.

@@ -530,6 +530,55 @@ mechanism; their leaked bytes were already reconciled by hand in P7-C, and
 what remains — stale bookkeeping on three specific rows, not a growing class
 of them — was judged not worth a second, separate mechanism.
 
+### ~~A crash between an external effect and its local audit commit could duplicate the effect~~ — FIXED 2026-08-12 (P9)
+
+Found by `docs/prime-agent-integration/18-production-readiness-review.md`'s
+own P8 review, not by a live incident: both writers of `capability_requests`
+(the autonomous path in `mcp_gateway.py`, the human-approval path in
+`runtime_approvals.py`) made the real external call — a ServiceNow POST —
+*before* writing anything durable about the decision to act. An ADOS crash
+between those two points left the row exactly where it started
+(`pending_approval`, or rolled back to it), indistinguishable from a request
+that had never been decided — and therefore approvable, and executable, a
+second time. ServiceNow's Table API has no native idempotency mechanism (no
+client-supplied dedup key, no upsert-by-key — confirmed by reading the API
+this connector calls), so nothing on the far side would have caught it
+either.
+
+**Fixed 2026-08-12 (P9).** `orchestrate/runtime/capability_execution.py`
+adds a durable `executing` checkpoint, committed BEFORE the external call —
+the fix. `pending_approval` and "already decided" become mutually exclusive
+from that commit onward, regardless of what happens next. A row a crash
+leaves stuck `executing` is moved by
+`orchestrate/runtime/capability_reconcile.py` (`mark_stalled_executions_
+unknown`) to `outcome_unknown` — a state terminal with respect to automatic
+execution — and `reconcile_outcome_unknown` resolves it to `executed` only
+when the external system itself confirms a matching record, found by the
+row's own canonical `request_id`, never agent-authored text. Idempotency was
+separately made *real*: the old caller-supplied `idempotency_key` was
+practically unreachable (nothing in the real prompt template ever taught a
+mission it existed) and is replaced with a key `mcp_gateway.py` computes
+itself, automatically, from the session and the real capability/arguments —
+backstopped by a real database uniqueness constraint
+(`uq_capability_requests_session_idempotency`) against genuine concurrent
+races.
+
+**Live-verified 2026-08-12** against a real ServiceNow instance
+(`scripts/p9_crash_recovery_e2e.py`): a Tier 2 `NotifyITHelpdesk` request was
+approved, the real POST succeeded (`INC0010029`), a simulated crash fired
+immediately afterward, and the row was left durably `executing` — not reset.
+A retry was refused (409) before any reconciliation ran. Stall detection
+moved it to `outcome_unknown`; reconciliation found the real record by its
+canonical `request_id` and resolved the row to `executed` — no duplicate
+record was ever created. Independently re-verified outside the script's own
+process via a fresh `psql` query and a fresh, separate `ServiceNowConnector
+.fetch_record()` call. Exactly one real record existed for the entire run;
+it was closed and a final sweep confirmed zero open marked records remained.
+
+Full detail, the crash-window-by-crash-window analysis, and 6 negative
+controls: `docs/prime-agent-integration/18-production-readiness-review.md`
+§15.
+
 ### Two concurrent sessions cannot reach each other — measured 2026-08-11
 
 Per-session networks were the design from P5, but with only one boundary ever

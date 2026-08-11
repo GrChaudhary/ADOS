@@ -171,7 +171,11 @@ async def test_a_4xx_is_a_failure_not_a_success():
     assert "403" in (response.error or "")
 
 
-async def test_a_transport_error_is_a_failure_not_a_success():
+async def test_a_transport_error_that_never_reached_the_server_is_a_failure_not_a_success():
+    """P9: `ConnectError` means the request never left this process — nothing
+    could have happened out there, so FAILED (safe to retry) is correct. See
+    the sibling test below for the opposite case: an error that could mean
+    the request DID reach the server."""
     def boom(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("no route to host", request=request)
 
@@ -179,7 +183,24 @@ async def test_a_transport_error_is_a_failure_not_a_success():
         _call(summary="s")
     )
     assert response.status is CallStatus.FAILED
-    assert "request failed" in (response.error or "")
+    assert "never reached" in (response.error or "")
+
+
+async def test_a_transport_error_that_may_have_reached_the_server_is_unknown_not_failed():
+    """P9: unlike ConnectError above, a read timeout can happen AFTER the
+    POST has already left this process — ServiceNow's Table API has no
+    idempotency mechanism, so treating this as an ordinary FAILED (implying
+    "safe to retry") would risk a real duplicate record. See
+    integrations/connectors/servicenow.py's own docstring and
+    orchestrate/runtime/capability_reconcile.py for the recovery path."""
+    def boom(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out waiting for a response", request=request)
+
+    response = await ServiceNowConnector(transport=httpx.MockTransport(boom)).execute(
+        _call(summary="s")
+    )
+    assert response.status is CallStatus.UNKNOWN
+    assert "may have already reached" in (response.error or "")
 
 
 async def test_missing_credentials_fail_rather_than_pretend(monkeypatch):

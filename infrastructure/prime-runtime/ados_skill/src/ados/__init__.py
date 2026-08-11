@@ -23,7 +23,7 @@ from typing import Any, Dict, Optional
 
 from rlm import McpIntegration
 
-__all__ = ["ados", "Ados", "CapabilityDenied", "CapabilityTimeout"]
+__all__ = ["ados", "Ados", "CapabilityDenied", "CapabilityTimeout", "CapabilityOutcomeUnknown"]
 
 
 def _decoded(result: Any) -> Any:
@@ -70,6 +70,18 @@ class CapabilityTimeout(RuntimeError):
     still pending in ADOS; it was not cancelled and may still be approved."""
 
 
+class CapabilityOutcomeUnknown(RuntimeError):
+    """ADOS cannot say whether this action happened. Raised, not returned as
+    a normal-looking result — a caller checking `result["ok"]` or reading
+    `result["output"]` on a dict that silently meant "maybe" is exactly the
+    false-success class this integration exists to prevent (P9). The action
+    may or may not have occurred out there; ADOS will not execute it again
+    automatically, and a human must reconcile it before it can move further.
+    Do not retry by calling `run_capability` again with the same arguments —
+    the request is already recorded and will not re-execute on its own, but a
+    DIFFERENT real action must never be disguised as "trying again"."""
+
+
 class Ados(McpIntegration):
     server = "ados"
     url = os.environ.get("ADOS_MCP_URL", "http://host.docker.internal:8000/mcp")
@@ -87,7 +99,6 @@ class Ados(McpIntegration):
         capability: str,
         arguments: Optional[Dict[str, Any]] = None,
         *,
-        idempotency_key: Optional[str] = None,
         wait: bool = True,
         timeout_seconds: float = 900.0,
         poll_seconds: float = 5.0,
@@ -100,17 +111,38 @@ class Ados(McpIntegration):
         `get_capability_request` until ADOS decides.
 
         Raises CapabilityDenied if ADOS refuses, CapabilityTimeout if the wait
-        budget expires with the request still pending.
+        budget expires with the request still pending, and
+        CapabilityOutcomeUnknown if ADOS cannot yet say whether the action
+        happened (see that exception's own docstring — do not treat this as
+        an ordinary failure to retry).
+
+        THERE IS NO `idempotency_key` PARAMETER. P8 found the old one
+        practically unreachable — nothing here ever set it, because nothing
+        taught a mission it existed. P9 replaced it with a key ADOS computes
+        itself, server-side, from the session and the real capability and
+        arguments this call sends — the same two things this function already
+        has no choice but to send for the request to mean anything. There is
+        nothing left for this function, or the model driving it, to supply or
+        substitute; a retry with byte-identical arguments is recognised and
+        replayed automatically, without ADOS ever executing it twice.
         """
         payload: Dict[str, Any] = {"capability": capability, "arguments": arguments or {}}
-        if idempotency_key:
-            payload["idempotency_key"] = idempotency_key
 
         res = _decoded(await self.call_tool("request_capability", payload))
 
         if res.get("status") == "denied":
             raise CapabilityDenied(f"{capability}: {res.get('reason', 'no reason given')}")
-        if res.get("status") == "executed" or not wait:
+        if res.get("status") == "outcome_unknown":
+            raise CapabilityOutcomeUnknown(
+                f"{capability}: {res.get('reason') or 'ADOS cannot confirm whether this action happened'} "
+                f"(request {res.get('request_id')})"
+            )
+        # `executing` is a real but NON-FINAL status — it means a decision to
+        # act was just durably recorded, not that the action has resolved yet
+        # (P9). Falling through to `return res` for it here would hand the
+        # caller a result that looks final but is not; treat it exactly like
+        # `pending_approval` and wait for a real outcome instead.
+        if res.get("status") in ("executed", "failed") or not wait:
             return res
 
         request_id = res["request_id"]
@@ -123,7 +155,12 @@ class Ados(McpIntegration):
             status = state.get("status")
             if status == "denied":
                 raise CapabilityDenied(f"{capability}: {state.get('reason', 'rejected by approver')}")
-            if status != "pending_approval":
+            if status == "outcome_unknown":
+                raise CapabilityOutcomeUnknown(
+                    f"{capability}: {state.get('reason') or 'ADOS cannot confirm whether this action happened'} "
+                    f"(request {request_id})"
+                )
+            if status not in ("pending_approval", "executing"):
                 return state
         raise CapabilityTimeout(
             f"{capability}: still awaiting approval after {timeout_seconds}s (request {request_id})"

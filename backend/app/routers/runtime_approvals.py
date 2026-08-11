@@ -35,6 +35,7 @@ Tier 1/2 request by any route, which is the entire point of parking it.
 let a later code change silently downgrade an already-parked request.
 """
 
+import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -45,10 +46,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
 from db.session import get_db_session
 from orchestrate.async_approvals import publish_approval_decision_event
+from orchestrate.runtime.capability_execution import STATUS_EXECUTED, STATUS_EXECUTING, STATUS_FAILED
 
 from ..auth import get_current_user
 from ..mcp_gateway import _LIVE_STATES, _execute_capability
 from ..rbac import User, authorize_governance_decision
+
+logger = logging.getLogger("ados.runtime_approvals")
 
 router = APIRouter(
     prefix="/runtime/capability-requests",
@@ -123,18 +127,26 @@ async def _load_pending_or_404(
     `SELECT ... FOR UPDATE` rather than a plain read, because the
     already-decided check below is otherwise check-then-act: two approvers
     clicking at the same moment would both read `pending_approval` and both
-    execute, and for `NotifyITHelpdesk` that is two real tickets. The lock is
-    held until this request's transaction ends, which means the connector call
-    happens inside it — the autonomous path in `mcp_gateway.py` deliberately
-    does the opposite, executing outside its DB session so a slow connector
-    cannot hold a transaction open.
+    execute, and for `NotifyITHelpdesk` that is two real tickets.
 
-    The difference is intentional. That path is driven by an agent and can be
-    hot; this one is driven by a human clicking approve, where correctness is
-    worth more than the connection. The alternative — claim the row, commit,
-    then execute — would need an intermediate status, and the `ados` skill
-    polls with `if status != "pending_approval": return`, so any new state
-    would hand the agent a non-final answer as though it were the result.
+    P9 UPDATE — the lock is no longer held across the external call. It used
+    to be: this function's `FOR UPDATE` was taken and kept open for the
+    entire duration of `approve_capability_request`, including the real HTTP
+    request to the connector, so a concurrent second approval blocked (and
+    then correctly 409'd) but an ADOS crash during that same window rolled
+    the whole decision back — silently returning an already-decided-looking
+    request to `pending_approval` even if the external effect had already
+    happened. `approve_capability_request` now durably commits `executing`
+    (releasing this lock) BEFORE making that call, and this function's own
+    check — `require_pending and row.status != "pending_approval"` — is what
+    makes `pending_approval` and "decided" (whether `executing`, `executed`,
+    `failed`, or `outcome_unknown`) mutually exclusive from that commit
+    onward, independent of whether the process survives what happens next.
+    The `ados` skill's poll loop was updated alongside this to treat
+    `executing` the same as `pending_approval` (keep polling), so an
+    intermediate, non-final status was exactly the objection this design
+    used to have and no longer does — see
+    infrastructure/prime-runtime/ados_skill/src/ados/__init__.py.
     """
     try:
         request_uuid = uuid.UUID(request_id)
@@ -210,7 +222,31 @@ async def approve_capability_request(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ) -> Dict[str, Any]:
-    """Release a parked request, and execute it through the governed path."""
+    """Release a parked request, and execute it through the governed path.
+
+    P9: THREE COMMITS, NOT ONE
+    ----------------------------
+    This used to be a single transaction spanning the entire external call —
+    the `SELECT ... FOR UPDATE` lock, the decision, AND the connector's real
+    HTTP request all inside one still-open transaction, nothing durable
+    written until the very end. If ADOS died anywhere in that window, the
+    transaction rolled back to `pending_approval` in full — even if the
+    external system had already acted. A second approval, or the agent's own
+    retry, would then execute it again: a real duplicate side effect. See
+    docs/prime-agent-integration/18-production-readiness-review.md §9.
+
+    Phase 1 (below) durably commits `executing` — with the decider's identity
+    already on the row — BEFORE the external call. That commit is what makes
+    "already decided" true regardless of what happens next: a concurrent or
+    later approval attempt sees anything other than `pending_approval` and is
+    refused (`_load_pending_or_404`'s existing check, unchanged). Phase 2 is
+    the external call itself, with no transaction open. Phase 3 durably
+    records the real, tri-state outcome. A crash between phase 1 and phase 3
+    leaves the row at `executing`, never silently re-approvable; a later pass
+    over stalled `executing` rows (orchestrate/runtime/capability_reconcile.py)
+    is the only thing that ever moves it further, and only ever to
+    `outcome_unknown` — never back to something executable.
+    """
     row = await _load_pending_or_404(session, request_id)
     runtime_session = await _live_session_or_409(session, row)
 
@@ -240,6 +276,13 @@ async def approve_capability_request(
 
     from contracts import PolicyTier  # local: keeps the module import graph flat
 
+    # --- Phase 1: durable decision, before any external effect -------------
+    row.status = STATUS_EXECUTING
+    row.decided_by = f"user:{current_user.username}"
+    await _release_session_if_nothing_else_pending(session, runtime_session)
+    await session.commit()
+
+    # --- Phase 2: the external call, no transaction/lock held --------------
     result = await _execute_capability(
         row.capability,
         row.arguments or {},
@@ -248,14 +291,30 @@ async def approve_capability_request(
         request_id=row.request_id,
         approved_by=current_user.username,
     )
+    outcome_status = result.get("outcome_status", STATUS_FAILED)
+
+    # --- Phase 3: durable result --------------------------------------------
+    await session.refresh(row)
+    if row.status != STATUS_EXECUTING:
+        # Something else already resolved this row while the call above was
+        # in flight — a reconciliation pass concluding it was stalled, most
+        # plausibly. Overwriting that with a now-late result here would be
+        # exactly the "silently return to an executable-looking state"
+        # mistake this phase exists to prevent. The real outcome is not
+        # lost — it is logged — but the row's own durable state, decided by
+        # an independent process, wins.
+        logger.warning(
+            "Capability execution completed after its request row was "
+            "independently resolved elsewhere; the row's own state is kept",
+            extra={"request_id": str(row.request_id), "row_status": row.status, "late_outcome": outcome_status},
+        )
+        return _view(row)
 
     # Written from the executor's own answer, exactly as the autonomous path
     # does. "The approver said yes" is not "the action succeeded".
-    row.status = "executed" if result.get("ok") else "failed"
+    row.status = outcome_status
     row.result = result
-    row.reason = None if result.get("ok") else result.get("error")
-    row.decided_by = f"user:{current_user.username}"
-    await _release_session_if_nothing_else_pending(session, runtime_session)
+    row.reason = None if outcome_status == STATUS_EXECUTED else result.get("error")
     await session.commit()
     await session.refresh(row)
 
