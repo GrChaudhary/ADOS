@@ -126,12 +126,31 @@ token → `401`; auditor → `403`; second approval → `409`. **pending → app
   Full trace: [17-final-acceptance-report.md §P7-A](#p7-a-live-provenance-verification-2026-08-11)
   below.
 
+* **P7-B** — the running gateway's build identity (git commit + dirty flag,
+  computed once at process import time from real `.git` metadata, never a
+  caller-suppliable value) is reported on `GET /healthz` and independently
+  verified against a real process: a genuinely stale gateway (predating
+  every P7-B file) reported no `build` key at all; restarted, it matched a
+  fresh computation; pointed at a real second build (a `git worktree` of the
+  previous commit) it was correctly refused. See
+  [17-final-acceptance-report.md §P7-B](#p7-b-stale-gateway-build-identity-hardening-2026-08-11).
+* **P7-C** — the orphan sweeper (`orchestrate/runtime/orphan_sweep.py`)
+  against a real Docker daemon: a genuinely ADOS-labelled orphan container
+  and network were created, swept, and independently confirmed gone via a
+  fresh `docker inspect`; a second sweep claimed nothing; a container and a
+  network sharing the exact expected name but lacking (or carrying a
+  mismatched) `ados.session_id` label survived, independently confirmed
+  present. The three real orphan workspace directories left over from Aug 9
+  — predating the P6-D teardown fix — were independently proven ADOS-owned
+  (exact `workspace_path` match, zero corresponding Docker resources
+  anywhere) and removed; a fresh filesystem scan afterward found none. See
+  [17-final-acceptance-report.md §P7-C](#p7-c-orphan-sweeping-and-safe-resource-cleanup-2026-08-11).
+
 ## 4. TESTED (mechanism proven, live path did not exercise it)
 
 * Token expiry lifecycle and failure-safe terminal state — 22 tests including an
   abandoned session whose row still reads `running`.
-* Teardown resilience and orphan recording — including a `docker rm` that times
-  out mid-teardown.
+* Teardown resilience — including a `docker rm` that times out mid-teardown.
 * Rejection path, decision-time grant re-check, concurrent double approval
   (`SELECT … FOR UPDATE`), auditor and below-limit refusals.
 * The whole P6-C refusal surface: **42 regression tests** across MCP token
@@ -143,19 +162,23 @@ token → `401`; auditor → `403`; second approval → `409`. **pending → app
 
 ## 5. DESIGNED / PARTIAL
 
-* **Orphan sweeping.** Teardown now records what it could not remove onto the
-  session row as `orphaned …`. Nothing consumes that record — there is no
-  sweeper, no alert, no reconciliation job.
 * **Token expiry under a long real mission.** The lifetime rule is implemented
   and unit-tested; no live run has yet outlived its own token or come close to
   the 300s grace.
 * **Rejection and approval timeout** as live events.
+* **Orphan sweep invocation.** The sweeper (`orchestrate/runtime/orphan_sweep.py`,
+  `scripts/sweep_orphans.py`) is explicit and manually invoked, by design — no
+  scheduler, cron, or background task runs it automatically. An operator who
+  never runs it accumulates orphan records exactly as before P7-C; the gap
+  closed is that a sweep, once run, is safe, bounded, and correct — not that
+  cleanup now happens on its own.
 
 ## 6. NOT BUILT
 
 Session resume after an ADOS restart; heartbeats; scheduled or recurring
-missions; subagents; agent-to-agent messaging; multi-session missions; a build
-identity endpoint; automated cleanup of orphaned Docker resources or workspaces.
+missions; subagents; agent-to-agent messaging; multi-session missions;
+automatic/scheduled orphan reconciliation (the sweeper itself is built —
+see §3 — but nothing calls it without a human or a cron entry choosing to).
 
 ## 7. OPEN DEFECTS AND LIMITATIONS
 
@@ -195,9 +218,11 @@ identity endpoint; automated cleanup of orphaned Docker resources or workspaces.
    negative controls (both restored byte-identical). See §P7-B below.
 4. **Five environmental test failures** — `custom_agents.division`, unapplied
    migration from unrelated in-flight work.
-5. **Three orphaned workspace directories from Aug 9** remain under
-   `/var/folders/34/…/T/ados-mission-*`. They predate the teardown fix and are
-   exactly the leak it now prevents; nothing sweeps them.
+5. ~~Three orphaned workspace directories from Aug 9~~ **Closed 2026-08-11
+   (P7-C).** Independently proven ADOS-owned (exact `workspace_path` match,
+   zero corresponding Docker resources anywhere) and removed through the
+   reviewed `_process_workspace` path; a fresh filesystem scan afterward
+   found none. See §P7-C.
 6. **Model narrative is unreliable, repeatedly and measurably.** In P6-B the
    agent's final answer said "Human approval is pending per the policy tier
    requirements" *after* approval had happened and the ticket existed. P7-A adds
@@ -233,6 +258,7 @@ identity endpoint; automated cleanup of orphaned Docker resources or workspaces.
 | `258074a` | P6-B — a 98.1s human approval hold; mission `d00ff47c`, `CHG0030499`; plus the `CreateChangeRequest` provenance fix | **live** (approval) + tests (provenance fix) |
 | `49f2156` | P6-C — 42 regression tests for refusals nothing had exercised; 10 negative controls | tests only |
 | `96b9447` | P6-D — token expiry + failure-safe terminal state + teardown resilience; two live concurrent sessions | **live** (isolation) + tests (lifecycle) |
+| `30b7977` | P7-B — gateway build identity (git commit + dirty, `/healthz`), stale-gateway detection | **live** (real gateway restart + real stale check) + tests (13) |
 
 ---
 
@@ -248,15 +274,17 @@ executes through one choke point, writes a durable audit row, and stamps
 provenance that resolves back to it. Acceptance derives from those rows and from
 independently re-read external records — never from what the agent said. Three
 separate live runs demonstrate that (P7-A brings this to four), and 19 negative
-controls show the guards are load-bearing rather than decorative.
+controls show the guards are load-bearing rather than decorative (P7-B and P7-C
+add 7 more against real Docker/process state, 26 total).
 
 What that is not: a system anyone should point at production traffic. It runs
 single-session missions in a single process with no resume, no heartbeats and no
-orphan reconciliation; its approval model occupies a kernel cell for the
-duration of a human decision; its cleanup records orphans that nothing sweeps;
-and the most persistent operational hazard in the whole programme — a stale
-gateway process the system could not detect on its own, caught five times by
-hand — is now mechanically detectable rather than merely recorded (P7-B).
+automatic orphan reconciliation — cleanup now works and is proven against a real
+daemon, but only when an operator explicitly runs it; its approval model
+occupies a kernel cell for the duration of a human decision; and, until P7-B,
+the most persistent operational hazard in the whole programme was a stale
+gateway process the system could not detect on its own — caught five times by
+hand, now mechanically detectable instead.
 
 The honest summary is that the *architecture* has been demonstrated and the
 *operations* have not.
@@ -446,3 +474,150 @@ never claimed to be closed as an operational inconvenience — a human (or a
 script wrapper) must still act on the diagnostic by restarting the gateway;
 what changed is that this is now a machine-verifiable fact instead of a
 manual comparison someone might skip.
+
+---
+
+## P7-C: Orphan Sweeping and Safe Resource Cleanup (2026-08-11)
+
+Closes §7 item 5 and turns §5's "orphan sweeping — recorded on the row,
+nothing consumes it" into a real, tested, live-verified mechanism.
+
+**Scope.** HEAD `30b7977` (this phase's own commit follows). Survey first,
+per instructions: `PrimeAgentRuntime.teardown()` / `EgressBoundary.teardown()`
+were confirmed unchanged (they already attempt every resource independently
+and return what survived); `_finalize_session` was confirmed unchanged (it
+still folds leftovers into `RuntimeSessionRow.failure_reason` as `orphaned …`
+prose). Neither was touched — existing P6-D tests assert that shape directly,
+and this phase did not need it to change.
+
+**Mechanism.** `orchestrate/runtime/orphan_sweep.py` consumes the existing
+`failure_reason` signal (`ILIKE '%orphaned%'`, on a terminal-state session —
+`TERMINAL_STATES` from `base.py`, the exact set `mcp_gateway.py` already
+treats as "no longer live") and recomputes the session's full candidate
+resource set **deterministically** — `container_name` and `workspace_path`
+columns, plus `egress.py`'s own suffix function for the relay and both
+per-session networks — never by parsing the diagnostic string, and the
+sweeper's public entry point (`sweep_once`) takes no resource name or path
+parameter at all, so nothing external can ever hand it one.
+
+**Ownership.** `egress.py` now stamps `ados.session_id` and `ados.managed_by`
+labels on every container and network it creates — the one code change to the
+P6-D producer path, additive only (no existing test asserts an exhaustive
+`docker run`/`network create` argument list; all 9 previously-passing
+egress/isolation docker tests still pass unmodified). A Docker resource is
+only ever removed if a real `docker inspect` shows its `ados.session_id`
+label matching this exact session — a name match alone is refused. A
+workspace path is only removed if it resolves under the real system temp
+root with the `ados-mission-` prefix (mirroring
+`orchestrate/onboarding/cleanup.py`'s existing `_is_within_onboarding_tempdir`
+pattern) — never a caller-supplied or guessed path.
+
+**State model.** No schema migration: outcomes are appended to the session's
+own `events` column, already a JSON audit trail. `orphan_sweep.claimed` /
+`.cleaned` / `.absent` / `.failed` / `.refused`, in that order per resource;
+`cleaned` and `absent` are terminal (never reclaimed), `failed`/`refused`
+remain eligible for the next sweep, and nothing already in `events` is ever
+removed — a pre-existing `runtime.tool.started` event was asserted present
+and unchanged after a sweep in the same test that asserted the new events
+were added.
+
+**Concurrency.** `claim_batch` uses `SELECT … FOR UPDATE SKIP LOCKED` on the
+session row — the same idiom `runtime_approvals.py` uses for the approval
+decision — so two sweepers racing never claim the same resource; whichever
+loses the row skips to the next one rather than blocking. Proven with real
+concurrent Postgres transactions via `asyncio.gather(claim_batch(), claim_batch())`
+against five simultaneously-eligible sessions: the two claim sets were
+disjoint on every field (session, kind, name) and together covered every
+session exactly once. The slow part — real Docker/filesystem calls — runs
+with no transaction open; a claim that is never finalized (a sweeper crashing
+mid-operation) is bounded by an explicit `CLAIM_LEASE_SECONDS` (default 300s)
+rather than blocking forever, tested by injecting `now` directly (no real
+sleeping) to move a claim from "just claimed, must not be reclaimed" to "well
+past its lease, eligible again."
+
+**Failure resilience.** A resource that raises (not just returns failure) —
+tested with a monkeypatched `_docker_label` raising `ConnectionError` for one
+candidate — does not stop the other candidates in the same session from being
+attempted; each is independently wrapped. A partial-failure batch (one
+resource's removal genuinely fails) is retried on the next sweep and only the
+previously-failed item is reclaimed — the others, already `cleaned`, are not
+touched again.
+
+**Real Docker evidence (`backend/tests/test_orphan_sweep_docker.py`, 6
+tests, `@pytest.mark.docker`).** In order:
+  A. a real container and a real network were created with the exact
+     `ados.session_id`/`ados.managed_by` labels `egress.py` now writes;
+  B. each was recorded as that session's `container_name`/implied network
+     name;
+  C. `sweep_once` was run against the real database and the real daemon;
+  D. `docker inspect`/`docker network inspect`, run independently — not the
+     sweeper's own report — confirmed both gone;
+  E. `sweep_once` was run a second time;
+  F. it claimed nothing for either, and a system-wide `docker ps`/
+     `network ls` sweep afterward found no leaked test containers or
+     networks.
+  Two further tests created a container occupying the *exact* name the
+  sweeper would compute — one with no `ados.*` label at all, one labelled for
+  a genuinely different session UUID — and independently confirmed both
+  survived, untouched, after a full sweep. A sixth proved the same A–F
+  sequence for a real workspace directory under the actual system temp root.
+
+**The three real Aug 9 orphans.** Located first
+(`find /var/folders -iname "ados-mission-*"` → exactly three, matching the
+task's own count), then proven, per resource, before any deletion: each
+path passed `_workspace_path_ok`; each was the **exact** `workspace_path` of
+a real `runtime_sessions` row (`dfea44da…`, `f2e9ba17…`, `43fd9bbc…`); each
+row's own `container_name` did not exist anywhere in Docker; no
+`ados-prime-*` container existed system-wide at all. All three rows are
+`state='running'` — pre-P6-D-fix fossils (the process that should have
+written a terminal state died before P6-D existed to make that failure-safe)
+— so the *general* sweeper correctly, safely refuses them; this was a
+deliberate, evidence-gated, one-time manual exception using the same
+reviewed `_process_workspace` primitive, not a new deletion path and not a
+change to the sessions' DB state. All three were removed and independently
+reconfirmed absent by a fresh filesystem scan afterward.
+
+**Negative controls, 5, all restored byte-identical (`shasum -a 256` before
+and after each):**
+1. Ownership label check disabled in `_process_docker` — the two
+   ownership-refusal tests (one mocked, and both real-Docker
+   name-collision tests) failed exactly as expected; 19 others unaffected.
+2. Active-session protection (`state.in_(TERMINAL_STATES)`) removed from the
+   claim query — both active-session tests failed exactly as expected; 20
+   others unaffected.
+3. Workspace path/root validation disabled in `_process_workspace` — no
+   existing test caught this at first (the two path tests called the pure
+   validator directly, not the code path a bypass would actually affect), so
+   a new integration-level test was added specifically to close that gap
+   before re-running the control; with it, the control correctly failed only
+   that new test.
+4. Per-item exception containment (`_process_one`'s `try/except`) removed —
+   again, no existing test raised a real exception (only returned failure
+   tuples), so a dedicated test injecting a raised `ConnectionError` was
+   added first; with it, the control correctly failed only that test.
+5. The `cleaned`/`absent` terminal check in `_eligible_for_claim` disabled —
+   idempotency and partial-failure-retry both failed exactly as expected (a
+   resolved resource became reclaimed forever); 20 others unaffected.
+
+Two of the five (#3, #4) exposed a real gap in the *first draft* of the test
+suite, not in the implementation: the existing tests exercised the pure
+validators/functions but not the exact call path a bypass would change. Both
+gaps were closed with new tests before the control was considered to have
+run — a negative control that cannot fail is not evidence.
+
+**Regression.** 22 new non-Docker tests + 6 new Docker tests. Full P6-D
+lifecycle/teardown/isolation/egress suite (35 tests) still passes unmodified.
+All 12 `docker`-marked tests in the repository pass together (27.99s), and a
+post-run Docker inspection found no leaked containers/networks beyond the
+pre-existing compose stack. Full default suite: **732 passed, 0 failed, 14
+deselected** (710 + 22 new, exactly; 14 deselected = 8 `external` + 6 new
+`docker`). No `custom_agents.division` failures reproduced, consistent with
+P7-A/P7-B's own observation of that same unrelated, uncommitted fix.
+
+**Verdict: orphan sweeping is DEMONSTRATED, not merely DESIGNED.** A real
+orphan, created and labelled exactly as ADOS itself would, was discovered,
+ownership-verified, removed, and independently confirmed gone; a resource
+that merely resembled one was proven to survive; the three real historical
+orphans this programme had been carrying since Aug 9 are gone. What remains
+true, stated plainly rather than folded into "cleanup works": nothing calls
+`sweep_once` automatically. An operator has to run it.

@@ -215,6 +215,21 @@ async def remove_quietly(kind: str, name: str, *args: str) -> List[str]:
 
 _SAFE_SUFFIX = re.compile(r"[^a-zA-Z0-9_.-]")
 
+# Docker labels attached to every resource this module creates. Existence
+# alone was the only ownership evidence before P7-C: a name matching the
+# `ados-rt-<suffix>` pattern was trusted to BE this session's network. That is
+# a loose prefix, not proof — anything sharing the pattern (a hand-run test
+# container, a name collision) would satisfy it too. `LABEL_SESSION` carries
+# the exact session_id an orphan sweeper (orchestrate/runtime/orphan_sweep.py)
+# can compare against a specific database row, and `LABEL_MANAGED_BY` marks
+# the resource as ADOS's own regardless of what created it. Neither label is
+# read by anything at request time; this boundary's own behaviour is
+# unchanged. They exist purely as after-the-fact ownership evidence.
+LABEL_SESSION = "ados.session_id"
+LABEL_MANAGED_BY = "ados.managed_by"
+LABEL_MANAGED_BY_VALUE = "ados-prime-agent"
+LABEL_COMPONENT = "ados.component"
+
 
 def _is_ip_literal(host: str) -> bool:
     import ipaddress
@@ -251,20 +266,35 @@ class EgressBoundary:
                 "address-literal endpoint cannot be permitted this way."
             )
         suffix = _SAFE_SUFFIX.sub("", session_id)[:24]
+        self.session_id = session_id
         self.destinations = list(destinations)
         self.internal_network = f"ados-rt-{suffix}"
         self.egress_network = f"ados-rt-out-{suffix}"
         self.relay_container = f"ados-relay-{suffix}"
         self.relay_ip: Optional[str] = None
 
+    def _label_args(self, component: str) -> List[str]:
+        return [
+            "--label", f"{LABEL_SESSION}={self.session_id}",
+            "--label", f"{LABEL_MANAGED_BY}={LABEL_MANAGED_BY_VALUE}",
+            "--label", f"{LABEL_COMPONENT}={component}",
+        ]
+
     async def start(self) -> None:
-        await _run("docker", "network", "create", "--internal", self.internal_network, timeout=30.0)
-        await _run("docker", "network", "create", self.egress_network, timeout=30.0)
+        await _run(
+            "docker", "network", "create", "--internal",
+            *self._label_args("network_internal"), self.internal_network, timeout=30.0,
+        )
+        await _run(
+            "docker", "network", "create",
+            *self._label_args("network_egress"), self.egress_network, timeout=30.0,
+        )
 
         args = [
             "docker", "run", "-d",
             "--name", self.relay_container,
             "--network", self.internal_network,
+            *self._label_args("relay"),
             # The relay resolves and reaches upstreams itself, so IT needs the
             # host mapping — the agent container never gets one.
             "--add-host", "host.docker.internal:host-gateway",
@@ -363,7 +393,7 @@ class EgressBoundary:
         the relay if and only if it is an allowed destination.
         """
         assert self.relay_ip, "start() first"
-        args = ["--network", self.internal_network]
+        args = ["--network", self.internal_network, *self._label_args("prime_container")]
         for entry in host_entries(self.destinations, self.relay_ip):
             args += ["--add-host", entry]
         return args

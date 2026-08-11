@@ -450,6 +450,57 @@ counts as removed — the goal is absence. A workspace is re-checked after
 `shutil.rmtree(ignore_errors=True)`, which never raises and never reports
 failure either.
 
+### ~~Nothing consumed the orphan record~~ — FIXED 2026-08-11 (P7-C)
+
+The gap the paragraph above leaves: `failure_reason` gaining `orphaned …` was
+the entire mechanism. No sweeper, no alert, no reconciliation — a container a
+timed-out `docker rm` left behind stayed behind, forever, findable only by a
+human reading that column by eye. Three real workspace directories from Aug 9
+(predating this fix) sat under the OS temp root for two days as exactly that:
+nothing anywhere knew to remove them, because nothing consumed the record that
+said they should be.
+
+**Fixed 2026-08-11 (P7-C).** `orchestrate/runtime/orphan_sweep.py` consumes
+that same, unchanged `failure_reason` signal, then recomputes the session's
+full candidate resource set **deterministically** from columns ADOS itself
+already persisted (`container_name`, `workspace_path`, and the session_id
+that names the relay and both per-session networks via `egress.py`'s own
+suffix function) — never from parsing the diagnostic string, and never from a
+caller. Two safeguards gate every deletion: a Docker resource must carry an
+`ados.session_id` label (new — `egress.py` now stamps `ados.session_id` and
+`ados.managed_by` on every container and network it creates) matching this
+exact session, and a workspace path must resolve under the real system temp
+root with the `ados-mission-` prefix. Neither a same-shaped name nor a label
+for a *different* session is enough — both were proven insufficient with real
+Docker containers occupying the exact expected name.
+
+State lives on the session's own `events` column (already a JSON audit
+trail — no migration needed): `orphan_sweep.claimed` / `.cleaned` / `.absent`
+/ `.failed` / `.refused`, so a second sweep is a safe no-op, a failed attempt
+stays retryable, and nothing is erased. Claiming uses
+`SELECT … FOR UPDATE SKIP LOCKED` on the session row (the same idiom
+`runtime_approvals.py` uses for the decision path) so two sweepers never
+double-process the same resource; the slow Docker/filesystem work itself
+happens with no transaction open, bounded by an explicit claim lease
+(default 300s) rather than an open-ended hold.
+
+**Explicitly not automatic.** `scripts/sweep_orphans.py` is a manual command,
+not a scheduled job — P7-C was scoped to detection-and-safe-removal, not
+resume/heartbeats/scheduling. An operator who never runs it is exactly as
+covered as before; what changed is that running it is now safe, bounded, and
+correct rather than nonexistent.
+
+The three real Aug 9 workspace directories were independently proven
+ADOS-owned (exact `workspace_path` match on a real row, zero corresponding
+Docker resources anywhere, two days old) and removed through the same
+reviewed `_process_workspace` code path, then confirmed gone by a fresh
+filesystem scan. Their owning `runtime_sessions` rows are pre-P6-D-fix
+fossils stuck at `state='running'` — the general sweeper correctly, safely
+refuses them (only terminal-state sessions are ever claimed), so this was a
+deliberate one-time manual exception, not a rule change. Their DB state was
+left untouched: deciding what a stuck `running` row *means* is a lifecycle
+question P7-C did not take on.
+
 ### Two concurrent sessions cannot reach each other — measured 2026-08-11
 
 Per-session networks were the design from P5, but with only one boundary ever
