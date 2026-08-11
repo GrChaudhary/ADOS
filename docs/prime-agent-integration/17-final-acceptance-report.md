@@ -145,6 +145,23 @@ token → `401`; auditor → `403`; second approval → `409`. **pending → app
   (exact `workspace_path` match, zero corresponding Docker resources
   anywhere) and removed; a fresh filesystem scan afterward found none. See
   [17-final-acceptance-report.md §P7-C](#p7-c-orphan-sweeping-and-safe-resource-cleanup-2026-08-11).
+* **P7-D** — four operational hardening pieces, each against real state: (1)
+  a real Docker teardown failure was injected (a genuine failing `docker
+  network rm`), the OTHER resources were independently confirmed removed for
+  real in the same pass, the survivor was independently confirmed still
+  present, then `orphan_sweep.py` — unmodified — found and removed it,
+  independently reconfirmed gone; (2) a session row shaped exactly like the
+  three real Aug 9 fossils (non-terminal, token already expired) was
+  reconciled and became sweepable through the sweeper's own existing,
+  unmodified claim query; (3) token expiry was proven against the real,
+  separate gateway process over a real HTTP/MCP connection — valid before
+  expiry, refused after, no ServiceNow or other external write; (4) the
+  build-identity drift guard wired into the real mission-creation path
+  stopped a real mission from starting a real container when the process's
+  frozen identity did not match the repository — confirmed by the negative
+  control alone catching a real container/network/relay actually being
+  created when the guard was removed. See
+  [17-final-acceptance-report.md §P7-D](#p7-d-operational-hardening-2026-08-11).
 
 ## 4. TESTED (mechanism proven, live path did not exercise it)
 
@@ -162,23 +179,19 @@ token → `401`; auditor → `403`; second approval → `409`. **pending → app
 
 ## 5. DESIGNED / PARTIAL
 
-* **Token expiry under a long real mission.** The lifetime rule is implemented
-  and unit-tested; no live run has yet outlived its own token or come close to
-  the 300s grace.
 * **Rejection and approval timeout** as live events.
-* **Orphan sweep invocation.** The sweeper (`orchestrate/runtime/orphan_sweep.py`,
-  `scripts/sweep_orphans.py`) is explicit and manually invoked, by design — no
-  scheduler, cron, or background task runs it automatically. An operator who
-  never runs it accumulates orphan records exactly as before P7-C; the gap
-  closed is that a sweep, once run, is safe, bounded, and correct — not that
-  cleanup now happens on its own.
+* **Reconciliation's NULL-expiry boundary.** The three real Aug 9 rows
+  predate P6-D and were never given a token expiry at all, so P7-D's
+  reconciliation (correctly) never touches them — there is no deterministic
+  proof available for that shape, and it does not grow (P6-D guarantees no
+  new row can ever be NULL again). Their bookkeeping stays stale forever;
+  only their leaked bytes were ever reconciled (P7-C, by hand).
 
 ## 6. NOT BUILT
 
 Session resume after an ADOS restart; heartbeats; scheduled or recurring
-missions; subagents; agent-to-agent messaging; multi-session missions;
-automatic/scheduled orphan reconciliation (the sweeper itself is built —
-see §3 — but nothing calls it without a human or a cron entry choosing to).
+missions; subagents; agent-to-agent messaging; multi-session missions; a
+second reconciliation path for the pre-P6-D NULL-expiry row shape (see §5).
 
 ## 7. OPEN DEFECTS AND LIMITATIONS
 
@@ -259,6 +272,8 @@ see §3 — but nothing calls it without a human or a cron entry choosing to).
 | `49f2156` | P6-C — 42 regression tests for refusals nothing had exercised; 10 negative controls | tests only |
 | `96b9447` | P6-D — token expiry + failure-safe terminal state + teardown resilience; two live concurrent sessions | **live** (isolation) + tests (lifecycle) |
 | `30b7977` | P7-B — gateway build identity (git commit + dirty, `/healthz`), stale-gateway detection | **live** (real gateway restart + real stale check) + tests (13) |
+| `74542bf` | P7-C — orphan sweeper: ownership labels, claim/process/finalize, real Aug 9 cleanup | **live** (6 real-Docker tests + 3 real orphans removed) + tests (22) |
+| `b115f4d` | P7-D — automatic reconcile+sweep, drift guard on the mission path, live token expiry, real teardown-failure recovery | **live** (4 exercises, see §P7-D) + tests (15) |
 
 ---
 
@@ -274,17 +289,24 @@ executes through one choke point, writes a durable audit row, and stamps
 provenance that resolves back to it. Acceptance derives from those rows and from
 independently re-read external records — never from what the agent said. Three
 separate live runs demonstrate that (P7-A brings this to four), and 19 negative
-controls show the guards are load-bearing rather than decorative (P7-B and P7-C
-add 7 more against real Docker/process state, 26 total).
+controls show the guards are load-bearing rather than decorative (P7-B, P7-C,
+and P7-D add 12 more against real Docker/process state, 31 total).
 
 What that is not: a system anyone should point at production traffic. It runs
-single-session missions in a single process with no resume, no heartbeats and no
-automatic orphan reconciliation — cleanup now works and is proven against a real
-daemon, but only when an operator explicitly runs it; its approval model
-occupies a kernel cell for the duration of a human decision; and, until P7-B,
-the most persistent operational hazard in the whole programme was a stale
-gateway process the system could not detect on its own — caught five times by
-hand, now mechanically detectable instead.
+single-session missions in a single process with no resume and no heartbeats.
+Two hazards that used to require a human paying attention no longer do:
+orphaned Docker/workspace resources are reconciled and swept on a fixed
+interval by default (`Settings.orphan_reconcile_interval_seconds`, an
+operator can set it to `0` and fall back to running `scripts/sweep_orphans.py`
+by hand), and a mission can no longer start against a process whose code has
+drifted from the repository since it booted — both proven against real state,
+not merely wired in (P7-D). What remains true regardless: its approval model
+still occupies a kernel cell for the duration of a human decision; a session
+whose owning process died before P6-D ever existed (the three real Aug 9 rows)
+stays stale in the database forever, by deliberate design, because there is no
+proof available that would make touching it safe; and the reconciliation and
+sweep intervals mean an abandoned resource can sit for up to that interval,
+not zero, before anything acts on it.
 
 The honest summary is that the *architecture* has been demonstrated and the
 *operations* have not.
@@ -621,3 +643,156 @@ that merely resembled one was proven to survive; the three real historical
 orphans this programme had been carrying since Aug 9 are gone. What remains
 true, stated plainly rather than folded into "cleanup works": nothing calls
 `sweep_once` automatically. An operator has to run it.
+
+*(True as of P7-C. P7-D, below, adds an automatic periodic caller — this
+section is left as the point-in-time record of what P7-C itself established.)*
+
+---
+
+## P7-D: Operational Hardening (2026-08-11)
+
+Four pieces, each closing a gap re-derived from the current code and tests
+rather than assumed from a prior report: automatic reconcile+sweep, a
+build-identity guard on the real mission path, a live token-expiry proof
+against a real separate gateway process, and a real Docker-teardown-failure
+recovery chain. Survey confirmed: no schema changes needed anywhere (session
+state and `events` already carried everything required); the only producer-
+side code touched was one call added to `PrimeRuntimeConnector._run()`.
+
+**1. Automatic reconcile + sweep.** `backend/app/main.py`'s lifespan now
+starts `_reconcile_and_sweep_orphans_periodically()` — the same
+`asyncio.sleep`-loop pattern already used for the LLM provider-settings
+refresh, calling `reconcile_abandoned_sessions()` then `sweep_once()` on
+`Settings.orphan_reconcile_interval_seconds` (default 300s; `0` disables it,
+falling back exactly to P7-C's manual-only behaviour). Neither function
+changed to support this — the periodic task is pure orchestration on top of
+already-tested primitives.
+
+**2. Reconciliation for a process failure P6-D cannot reach.**
+`orchestrate/runtime/session_reconcile.py` is new. P6-D's `finally`-block
+fix only helps if the *process* survives to run it; the three real Aug 9
+rows are proof it does not always. Reconciliation acts only on a row that is
+both non-terminal **and** already past its own `token_expires_at` —
+provably dead, not guessed at, since `token_expiry()` (unmodified) ties a
+token's lifetime to the mission's own wall-clock budget. It sets
+`state = "failed"` and stamps the identical `orphaned …` marker
+`_finalize_session` already writes; `orphan_sweep.py`'s claim query,
+**completely unmodified**, then picks the row up on its own next pass —
+proven end to end in `test_a_reconciled_session_becomes_sweepable_by_the_
+existing_unmodified_sweeper`. Rows with `token_expires_at IS NULL` (the
+pre-P6-D shape, including the three real Aug 9 rows themselves) are
+deliberately never touched — no deterministic proof exists for that case,
+and P6-D guarantees the category cannot grow. `SELECT … FOR UPDATE SKIP
+LOCKED`, the same idiom `orphan_sweep.py` and `runtime_approvals.py` use;
+proven safe under real concurrent reconciliation via `asyncio.gather`
+against five simultaneously-eligible rows (disjoint claims, zero lost).
+
+**3. Build-identity operational guard.**
+`orchestrate/runtime/build_identity.py` gains
+`verify_no_drift_since_process_start()`: compares this process's own
+`CURRENT_BUILD_REVISION`, frozen at import time, against a fresh read of the
+repository right now. A no-op when `CURRENT_BUILD_REVISION.commit ==
+"unknown"` — a production image built without `.git` has nothing to compare
+against, and refusing every mission there would be a regression, not a
+safety win. Wired into `PrimeRuntimeConnector._run()` as the first line,
+before `MissionRow`/`RuntimeSessionRow` are created and before the container
+starts — the single real, non-script mission-creation entry point in the
+codebase (confirmed by grep: every other `MissionRow(` construction site is
+a script, and `prime_agent_servicenow_e2e.py` — the one live-run script that
+did not yet have P7-B's own preflight — now does, matching
+`prime_agent_approval_e2e.py`). `PrimeRuntimeConnector.execute()`'s existing
+broad `except Exception` catches `StaleGatewayError` (a `RuntimeError`) and
+surfaces it as an ordinary `FAILED` response; no new error path was needed.
+**The negative control here is the strongest evidence in this section**: with
+the call removed, `connector.execute()` on a mismatched process did not just
+fail an assertion — it proceeded to actually start a real container, a real
+relay, and two real networks (observed twice, independently cleaned up both
+times). That is precisely the failure this guard exists to prevent.
+
+**4. Live token expiry against a real, separate gateway process.** Closes
+§5's former gap ("no live run has yet outlived its own token"). A real
+mission/session was created with a token minted via the unmodified
+`token_expiry()`; `list_capabilities` — a read-only MCP tool, no external
+effect — was called over a real `fastmcp.Client` HTTP connection to the
+actual running gateway process (not `TestClient`, not the same Python
+interpreter) and returned `status: ok`. The row's `token_expires_at` was then
+set directly into the past — disclosed plainly: waiting out the real 300s
+`TOKEN_GRACE_SECONDS` was judged impractical for this session, and the
+formula that *produces* that timestamp is unmodified and already
+exhaustively unit-tested (P6-D, 22 tests). The same real token, over the same
+real connection, then returned `status: denied, reason: "session token
+expired"`. No container was ever started for this exercise and no ServiceNow
+write occurred; the row was marked terminal immediately after.
+
+**5. Real Docker-teardown-failure recovery, end to end.**
+`test_lifecycle_failure_recovery.py`, real Docker throughout. A real
+`EgressBoundary` (real relay container, real internal/egress networks) had
+its internal network's removal made to genuinely fail (a real `docker
+network rm` intercepted to report failure — not the relay itself, since
+Docker legitimately refuses to remove a network with a container still
+attached, which would have made "one unrelated failure" untestable). The
+relay and the egress network were independently confirmed actually removed
+in the same `teardown()` call; the internal network was independently
+confirmed to genuinely still exist. That failure was then recorded on a
+session row exactly as `_finalize_session` already does today, and
+`sweep_once()` — unmodified — found and removed the surviving network,
+independently reconfirmed gone via a fresh `docker network inspect`.
+
+**Other lifecycle failures named in scope, already covered, not
+duplicated:** *runtime failure during approval* —
+`test_runtime_approval_round_trip.py::
+test_a_dead_session_s_parked_request_does_not_fire_into_the_void` already
+proves a dead session's parked request is refused (409, "nobody waiting", no
+connector call). *ADOS failure during a mission* is item 2 above.
+
+**Negative controls, 5, all restored byte-identical (`shasum -a 256` before
+and after):**
+1. The `verify_no_drift_since_process_start()` call removed from
+   `PrimeRuntimeConnector._run()` — a real container/relay/two networks were
+   actually created (see item 3); both leaks independently cleaned up.
+2. The "unknown → skip" branch disabled in
+   `verify_no_drift_since_process_start()` — exactly
+   `test_drift_check_is_a_no_op_when_the_frozen_identity_is_unknown` failed.
+3. Reconciliation's terminal-state exclusion removed — exactly
+   `test_an_already_terminal_session_is_never_touched_even_with_an_expired_token`
+   and `test_reconciliation_is_idempotent` failed.
+4. Reconciliation's expired-in-the-past check removed — exactly
+   `test_a_session_whose_token_has_not_yet_expired_is_left_alone` failed.
+5. Reconciliation's NULL-expiry exclusion removed (rewritten to explicitly
+   include NULL rows, since SQL's three-valued logic already excludes them
+   from a naive line deletion) — the code crashed formatting a `None`
+   timestamp, failing exactly
+   `test_a_session_with_no_expiry_at_all_is_left_alone`; an even more
+   emphatic confirmation the guard is load-bearing than a clean assertion
+   would have been.
+
+**Regression.** New: 4 self-drift tests (`test_build_identity.py`), 1
+connector-level drift test (`test_prime_agent.py`), 9 reconciliation tests
+(new file, `test_session_reconcile.py`), 1 real-Docker teardown-recovery test
+(new file, `test_lifecycle_failure_recovery.py`) — **15 new tests exactly**
+(14 run by default, 1 new `docker`-marked). All 13 `docker`-marked tests in
+the repository pass together; a post-run Docker inspection found no leaked
+containers/networks beyond the pre-existing compose stack. Full default
+suite: **746 passed, 0 failed, 15 deselected** (732 + 14 of the 15 new tests;
+15 deselected = 8 `external` + 7 `docker`, the 7th being this phase's new
+one). No `custom_agents.division` failures reproduced, consistent with every
+prior phase's own observation of that same unrelated, uncommitted fix —
+confirmed again, not assumed.
+
+**External side effects this phase:** none. No ServiceNow write. The live
+token-expiry exercise created and immediately terminated a mission/session
+row with no capability execution and no container. The Docker-related live
+exercises created only scratch containers/networks explicitly cleaned up
+(independently verified) within their own tests.
+
+**Verdict.** Reconciliation and the drift guard are DEMONSTRATED against
+real process/Docker state, not merely designed. Automatic scheduling is
+DEMONSTRATED as wiring (the lifespan task is real and tested for import-time
+correctness) but the interval loop itself — like its LLM-refresh sibling —
+is not independently unit-tested; its two callees are, exhaustively, on
+their own and in combination. Token expiry under a real mission moves from
+TESTED to DEMONSTRATED. The system remains **not production-ready**: single
+process, no resume, no heartbeats, an approval that holds a kernel cell
+open, and — now explicit rather than assumed — a bounded window (up to the
+reconcile interval) during which an abandoned resource is known-recoverable
+but not yet recovered.

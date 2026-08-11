@@ -59,6 +59,47 @@ async def _refresh_llm_settings_periodically() -> None:
             logger.warning("LLM settings refresh failed; keeping previous cache", exc_info=True)
 
 
+async def _reconcile_and_sweep_orphans_periodically() -> None:
+    """Reconciles sessions abandoned by a process failure (orchestrate/
+    runtime/session_reconcile.py), then sweeps whatever is now — or was
+    already — marked orphaned (orchestrate/runtime/orphan_sweep.py), on a
+    fixed interval. Reconcile first: a session an earlier ADOS process died
+    on has to become terminal-and-marked before the sweeper's own, unchanged
+    claim query will ever see it.
+
+    Same failure posture as _refresh_llm_settings_periodically: a bad pass
+    is logged and the loop keeps ticking, rather than a transient DB or
+    Docker hiccup silently ending background cleanup for the rest of the
+    process's life.
+    """
+    from orchestrate.runtime.orphan_sweep import sweep_once
+    from orchestrate.runtime.session_reconcile import reconcile_abandoned_sessions
+
+    interval = settings.orphan_reconcile_interval_seconds
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            reconciled = await reconcile_abandoned_sessions(async_session_factory)
+            if reconciled:
+                logger.info(
+                    "Reconciled sessions abandoned by a prior process failure",
+                    extra={"count": len(reconciled)},
+                )
+            report = await sweep_once(async_session_factory)
+            if report.claimed:
+                logger.info(
+                    "Orphan sweep",
+                    extra={
+                        "claimed": report.claimed, "cleaned": report.cleaned,
+                        "absent": report.absent, "failed": report.failed, "refused": report.refused,
+                    },
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Orphan reconcile/sweep pass failed; will retry next interval", exc_info=True)
+
+
 # The MCP sub-app is rebuilt for EVERY lifespan run, not once at import.
 #
 # FastMCP's StreamableHTTPSessionManager refuses to .run() twice on the same
@@ -207,6 +248,19 @@ async def lifespan(app: FastAPI):
         else None
     )
 
+    # Reconciles sessions abandoned by a prior process failure, then sweeps
+    # whatever is (now, or already) marked orphaned — see
+    # orchestrate/runtime/session_reconcile.py and orphan_sweep.py for the
+    # safety argument each guard makes on its own. scripts/sweep_orphans.py
+    # remains available for an operator who wants to run either by hand or
+    # from their own cron instead; this is purely additive automation on top
+    # of the same, unmodified mechanisms.
+    app.state.orphan_reconcile_task = (
+        asyncio.create_task(_reconcile_and_sweep_orphans_periodically())
+        if settings.orphan_reconcile_interval_seconds > 0
+        else None
+    )
+
     # The MCP capability gateway is a mounted ASGI sub-app with its own
     # session manager, and that manager only starts if its lifespan runs.
     # Mounting alone is NOT enough — a mounted app's lifespan is not invoked
@@ -224,6 +278,8 @@ async def lifespan(app: FastAPI):
 
     if getattr(app.state, "llm_settings_refresh_task", None):
         app.state.llm_settings_refresh_task.cancel()
+    if getattr(app.state, "orphan_reconcile_task", None):
+        app.state.orphan_reconcile_task.cancel()
     if hasattr(app.state, "obsidian_listener_task") and app.state.obsidian_listener_task:
         app.state.obsidian_listener_task.cancel()
     if hasattr(app.state, "obsidian_listener") and app.state.obsidian_listener:
@@ -282,3 +338,5 @@ if _FRONTEND_DIR.exists():
 # /api/v1 routers deliberately: it carries opaque per-session runtime tokens,
 # not user JWTs, so it must not sit behind get_current_user.
 app.mount("/mcp", _mcp_delegator)
+# Reload trigger: agency agents registry updated
+

@@ -154,11 +154,24 @@ class PrimeRuntimeConnector(Connector):
         from db.models.mission import MissionRow, RuntimeSessionRow
         from backend.app.mcp_gateway import hash_token
         from orchestrate.runtime.base import AgentSessionSpec
+        from orchestrate.runtime.build_identity import verify_no_drift_since_process_start
         from orchestrate.runtime.prime import (
             PrimeAgentRuntime,
             mint_session_token,
             token_expiry,
         )
+
+        # First action, before any row is created: this process's own build
+        # identity, frozen at import time, must still match what the
+        # repository holds right now. `uvicorn` runs without `--reload`, so a
+        # commit landing after this process started would otherwise run
+        # under stale code for the whole lifetime of the mission this call is
+        # about to create — including any governed capability it goes on to
+        # request. See orchestrate/runtime/build_identity.py. Raises
+        # StaleGatewayError (a RuntimeError), caught by execute()'s existing
+        # broad except and surfaced as a normal FAILED response — no new
+        # error-handling path needed.
+        verify_no_drift_since_process_start()
 
         wall_clock = float(
             call.input.get("max_wall_clock_seconds", DEFAULT_WALL_CLOCK_SECONDS)

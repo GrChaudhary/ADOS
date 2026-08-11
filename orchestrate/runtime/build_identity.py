@@ -136,6 +136,36 @@ def verify_build_matches(expected: BuildRevision, actual: BuildRevision) -> None
     )
 
 
+def verify_no_drift_since_process_start(repo_root: Path = REPO_ROOT) -> None:
+    """The operational form of the P7-B check — not a caller comparing a
+    remote gateway against an expected revision, but this same process
+    checking itself right before it is about to do something with a real
+    external effect (start a mission, which may go on to execute a governed
+    capability).
+
+    `CURRENT_BUILD_REVISION` was frozen at import time. If the repository has
+    moved since — a commit landed, a checkout happened — while this process
+    kept running on `uvicorn` without `--reload`, this process is now stale
+    relative to its own source tree, and a mission started from here would
+    run under code nobody currently believes is what is deployed. Refusing
+    here happens before `MissionRow`/`RuntimeSessionRow` are created, before
+    the container starts, before any capability request can reach a
+    connector — i.e. before any external effect.
+
+    A no-op when `CURRENT_BUILD_REVISION.commit == "unknown"` — a production
+    image built without `.git` (see the Dockerfile's `.dockerignore`) has
+    nothing to compare against, and refusing every mission in that
+    environment would be a functional regression this check has no business
+    causing. This is exactly the environment P7-B's own `.dockerignore`
+    finding already described; nothing here changes that trade-off, only
+    reuses it.
+    """
+    if CURRENT_BUILD_REVISION.commit == "unknown":
+        return
+    current_repo_state = compute_build_revision(repo_root, source="repository-now")
+    verify_build_matches(current_repo_state, CURRENT_BUILD_REVISION)
+
+
 def fetch_gateway_build_revision(
     base_url: str, *, timeout: float = 5.0, client: Optional[httpx.Client] = None
 ) -> BuildRevision:

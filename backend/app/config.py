@@ -57,6 +57,24 @@ class Settings(BaseSettings):
     # push already covers them).
     llm_settings_refresh_seconds: int = 30
 
+    # How often each process reconciles abandoned runtime sessions and sweeps
+    # their orphaned resources (orchestrate/runtime/session_reconcile.py,
+    # orchestrate/runtime/orphan_sweep.py).
+    #
+    # P6-D made a session's terminal state failure-safe against an exception
+    # inside the process serving it; it cannot help against the process
+    # itself dying (SIGKILL, an OOM kill, a restart mid-mission) — three real
+    # sessions from Aug 9 were exactly that, stuck at `running` forever until
+    # reconciled by hand once. Both passes are safe to run unattended: each
+    # only ever acts on a resource it can independently prove is either
+    # already provably dead (an expired token) or already ADOS-owned (a
+    # matching `ados.session_id` label / an exact recorded workspace path) —
+    # see those modules' own docstrings for the safety argument in full.
+    #
+    # Set to 0 to disable (an operator who prefers scripts/sweep_orphans.py
+    # run by hand, or from their own cron, loses nothing by turning this off).
+    orphan_reconcile_interval_seconds: int = 300
+
     # Observability (backend/app/observability.py). JSON is right for a log
     # shipper; set log_json=false locally when you'd rather read it yourself.
     log_level: str = "INFO"

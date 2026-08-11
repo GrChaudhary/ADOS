@@ -64,8 +64,10 @@ from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRo
 from integrations.connectors.servicenow import ServiceNowConnector
 from orchestrate.runtime.acceptance import evaluate_mission
 from orchestrate.runtime.base import AgentSessionSpec
+from orchestrate.runtime.build_identity import REPO_ROOT, verify_gateway_matches_source
 from orchestrate.runtime.prime import PrimeAgentRuntime, mint_session_token, token_expiry
 
+ADOS_HTTP = "http://127.0.0.1:8077"
 MCP_URL = "http://host.docker.internal:8077/mcp/"
 MARKER = "[ADOS PRIME-AGENT INTEGRATION TEST]"
 REQUIRED = ["FetchIncidentEvidence", "NotifyITHelpdesk"]
@@ -217,6 +219,13 @@ def _objective(marker: str) -> str:
 
 async def main() -> int:
     started = time.time()
+
+    # First, before anything else: is the running gateway actually serving
+    # this source tree? See scripts/prime_agent_approval_e2e.py's identical
+    # preflight (P7-B) and orchestrate/runtime/build_identity.py.
+    actual_build = verify_gateway_matches_source(ADOS_HTTP, REPO_ROOT)
+    print(f"[preflight] gateway build verified: {actual_build.label} (matches expected source)")
+
     connector = ServiceNowConnector()
     await _preflight(connector)
 
@@ -569,8 +578,13 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
+    from orchestrate.runtime.build_identity import StaleGatewayError
+
     try:
         raise SystemExit(asyncio.run(main()))
+    except StaleGatewayError as exc:
+        print(f"\n*** PREFLIGHT FAILED (stale gateway): {exc}", file=sys.stderr)
+        raise SystemExit(1)
     except RunFailed as exc:
         print(f"\n*** RUN FAILED: {exc}", file=sys.stderr)
         raise SystemExit(1)

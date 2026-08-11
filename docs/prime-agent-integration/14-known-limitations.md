@@ -484,11 +484,14 @@ double-process the same resource; the slow Docker/filesystem work itself
 happens with no transaction open, bounded by an explicit claim lease
 (default 300s) rather than an open-ended hold.
 
-**Explicitly not automatic.** `scripts/sweep_orphans.py` is a manual command,
-not a scheduled job — P7-C was scoped to detection-and-safe-removal, not
-resume/heartbeats/scheduling. An operator who never runs it is exactly as
-covered as before; what changed is that running it is now safe, bounded, and
-correct rather than nonexistent.
+**Was explicitly not automatic in P7-C; made automatic in P7-D.**
+`scripts/sweep_orphans.py` remains available as a manual command, but
+`backend/app/main.py`'s lifespan now also runs reconciliation and a sweep on
+a fixed interval (`Settings.orphan_reconcile_interval_seconds`, default 300s,
+`0` disables it) — the same periodic-task pattern already used for the LLM
+provider-settings refresh. Reconciliation runs first, then the sweep, each
+pass logged only when it actually did something. Set to `0`, behaviour is
+exactly P7-C's: nothing runs unless an operator invokes the script by hand.
 
 The three real Aug 9 workspace directories were independently proven
 ADOS-owned (exact `workspace_path` match on a real row, zero corresponding
@@ -500,6 +503,32 @@ refuses them (only terminal-state sessions are ever claimed), so this was a
 deliberate one-time manual exception, not a rule change. Their DB state was
 left untouched: deciding what a stuck `running` row *means* is a lifecycle
 question P7-C did not take on.
+
+### ~~Nothing reconciled a session an ADOS process failure abandoned~~ — FIXED 2026-08-11 (P7-D)
+
+The gap the paragraph above names directly: P6-D's failure-safe terminal
+state only runs if the *process* survives to reach its own `finally`. It
+cannot help against the process itself dying, which is exactly how the three
+Aug 9 rows got stuck at `state='running'` forever — nothing was left alive to
+close them.
+
+**Fixed 2026-08-11 (P7-D).** `orchestrate/runtime/session_reconcile.py`
+reconciles a session — and only reconciles it — once its own credential is
+already, provably unusable: `token_expires_at IS NOT NULL AND < now()`.
+Because `token_expiry()` ties a token's lifetime to
+`max_wall_clock_seconds + TOKEN_GRACE_SECONDS`, a genuinely still-running
+mission cannot yet have an expired token; a row that is both non-terminal and
+past its own expiry is not a guess. Reconciliation only ever sets
+`state = "failed"` and stamps the same `orphaned …` marker
+`_finalize_session` already writes — `orphan_sweep.py` is completely
+unmodified and picks the row up on its own next pass. Rows with
+`token_expires_at IS NULL` (the pre-P6-D shape) are deliberately still left
+alone — there is no deterministic proof available for those, and P6-D
+guarantees no new row can ever be NULL again, so the category cannot grow.
+The three real Aug 9 rows are exactly that shape and remain untouched by this
+mechanism; their leaked bytes were already reconciled by hand in P7-C, and
+what remains — stale bookkeeping on three specific rows, not a growing class
+of them — was judged not worth a second, separate mechanism.
 
 ### Two concurrent sessions cannot reach each other — measured 2026-08-11
 

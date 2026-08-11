@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from orchestrate.runtime import build_identity
 from orchestrate.runtime.build_identity import (
     REPO_ROOT,
     CURRENT_BUILD_REVISION,
@@ -28,6 +29,7 @@ from orchestrate.runtime.build_identity import (
     fetch_gateway_build_revision,
     verify_build_matches,
     verify_gateway_matches_source,
+    verify_no_drift_since_process_start,
 )
 
 
@@ -202,3 +204,53 @@ def test_verify_gateway_matches_source_fails_against_a_different_real_checkout(
 
     with pytest.raises(StaleGatewayError):
         verify_gateway_matches_source("http://testserver", dir_b, client=client)
+
+
+# --- P7-D: the operational (self) drift guard --------------------------------
+
+
+def test_no_drift_is_silent_when_the_repo_still_matches_the_frozen_identity(monkeypatch):
+    same = build_identity.BuildRevision(commit="a" * 40, dirty=False, source="test-frozen")
+    monkeypatch.setattr(build_identity, "CURRENT_BUILD_REVISION", same)
+    monkeypatch.setattr(
+        build_identity, "compute_build_revision",
+        lambda repo_root, source=None: build_identity.BuildRevision(commit="a" * 40, dirty=False, source="test-repo-now"),
+    )
+    verify_no_drift_since_process_start()  # must not raise
+
+
+def test_drift_since_process_start_raises(monkeypatch):
+    frozen = build_identity.BuildRevision(commit="a" * 40, dirty=False, source="test-frozen")
+    monkeypatch.setattr(build_identity, "CURRENT_BUILD_REVISION", frozen)
+    monkeypatch.setattr(
+        build_identity, "compute_build_revision",
+        lambda repo_root, source=None: build_identity.BuildRevision(commit="b" * 40, dirty=False, source="test-repo-now"),
+    )
+    with pytest.raises(StaleGatewayError) as excinfo:
+        verify_no_drift_since_process_start()
+    message = str(excinfo.value)
+    assert "a" * 40 in message
+    assert "b" * 40 in message
+
+
+def test_drift_check_is_a_no_op_when_the_frozen_identity_is_unknown(monkeypatch):
+    """A production image built without .git (see the Dockerfile's
+    .dockerignore) freezes CURRENT_BUILD_REVISION as "unknown" at import
+    time. Refusing every mission there would be a functional regression,
+    not a safety win — there is nothing to compare against."""
+    unknown = build_identity.BuildRevision(commit="unknown", dirty=False, source="test-no-git")
+    monkeypatch.setattr(build_identity, "CURRENT_BUILD_REVISION", unknown)
+
+    def _must_not_be_called(repo_root, source=None):
+        raise AssertionError("compute_build_revision must not be called when the frozen identity is unknown")
+
+    monkeypatch.setattr(build_identity, "compute_build_revision", _must_not_be_called)
+    verify_no_drift_since_process_start()  # must not raise, must not shell out to git at all
+
+
+def test_drift_check_against_the_real_repository_passes_right_now():
+    """No mocking: this process's own CURRENT_BUILD_REVISION, checked against
+    the real repository state at the moment this test runs. Passes as long
+    as nothing has been committed since this test process started — exactly
+    the invariant the guard exists to protect in production."""
+    verify_no_drift_since_process_start(REPO_ROOT)  # must not raise

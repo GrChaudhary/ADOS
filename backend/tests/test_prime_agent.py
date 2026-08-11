@@ -111,6 +111,42 @@ async def test_a_call_without_a_prompt_is_rejected_before_starting_a_container()
     assert "requires a 'prompt'" in (response.error or "")
 
 
+# --- build-identity drift guard (P7-D) ---------------------------------------
+
+
+async def test_a_stale_process_refuses_the_mission_before_creating_any_row(monkeypatch):
+    """The operational form of P7-B's check: if this process's own frozen
+    build identity no longer matches what the repository holds, the mission
+    must never be created at all — not started and then failed, never
+    created, which is what actually guarantees no external effect."""
+    import uuid as _uuid
+
+    from orchestrate.runtime import build_identity
+    from sqlalchemy import func, select
+
+    from db.engine import async_session_factory
+    from db.models.mission import MissionRow
+
+    fake_stale = build_identity.BuildRevision(
+        commit="0" * 40, dirty=False, source="test-simulated-stale-process",
+    )
+    monkeypatch.setattr(build_identity, "CURRENT_BUILD_REVISION", fake_stale)
+
+    async with async_session_factory() as db:
+        before = (await db.execute(select(func.count()).select_from(MissionRow))).scalar_one()
+
+    marker = f"drift-guard-test-{_uuid.uuid4()}"
+    connector = PrimeRuntimeConnector()
+    response = await connector.execute(_call(prompt=marker, domain="it"))
+
+    assert response.status is CallStatus.FAILED
+    assert "StaleGatewayError" in (response.error or "")
+
+    async with async_session_factory() as db:
+        after = (await db.execute(select(func.count()).select_from(MissionRow))).scalar_one()
+    assert after == before, "a mission row was created despite the build-identity mismatch"
+
+
 # --- what counts as success --------------------------------------------------
 
 def test_a_real_run_succeeds_and_returns_the_answer_as_data():
