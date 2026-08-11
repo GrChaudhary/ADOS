@@ -600,8 +600,8 @@ request could return to an apparently-executable state — a real,
 demonstrated path to a silent duplicate.
 
 **Baseline:** `d4faf37` (HEAD at the start of P8/P9), plus `3813ced` (the P8
-report commit). **P9 commit:** see the final P9 report delivered alongside
-this document for the exact hash — this file is updated in the same commit.
+report commit). **P9 commit:** `6e5ef45` — "P9: external side-effect /
+exactly-once hardening."
 
 ### What changed
 
