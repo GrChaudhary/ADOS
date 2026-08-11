@@ -65,6 +65,7 @@ from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRo
 from integrations.connectors.servicenow import ServiceNowConnector
 from orchestrate.runtime.acceptance import evaluate_mission
 from orchestrate.runtime.base import AgentSessionSpec
+from orchestrate.runtime.build_identity import REPO_ROOT, StaleGatewayError, verify_gateway_matches_source
 from orchestrate.runtime.prime import PrimeAgentRuntime, mint_session_token, token_expiry
 
 ADOS_HTTP = "http://127.0.0.1:8077"
@@ -296,6 +297,17 @@ async def _approver(mission_id: uuid.UUID, marker: str, runtime_token: str) -> D
 
 async def main() -> int:
     started = time.time()
+
+    # Build-identity preflight, first — before anything else, including the
+    # ServiceNow config check below, so a stale gateway is caught before any
+    # state is created, not discovered afterward the way it was every time
+    # before this existed (see docs/prime-agent-integration/
+    # 14-known-limitations.md, "a stale gateway process"). Deliberately no
+    # try/except around this: StaleGatewayError should abort the script with
+    # its own diagnostic, not be swallowed into a RunFailed here.
+    actual_build = verify_gateway_matches_source(ADOS_HTTP, REPO_ROOT)
+    print(f"[preflight] gateway build verified: {actual_build.label} (matches expected source)")
+
     connector = ServiceNowConnector()
     if not connector.is_configured():
         raise RunFailed("ServiceNow is not configured; this run must not fall back to console")
@@ -550,6 +562,13 @@ async def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(asyncio.run(main()))
+    except StaleGatewayError as exc:
+        # Distinct from RunFailed on purpose: this is a precondition the run
+        # never got to attempt, not a demonstration that ran and failed to
+        # demonstrate what it claims. No mission, no session, no external
+        # write happened.
+        print(f"\n*** PREFLIGHT FAILED (stale gateway): {exc}", file=sys.stderr)
+        raise SystemExit(1)
     except RunFailed as exc:
         print(f"\n*** RUN FAILED: {exc}", file=sys.stderr)
         raise SystemExit(1)

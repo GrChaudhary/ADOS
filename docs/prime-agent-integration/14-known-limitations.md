@@ -264,7 +264,7 @@ drives the real `request_capability` gateway entry point against a mocked
 ServiceNow, extracts the id from the posted ticket body, and resolves it back to
 the row — plus a structural guard that the argument stays required.
 
-### ~~A change_request carried no canonical request id at all~~ — FIXED 2026-08-11, not yet live-verified
+### ~~A change_request carried no canonical request id at all~~ — FIXED and LIVE-VERIFIED 2026-08-11
 
 The fix above threaded the right id through the gateway, and P6-A confirmed it
 end-to-end on INC0010028. It did not reach `CreateChangeRequest`, and the P6-B
@@ -305,10 +305,30 @@ the de-duplication guard skips stamping when a request id is already present;
 a test feeding it just any id would pass against a guard that skipped on *any*
 id, which would let a forgery suppress the real block entirely.
 
-**Not yet live-verified.** No new external record was created to confirm this
-against a real instance — deliberately, since doing so would mean raising a
-ticket purely to re-prove a path P6-A already demonstrated. The next external
-run will show it as `PRESENT`; until then this is TESTED, not DEMONSTRATED.
+**Live-verified 2026-08-11 (P7-A).** A real Tier 2 `CreateChangeRequest`
+mission — container `ados-prime-68691b58-96e`, mission `7e6004ec-f687-4efe-
+a38e-b74f58ba929b`, request `df6538b2-a3ec-4a4f-8258-b6e483650503`, approved by
+`user:sophia` — produced `CHG0030638` (`sys_id
+5a2ba04b83e28b10be487765eeaad3b2`). Read back independently, its description
+carries `Capability request: df6538b2-a3ec-4a4f-8258-b6e483650503`, which
+resolves to exactly that `capability_requests` row: same session, same
+mission, `capability=CreateChangeRequest`, `status=executed`,
+`decided_by=user:sophia`. **PRESENT**, as the fix predicted.
+
+One wrinkle, reported precisely rather than smoothed over: the *verification
+script's own* end-of-run assertion raised, because it matches its cleanup
+marker against `short_description` with a case-sensitive Python `in` check,
+while the ServiceNow-side sweep query it uses earlier in the same run performs
+a case-insensitive `LIKE`. The live model wrote `[ados PRIME-AGENT…]`
+(lowercase) instead of `[ADOS PRIME-AGENT…]` in the text it composed for the
+capability call — legal input, since nothing about capability arguments
+requires that casing — and the case-sensitive check tripped on it. This is a
+defect in `scripts/prime_agent_approval_e2e.py`, not in the provenance path
+under test; every fact this section asserts was independently re-derived
+afterward straight from Postgres and ServiceNow, not from the script's own
+narrative. Left unfixed here as out of scope for a verification pass — see
+`docs/prime-agent-integration/17-final-acceptance-report.md` §P7-A for the
+full trace.
 
 ### ~~No approval round trip yet~~ — DEMONSTRATED LIVE 2026-08-11
 
@@ -449,15 +469,43 @@ order, so it returned the relay's *upstream* address rather than its
 internal-network one, and the cross-session assertion would have passed for the
 wrong reason.
 
-### Operational: a stale gateway process has invalidated four runs
+### ~~Operational: a stale gateway process has invalidated four runs~~ — FIXED 2026-08-11 (P7-B)
 
 Not a code defect, and the most persistent hazard in this work. `uvicorn`
-without `--reload` serves the code it imported at start. Four times now a
-gateway process older than HEAD has been caught during pre-flight — twice it
-would have invalidated the run had it not been. Nothing in ADOS reports the
-commit a running gateway was started from, so the check is manual: compare the
-process start time against `git log -1`. Recorded rather than fixed, because
-the fix is a build-identity endpoint and that is a feature, not coverage.
+without `--reload` serves the code it imported at start. Five times now a
+gateway process older than HEAD was caught during pre-flight — twice it would
+have invalidated the run had it not been — and every time the check was
+manual: compare the process start time against `git log -1`.
+
+**Fixed 2026-08-11 (P7-B).** `orchestrate/runtime/build_identity.py` computes
+a build's identity once, at process import time, from real `.git` metadata on
+disk: the commit `HEAD` resolved to, plus whether tracked files differed from
+it (`dirty`) — never from an environment variable (which a deploy step could
+set to anything irrespective of what is actually checked out) and never from
+anything a caller supplies. `GET /healthz` now reports it under `build`
+(`commit`, `dirty`, `label`); a caller-supplied `commit`/`build`/`git_sha`
+query param or header has no effect — verified directly by
+`test_caller_cannot_spoof_the_reported_identity`.
+`orchestrate.runtime.build_identity.verify_gateway_matches_source(base_url,
+repo_root)` fetches what a running gateway reports, computes what the caller's
+own source tree currently resolves to, and raises `StaleGatewayError` — naming
+both sides — the instant they differ, before anything else runs.
+`scripts/prime_agent_approval_e2e.py` now calls it as the very first action in
+`main()`, ahead of the ServiceNow-configured check and every external side
+effect.
+
+Live-verified the same day: the gateway process already running (started
+12:04, predating this fix) answered `/healthz` with no `build` key at all —
+itself a correct, honest signal of staleness, since that process had never
+loaded this code. Restarted; the new process reported
+`7a40c8bf7bc8fd4320c3cfa888a32c925110394b+dirty`, matching
+`compute_build_revision()` run fresh against the working tree at that moment.
+Pointing `verify_gateway_matches_source` at a real second build — a `git
+worktree` checked out to the previous commit, `96b9447` — against that same,
+correctly-running gateway raised `StaleGatewayError` exactly as designed,
+naming `96b9447…` as expected and `7a40c8b…+dirty` as actual. See
+`docs/prime-agent-integration/17-final-acceptance-report.md` §P7-B for the
+full trace and test list.
 
 ### Single-session missions only
 
