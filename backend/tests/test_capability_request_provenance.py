@@ -40,6 +40,7 @@ from db.engine import async_session_factory
 from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
 from integrations.connectors.servicenow import ServiceNowConnector
 from integrations.hub import default_hub
+from orchestrate.runtime.prime import token_expiry
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +73,10 @@ async def _governed_session(capability: Capability) -> tuple[uuid.UUID, str]:
         token = "test-token-" + uuid.uuid4().hex
         db.add(RuntimeSessionRow(
             mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            # P10: matches the real creation path -- approval now refuses a
+            # session with no recorded token expiry (runtime_approvals.py's
+            # _confirm_token_expiry_recorded_or_409).
+            token_expires_at=token_expiry(1800.0),
         ))
         await db.commit()
         return mission.mission_id, token
@@ -251,6 +256,10 @@ async def _change_request_session() -> tuple[uuid.UUID, str]:
         token = "test-token-" + uuid.uuid4().hex
         db.add(RuntimeSessionRow(
             mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            # P10: matches the real creation path -- approval now refuses a
+            # session with no recorded token expiry (runtime_approvals.py's
+            # _confirm_token_expiry_recorded_or_409).
+            token_expires_at=token_expiry(1800.0),
         ))
         await db.commit()
         return mission.mission_id, token

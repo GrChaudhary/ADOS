@@ -50,6 +50,7 @@ from orchestrate.runtime.capability_execution import (
     STATUS_EXECUTED,
     STATUS_EXECUTING,
     STATUS_FAILED,
+    STATUS_OUTCOME_UNKNOWN,
     canonical_idempotency_key,
     outcome_status_for,
 )
@@ -252,6 +253,18 @@ async def request_capability(
                 # a human's attention span — the row is durable, the agent polls.
                 session_row.state = "waiting_approval"
                 await db.commit()
+                # P10: an operator watching the approval queue by eye already
+                # sees this; an operator watching logs (or alerting on a
+                # queue that never drains) did not, until now. Capability
+                # and tier only — never the arguments, which are agent-
+                # authored and may carry free text not meant for a log line.
+                logger.info(
+                    "Capability request parked for human approval",
+                    extra={
+                        "request_id": str(row.request_id), "capability": capability,
+                        "policy_tier": int(tier), "mission_id": str(mission.mission_id),
+                    },
+                )
                 return {
                     "status": "pending_approval",
                     "request_id": str(row.request_id),
@@ -300,6 +313,18 @@ async def request_capability(
         row.reason = None if outcome_status == STATUS_EXECUTED else result.get("error")
         row.decided_by = "policy:autonomous"
         await db.commit()
+
+    if outcome_status == STATUS_OUTCOME_UNKNOWN:
+        # P10: this is the anomaly `orchestrate/runtime/capability_reconcile.py`
+        # exists to resolve — a connector reported it could not tell whether
+        # the action happened. Durable state already carries it (row.status);
+        # this is what makes it visible without querying the database, e.g.
+        # for an alert on this exact log line. Never the arguments or the
+        # connector's raw error text, which may embed request content.
+        logger.warning(
+            "Capability execution outcome unknown — requires reconciliation",
+            extra={"request_id": str(request_id), "capability": capability},
+        )
 
     return {
         "status": outcome_status,
@@ -425,8 +450,24 @@ async def _execute_capability(
     # this gateway did, calmly, while reporting success.
     from integrations.hub import default_hub  # local import: avoids a cycle at app import time
     from contracts import CapabilityCall, GovernanceInfo
+    from orchestrate.runtime.build_identity import verify_no_drift_since_process_start
 
     try:
+        # P10: the P7-D drift guard used to run only at mission start
+        # (PrimeRuntimeConnector._run, before any container exists) — never
+        # again for the rest of that mission's life. A commit landing while
+        # a mission was already in flight was never caught for that
+        # mission's remaining capability calls, including ones that reach a
+        # real external system. This is the single choke point every
+        # capability call passes through (autonomous AND human-approval),
+        # so one call here closes that window for both. Raises
+        # StaleGatewayError (a RuntimeError), caught by the `except
+        # Exception` below exactly like every other failure constructing or
+        # executing this call — no new error shape, and importantly this
+        # runs BEFORE default_hub().invoke() below, so a stale gateway is
+        # refused before any connector, and therefore any external side
+        # effect, is ever reached.
+        verify_no_drift_since_process_start()
         call = CapabilityCall(
             capability=Capability(capability),
             # The audit row's own key — NOT a fresh uuid4. See the docstring.

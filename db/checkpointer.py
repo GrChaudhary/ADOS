@@ -75,10 +75,14 @@ async def setup_checkpointer_tables() -> None:
     """Creates the checkpointer's four tables if absent
     (checkpoints, checkpoint_blobs, checkpoint_writes, checkpoint_migrations).
 
-    Called once from main.py's lifespan. These tables are managed by the
-    library's own migration mechanism, NOT by Alembic -- a deliberate split
-    worth knowing about when reasoning about schema provenance: `alembic
-    upgrade head` alone does not fully prepare a database for this app.
+    Called from alembic/env.py's online migration path (moved there in P10,
+    away from main.py's lifespan) -- this is DDL (`CREATE TABLE IF NOT
+    EXISTS`), and the app process connects as `ados_app`, a non-superuser
+    role with no CREATE grant on the schema (revision f4a5b6c7d8e9). Only
+    whatever runs `alembic upgrade head` -- the Postgres superuser, in every
+    documented workflow -- can perform this. These tables are still managed
+    by the library's own migration mechanism, NOT by an Alembic revision --
+    that split is unchanged; only WHEN and AS WHOM this runs moved.
     Re-running is safe; it no-ops when already current.
     """
     async with checkpointer() as saver:

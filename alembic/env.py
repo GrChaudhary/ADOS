@@ -113,6 +113,22 @@ async def run_async_migrations() -> None:
 
     await connectable.dispose()
 
+    # P10: runs here, under whatever role is actually running `alembic
+    # upgrade head` (the Postgres superuser in both the docker-compose
+    # `migrate` service and the bare-.venv workflow) -- NOT from the app's
+    # own lifespan any more. The checkpointer's tables are DDL
+    # (`CREATE TABLE IF NOT EXISTS`), and the app now connects with
+    # `ados_app`, a non-superuser role with no CREATE grant on the schema
+    # (alembic revision f4a5b6c7d8e9) -- it could never have run this
+    # itself. Safe to call unconditionally: setup() no-ops once current,
+    # and every documented workflow runs `alembic upgrade head` before
+    # starting the app regardless (the rest of the schema doesn't exist
+    # without it either), so this adds no new precondition, only moves an
+    # existing one to the role that can actually satisfy it.
+    from db.checkpointer import setup_checkpointer_tables
+
+    await setup_checkpointer_tables()
+
 
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""

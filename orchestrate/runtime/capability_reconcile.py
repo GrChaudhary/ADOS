@@ -46,6 +46,7 @@ requests.py` runs both by hand, mirroring `scripts/sweep_orphans.py` exactly.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -63,6 +64,8 @@ from .capability_execution import (
     STATUS_EXECUTING,
     STATUS_OUTCOME_UNKNOWN,
 )
+
+logger = logging.getLogger("ados.capability_reconcile")
 
 DEFAULT_RECONCILE_LIMIT = 50
 
@@ -141,6 +144,12 @@ async def mark_stalled_executions_unknown(
             await db.commit()
         else:
             await db.rollback()
+
+    if stalled:
+        logger.warning(
+            "Capability executions stalled — moved to outcome_unknown",
+            extra={"count": len(stalled), "request_ids": [str(s.request_id) for s in stalled]},
+        )
 
     return stalled
 
@@ -247,5 +256,15 @@ async def reconcile_outcome_unknown(
             await db.commit()
         else:
             await db.rollback()
+
+    if outcomes:
+        resolved_count = sum(1 for o in outcomes if o.resolved)
+        logger.info(
+            "Reconciliation pass complete",
+            extra={
+                "checked": len(outcomes), "resolved": resolved_count,
+                "still_unknown": len(outcomes) - resolved_count,
+            },
+        )
 
     return outcomes

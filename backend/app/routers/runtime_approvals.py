@@ -46,7 +46,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
 from db.session import get_db_session
 from orchestrate.async_approvals import publish_approval_decision_event
-from orchestrate.runtime.capability_execution import STATUS_EXECUTED, STATUS_EXECUTING, STATUS_FAILED
+from orchestrate.runtime.capability_execution import (
+    STATUS_EXECUTED,
+    STATUS_EXECUTING,
+    STATUS_FAILED,
+    STATUS_OUTCOME_UNKNOWN,
+)
 
 from ..auth import get_current_user
 from ..mcp_gateway import _LIVE_STATES, _execute_capability
@@ -195,6 +200,39 @@ async def _live_session_or_409(
     return runtime_session
 
 
+def _confirm_token_expiry_recorded_or_409(runtime_session: RuntimeSessionRow) -> None:
+    """P10: `state` alone is not proof of liveness for a session whose token
+    was never given an expiry. Every session created by the real path
+    (integrations/connectors/prime_runtime.py) has set token_expires_at
+    unconditionally since P6-D — a NULL here means this row did not come
+    from a currently-live mission at all (a pre-P6-D fossil, or a
+    debugging tool that bypassed the real creation path; see
+    docs/prime-agent-integration/18-production-readiness-review.md §16).
+    Re-derivation during P10 found such a row's own `state` was still
+    `running` long after its process died, with parked requests sitting
+    genuinely approvable through this endpoint — a session `_live_session_
+    or_409` alone would have called "live". This does not reinterpret the
+    session row's own lifecycle meaning (state and token_expires_at are
+    both left exactly as they are); it only refuses to let APPROVAL — the
+    one action here with a real external side effect — treat "state says
+    running" as sufficient proof when the one thing that could ever have
+    made that state expire never existed.
+
+    Deliberately NOT folded into `_live_session_or_409` and NOT applied to
+    reject: rejecting has no side effect and must remain available as the
+    way to close exactly this kind of stale request — the same fossil rows
+    this check is about were closed, during P10, by rejecting them.
+    """
+    if runtime_session.token_expires_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "runtime session has no recorded token expiry and cannot be confirmed live — "
+                "refusing to approve a request that cannot be proven to have an active caller"
+            ),
+        )
+
+
 async def _release_session_if_nothing_else_pending(
     session: AsyncSession, runtime_session: RuntimeSessionRow
 ) -> None:
@@ -249,6 +287,7 @@ async def approve_capability_request(
     """
     row = await _load_pending_or_404(session, request_id)
     runtime_session = await _live_session_or_409(session, row)
+    _confirm_token_expiry_recorded_or_409(runtime_session)
 
     authorize_governance_decision(
         current_user,
@@ -317,6 +356,15 @@ async def approve_capability_request(
     row.reason = None if outcome_status == STATUS_EXECUTED else result.get("error")
     await session.commit()
     await session.refresh(row)
+
+    if outcome_status == STATUS_OUTCOME_UNKNOWN:
+        # P10: same signal as the autonomous path's own — see
+        # mcp_gateway.py's identical log line for why this needs to be
+        # visible outside the database, not just in row.status.
+        logger.warning(
+            "Capability execution outcome unknown — requires reconciliation",
+            extra={"request_id": str(row.request_id), "capability": row.capability},
+        )
 
     await publish_approval_decision_event(
         task_id=str(row.request_id),

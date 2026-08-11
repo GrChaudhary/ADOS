@@ -39,6 +39,7 @@ from db.engine import async_session_factory
 from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
 from integrations.connectors.servicenow import ServiceNowConnector
 from integrations.hub import default_hub
+from orchestrate.runtime.prime import token_expiry
 
 # NotifyITHelpdesk is tier 0 by default. A high claimed cost drives
 # assign_policy_tier to a tier that requires a human, which is the only way to
@@ -80,6 +81,11 @@ async def _mission_and_session(capability=Capability.NOTIFY_IT_HELPDESK):
         token = "tok-" + uuid.uuid4().hex
         sess = RuntimeSessionRow(
             mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            # P10: matches the real creation path -- every session has had
+            # a token expiry since P6-D, and approval now refuses a NULL
+            # one (backend/app/routers/runtime_approvals.py's
+            # _confirm_token_expiry_recorded_or_409).
+            token_expires_at=token_expiry(1800.0),
         )
         db.add(sess)
         await db.commit()

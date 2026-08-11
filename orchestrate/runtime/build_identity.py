@@ -35,12 +35,15 @@ it. See CURRENT_BUILD_REVISION.
 """
 from __future__ import annotations
 
+import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import httpx
+
+logger = logging.getLogger("ados.build_identity")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -126,6 +129,14 @@ def verify_build_matches(expected: BuildRevision, actual: BuildRevision) -> None
     """
     if expected.label != "unknown" and expected.label == actual.label:
         return
+    # P10: the single raise site for every drift check in this module
+    # (mission start, the capability-execution path, and an external
+    # runner comparing a remote gateway) — one log line here covers all of
+    # them. Commit labels only, never a token or any request content.
+    logger.warning(
+        "Build identity mismatch detected — refusing to proceed",
+        extra={"expected": expected.label, "actual": actual.label, "actual_source": actual.source},
+    )
     raise StaleGatewayError(
         "gateway build revision does not match the expected source revision — "
         "the running process is not serving the code under test.\n"

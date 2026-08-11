@@ -54,6 +54,7 @@ from integrations.connectors.servicenow import ServiceNowConnector
 from orchestrate.runtime.build_identity import REPO_ROOT, StaleGatewayError, verify_build_matches, compute_build_revision
 from orchestrate.runtime.capability_execution import STATUS_EXECUTED, STATUS_EXECUTING, STATUS_OUTCOME_UNKNOWN
 from orchestrate.runtime.capability_reconcile import mark_stalled_executions_unknown, reconcile_outcome_unknown
+from orchestrate.runtime.prime import token_expiry
 
 MARKER = f"[ADOS PRIME-AGENT INTEGRATION TEST] P9-{uuid.uuid4().hex[:8]}"
 TABLE = "incident"
@@ -106,6 +107,17 @@ async def _seed_mission() -> tuple:
         token = "tok-" + uuid.uuid4().hex
         sess = RuntimeSessionRow(
             mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            # P10: this script used to leave token_expires_at NULL, unlike
+            # its sibling e2e scripts (prime_agent_servicenow_e2e.py,
+            # prime_agent_approval_e2e.py) — every real production session
+            # has set this since P6-D, so a NULL row this script produced
+            # was never distinguishable from a genuine pre-P6-D fossil,
+            # only discoverable by reading this file. Debugging runs of
+            # this exact script (crashed mid-iteration, by design — that is
+            # what it exists to simulate) are what actually populated the
+            # NULL-expiry rows re-derivation found in the dev database
+            # during P10. Same lifecycle as the production path now.
+            token_expires_at=token_expiry(1800.0),
         )
         db.add(sess)
         await db.commit()

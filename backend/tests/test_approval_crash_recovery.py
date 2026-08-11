@@ -42,6 +42,7 @@ from integrations.connectors.servicenow import ServiceNowConnector
 from integrations.hub import default_hub
 from orchestrate.runtime.capability_execution import STATUS_EXECUTED, STATUS_EXECUTING, STATUS_OUTCOME_UNKNOWN
 from orchestrate.runtime.capability_reconcile import mark_stalled_executions_unknown, reconcile_outcome_unknown
+from orchestrate.runtime.prime import token_expiry
 
 EXPENSIVE = {"summary": "Root cause: pool exhaustion", "_estimated_cost_usd": 300_000.0}
 
@@ -93,6 +94,11 @@ async def _mission_and_session(capability="NotifyITHelpdesk"):
         token = "tok-" + uuid.uuid4().hex
         sess = RuntimeSessionRow(
             mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            # P10: matches the real creation path (every session has had a
+            # token expiry since P6-D) — see
+            # test_null_expiry_session_cannot_authorize_approval below for
+            # the fixture that deliberately leaves this NULL.
+            token_expires_at=token_expiry(1800.0),
         )
         db.add(sess)
         await db.commit()
@@ -326,6 +332,54 @@ async def test_an_already_reconciled_executed_request_cannot_be_approved_again(_
     with pytest.raises(HTTPException) as exc:
         await _approve(request_id)
     assert exc.value.status_code == 409
+
+
+# --- P10: a NULL token expiry is not proof of a live session --------------
+
+
+async def test_a_null_expiry_session_cannot_authorize_approval(_as_runtime, monkeypatch):
+    """Re-derivation during P10 found real, non-terminal `runtime_sessions`
+    rows in the dev database with `token_expires_at IS NULL` — every
+    session the real creation path writes has set this unconditionally
+    since P6-D, so NULL means this row did not come from a currently-live
+    mission, regardless of what `state` says. Two of those rows had a
+    `pending_approval` request still sitting genuinely approvable through
+    this exact endpoint. This is the regression test for the fix, not a
+    reconciliation change — the session row itself (state, token_expires_at)
+    is untouched; only approval's own liveness check was tightened."""
+    _install_servicenow(monkeypatch, lambda r: httpx.Response(201, json={"result": {}}))
+    async with async_session_factory() as db:
+        mission = MissionRow(
+            title="p10 null-expiry fossil", objective="o", domain="it",
+            allowed_capabilities=["NotifyITHelpdesk"], status="running",
+        )
+        db.add(mission)
+        await db.flush()
+        token = "tok-" + uuid.uuid4().hex
+        sess = RuntimeSessionRow(
+            mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            # Deliberately NOT set — this is the exact fossil shape.
+        )
+        db.add(sess)
+        await db.commit()
+
+    request_id = await _park(_as_runtime, token)
+
+    with pytest.raises(HTTPException) as exc:
+        await _approve(request_id)
+    assert exc.value.status_code == 409
+    assert "token expiry" in exc.value.detail
+
+    # Reject must still work -- it is always safe (no side effect), and an
+    # operator needs some way to close a stale request tied to a fossil
+    # session without being blocked by the very check this test exists for.
+    from backend.app.routers.runtime_approvals import reject_capability_request
+
+    async with async_session_factory() as db:
+        result = await reject_capability_request(
+            request_id, _FakeRequest(), current_user=_user(), session=db, body={"reason": "cleanup"},
+        )
+    assert result["status"] == "denied"
 
 
 # --- an ordinary (non-crash) failure ends up unambiguously failed, not unknown -

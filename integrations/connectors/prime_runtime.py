@@ -203,6 +203,14 @@ class PrimeRuntimeConnector(Connector):
             db.add(session)
             await db.commit()
             mission_id, session_id = mission.mission_id, session.session_id
+            # P10: the only place a mission's own start was visible before
+            # this was a row in the database — nothing an operator watching
+            # structured logs would see. Domain only, never the objective
+            # (agent/caller-authored free text) or the token.
+            logger.info(
+                "Prime Agent mission started",
+                extra={"mission_id": str(mission_id), "session_id": str(session_id), "domain": str(call.input.get("domain", "general"))},
+            )
             objective = mission.objective
 
         spec = AgentSessionSpec(

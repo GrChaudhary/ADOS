@@ -57,3 +57,6 @@ agent/
 
 # Playwright run state / artifacts (build output, not source)
 frontend-next/test-results/
+
+# Postgres dumps (scripts/backup_postgres.sh) -- real data, not source
+backups/

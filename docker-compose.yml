@@ -26,10 +26,20 @@
 # 2026-08-04.
 #
 # This stack is for local development and evaluation. It is NOT a
-# production deployment: the Postgres role is a superuser (which voids the
-# append-only guarantee on the approval ledger), there is no TLS, and the
-# backend mounts the host Docker socket — see the note on that service.
-# docs/PRODUCTIZATION.md tracks the gap.
+# production deployment: there is no TLS, and the backend mounts the host
+# Docker socket — see the note on that service. docs/PRODUCTIZATION.md
+# tracks the gap.
+#
+# P10: the backend used to connect as `ados`, the same Postgres superuser
+# `migrate` uses to run DDL — which voided the append-only guarantee on the
+# approval ledger (superusers bypass every ACL/REVOKE). The backend service
+# below now connects as `ados_app`, a non-superuser role alembic revision
+# f4a5b6c7d8e9 provisions with exactly the DML the application needs and
+# none of the schema/DDL rights only migrations should have. The bare-.venv
+# workflow on line 14-15 still defaults to the `ados` superuser (backend/
+# app/config.py's own default) unless DATABASE_URL is exported to point at
+# `ados_app` instead — a deliberate simplicity trade-off for that path, not
+# an oversight; the docker-compose path is what actually ships this fix.
 services:
   postgres:
     image: postgres:16-alpine
@@ -87,7 +97,13 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql+asyncpg://ados:ados@postgres:5432/ados
+      # `ados_app`, NOT `ados` — the migrate service above still connects
+      # as the superuser (DDL requires it); the running application
+      # connects as the least-privilege role `migrate`'s own alembic run
+      # provisions (revision f4a5b6c7d8e9). See that migration and
+      # backend/tests/test_database_role_privileges.py for what this
+      # role can and cannot do.
+      DATABASE_URL: postgresql+asyncpg://ados_app:ados_app@postgres:5432/ados
       # "memory" (default), "redis", or "kafka". Kafka is up in this stack,
       # so switching is just: EVENT_BUS_BACKEND=kafka docker compose up
       EVENT_BUS_BACKEND: ${EVENT_BUS_BACKEND:-memory}
@@ -108,9 +124,22 @@ services:
       # LLM providers. Without at least one key the MOA and both LangGraph
       # agents report "not configured" and refuse to run rather than guess.
       NEMOTRON_API_KEY: ${NEMOTRON_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-}
+      # Ollama. `_configured("ollama")` in knowledge/local_llm_client.py reads
+      # LOCAL_LLM_ENABLED straight from os.environ, so a value sitting in .env
+      # that this block does not forward means the Settings page reports "Not
+      # Configured" no matter how healthy the local server is.
+      LOCAL_LLM_ENABLED: ${LOCAL_LLM_ENABLED:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen3:4b}
+      # Pinned rather than passed through from .env on purpose: inside a
+      # container `localhost` is the container, so the .env value that is
+      # correct for a backend run on the host (http://localhost:11434) resolves
+      # here to a port nothing is listening on. Measured from inside this
+      # container: localhost -> ECONNREFUSED, host.docker.internal -> 2 models.
+      LOCAL_LLM_URL: http://host.docker.internal:11434
       # ServiceNow — the one connector wired to a real external system.
       # Without these the HR offboarding actions fall back to Console and
       # only simulate. See docs/SERVICENOW_PILOT.md.

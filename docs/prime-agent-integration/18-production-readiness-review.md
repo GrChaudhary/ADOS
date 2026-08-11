@@ -60,7 +60,9 @@ concurrency paths rather than trusting the existing narrative:
    (before a container exists) but is not called anywhere in
    `mcp_gateway.py`'s capability-execution path — a commit landing while a
    mission is already in flight is not caught for that mission's remaining
-   capability calls. (§5.2, §4B) **Still open — out of P9's scope.**
+   capability calls. (§5.2, §4B) **CLOSED — P10, §16.4** (with the same
+   shipped-image caveat the original P7-B/D guard already carried — a
+   production image built without `.git` has nothing to compare against).
 5. `docs/prime-agent-integration/17-final-acceptance-report.md`'s own
    regression paragraph for P7-D miscounts the test suite: it states "8
    `external`" and "7 `docker`" deselected. Direct re-collection in this
@@ -261,6 +263,10 @@ stale gateway could cause a mission **or external side effect** to run
 against the wrong code"). Cheap to close: one call at the top of
 `_execute_capability`.
 
+**CLOSED 2026-08-12 (P10).** See §16.4. Same caveat as P7-B/D's original
+guard: a no-op inside the shipped Docker image (no `.git` in the build
+context), real for a bare-`.venv` deployment.
+
 ### 5.3 Approval holds a kernel execution open
 **MEDIUM RISK for B, LOW for A, HIGH for C.** Already measured (98.1s, 102.5s
 live) and already understood by the existing reports as a cost, not a
@@ -285,6 +291,17 @@ for all three models as designed.
 rows), correctly and deliberately left alone because no deterministic proof
 of abandonment exists for them. Building a second mechanism for a set that
 cannot grow would be effort spent on the wrong thing.
+
+**CORRECTED 2026-08-12 (P10).** This was not accurate: re-derivation from
+the live database found 31 such rows, not three, and the category was
+still growing — one of P9's own e2e scripts was creating new NULL-expiry
+rows by bypassing the real session-creation path. Two pre-existing rows
+also had `pending_approval` requests genuinely approvable through the real
+endpoint, a live exposure this section did not anticipate because it
+reasoned about the session rows' own state, not about what could still be
+done *through* them. The rows themselves remain untouched, per this
+section's original reasoning (still valid); what closed is the ability to
+approve anything through one. See §16.6 for the full account.
 
 ### 5.7 Remaining stale-session ambiguity — found in this review
 **HIGH RISK for B and C.** Not the gateway-staleness kind — a `capability_
@@ -321,15 +338,15 @@ the kind of drift that eventually gets "fixed" for the wrong reasons.
 | Token lifecycle | Real, proven live | DEMONSTRATED | Low | Medium | Already met | — | — |
 | Orphan cleanup | Automatic | DEMONSTRATED | Low | Low (cost/hygiene) | Already met | — | — |
 | Build-identity guard (mission start) | Real | DEMONSTRATED | Low | Medium | Already met | — | — |
-| Build-identity guard (capability path) | Absent | Code-verified gap | Medium-High | High for B/C | **Yes, for B/C** | One added call in `_execute_capability` | High |
+| Build-identity guard (capability path) | **DEMONSTRATED — P10, §16.4** | One added call in `_execute_capability` | Medium-High | High for B/C | Met | — | — |
 | `capability_requests` crash reconciliation | Absent | Code-verified gap | High | High for B/C | **Yes, for B/C** | Detect+flag ambiguous rows; require external re-verification before re-decision | High |
 | Approval crash → double-execution | Possible | Code-verified gap | High | High for B/C | **Yes, for B/C** | Persist "external call started" before the call, or move the write inside a compensating saga | High |
 | Idempotency-key reachability | Designed, unused in practice | Prompt-template gap, code-verified | Medium | Medium-High for B/C | **Yes, for B/C** | Auto-generate a key per `run_capability` call in the `ados` skill, or teach it in the prompt | Medium |
-| Metrics/alerting | Absent | NOT BUILT | Medium | High for B, Critical for C | **Yes, for B/C** | Minimum-viable Prometheus + `trace_id` wiring (already scoped in `docs/PRODUCTIZATION.md`) | High |
-| Postgres non-superuser role | Absent | Self-acknowledged gap | Medium | High (undermines the audit claim) | **Yes, for B/C** | Provision a least-privilege role for the app; keep superuser for migrations only | High |
+| Metrics/alerting | Absent (six log-visibility gaps closed — P10, §16.2) | NOT BUILT | Medium | High for B, Critical for C | **Yes, for B/C** | Minimum-viable Prometheus + `trace_id` wiring (already scoped in `docs/PRODUCTIZATION.md`) | High |
+| Postgres non-superuser role | **DEMONSTRATED — P10, §16.1** | Real role, real restart | Medium | High (undermines the audit claim) | Met | — | — |
 | Rate limiting / admission control | Absent | NOT BUILT | Medium | High for C, Medium for B | **Yes, for B/C** | Bound concurrent sessions; throttle per-caller | Medium |
-| Backups/restore | Absent | NOT BUILT | Medium | High for B/C | **Yes, for B/C** | Standard Postgres backup/restore procedure | Medium |
-| Session resume | Absent | NOT BUILT | High for long missions | High for B/C | Not strictly required — see §16 | Checkpoint/resume design (large) | Low (defer) |
+| Backups/restore | **DEMONSTRATED (mechanism) — P10, §16.3** | Real `pg_dump`/`pg_restore` round trip | Medium | High for B/C | Met (mechanism); retention/offsite/PITR still open, named as ops-owned | — | — |
+| Session resume | Absent | NOT BUILT | High for long missions | High for B/C | Not strictly required — see §13 | Checkpoint/resume design (large) | Low (defer) |
 | Approval architecture (kernel-held) | Works, costly | DEMONSTRATED | Low-Medium | Medium | Not required — see §7 | See §7's recommendation | Low (defer) |
 | Multi-tenancy | Absent | NOT BUILT | — | Blocker only for C | Only for C | Tenant scoping on missions/RBAC | Low (defer unless C) |
 | Docker socket exposure | Direct host mount | Confirmed | Medium | Medium-High | Recommended, not strictly blocking for A | Rootless Docker / Docker-in-Docker isolation | Medium |
@@ -509,22 +526,26 @@ verdict, per target model:
 Two changes: ~~(1) close the approval-path double-execution window (§9,
 recommendation 2 — a durable "call started" marker), since even a trusted
 internal operator can double-click or retry after a crash~~ **DONE — P9,
-§15**; (2) fix the Postgres role, since "the audit ledger is append-only" is
-a claim the product makes, not an implementation detail an internal
-deployment gets to quietly skip. Item 2 remains open — P9 was scoped to
-external-side-effect correctness only.
+§15**; ~~(2) fix the Postgres role, since "the audit ledger is append-only"
+is a claim the product makes, not an implementation detail an internal
+deployment gets to quietly skip~~ **DONE — P10, §16.1**. Model A's own
+blocker list is now empty.
 
 **→ Ready for production (model B):** model A's two items, plus: ~~(3) the
 `capability_requests` reconciliation/flagging pass (§9, recommendation
-1)~~ **DONE — P9, §15**; (4) the build-identity guard extended onto the
-capability-execution path (§5.2) — still open; (5) minimum-viable
+1)~~ **DONE — P9, §15**; ~~(4) the build-identity guard extended onto the
+capability-execution path (§5.2)~~ **DONE — P10, §16.4**; (5) minimum-viable
 observability — structured logs already exist, so this is specifically
-metrics + alerting, not a rebuild — still open; (6) backups — still open.
+metrics + alerting, not a rebuild — **six named log-visibility gaps closed
+(P10, §16.2); metrics/alerting itself still open**; ~~(6) backups~~
+**mechanism DEMONSTRATED — P10, §16.3** (retention/offsite/PITR remain an
+operational decision outside this repository, named not invented).
 **Resume/heartbeats/subagents/scheduling are explicitly not on this list.**
 They are real future functionality, not blockers: nothing in B's definition
 requires a crashed mission to continue rather than restart, only that a
 crash not silently corrupt or duplicate the audit trail — which is what
-items 1 and 3 actually fixed.
+items 1 and 3 actually fixed. Model B's remaining blocker is metrics/
+alerting alone.
 
 **→ Ready for a distributed/multi-tenant platform (model C):** everything
 above, plus admission control/rate limiting, a multi-host-aware ownership
@@ -586,9 +607,12 @@ For **model B or C**, this is a genuine blocker, not a hardening
 nice-to-have, and should be treated as such before any unattended
 production traffic touches it.
 
-*(True as of P8. P9, appended below as §15, closes the double-execution
-finding specifically — this section is left as the point-in-time record of
-what P8 itself established; §15 carries the updated verdict.)*
+*(True as of P8. P9 (§15) closes the double-execution finding specifically;
+P10 (§16) closes the Postgres role, the capability-path build-identity gap,
+backups, six named observability gaps, and a NULL-expiry approval exposure
+P9's own re-derivation had not actually tested. This section is left as
+the point-in-time record of what P8 itself established — §16 carries the
+final, current verdict.)*
 
 ---
 
@@ -737,3 +761,249 @@ set is now down to one item (the Postgres role). For **model B/C**, this
 was the load-bearing blocker; what remains is real but no longer of the
 same severity — see the final P9 report for the complete, explicit
 category-by-category answer.
+
+---
+
+## 16. P10 update: Production Readiness Blockers (2026-08-12)
+
+Closes or narrows six of §11's remaining items for models A/B: the Postgres
+role, the build-identity gap on the capability path (§5.2), minimum
+operator observability, backups, and a re-derivation of reconciliation
+safety and the NULL-expiry row shape (§5.6) that found the prior report's
+own "three, closed, non-growing" claim was no longer accurate. **Baseline:**
+`e0c5521` (HEAD at the start of P10, the P9-doc follow-up commit).
+
+### 1. Postgres role — DEMONSTRATED
+
+The shipped compose stack's `backend` service used the same role
+(`ados`, from `POSTGRES_USER`) that `migrate` uses to run DDL — a Postgres
+superuser, which (§4A) "voids the append-only guarantee on the approval
+ledger." Alembic revision `f4a5b6c7d8e9` provisions `ados_app`: a
+non-superuser role with ordinary DML across the schema (the backend
+genuinely needs that outside the Prime Agent tables too — MOA breaker
+store, LLM provider settings — restricting further would have broken real
+features) but no CREATE on the schema, and no ownership of any table, so
+DDL is refused by ownership rules alone. `DELETE` is explicitly revoked on
+the three tables that are this integration's actual audit spine
+(`missions`, `runtime_sessions`, `capability_requests` — grep-verified, no
+reviewed code path deletes a row from any of them) and on
+`capability_promotion_events`, completing revision `7f551a8ccce0`'s own
+documented, previously-inert intent ("becomes real the moment a
+non-superuser application role exists").
+
+`docker-compose.yml`'s `backend` service now connects as `ados_app`.
+Discovered along the way: the LangGraph checkpointer's own `.setup()` (DDL,
+not an Alembic revision) was running from the app's lifespan — which no
+longer has CREATE privilege. Moved to run once, under the superuser, from
+`alembic/env.py`'s online migration path instead — the same fix shape,
+applied to the one other place schema DDL happens in this codebase.
+
+**Live evidence:** the real `ados-backend-1` container was rebuilt and
+restarted against `ados_app` and came up healthy (`/healthz` 200) — not
+merely unit-tested. `backend/tests/test_database_role_privileges.py` (12
+tests): `ados_app` cannot `CREATE`/`ALTER`/`DROP`/`TRUNCATE`; cannot
+`DELETE` from the three audit tables or `UPDATE`/`DELETE`
+`capability_promotion_events`; legitimate DML on the audit tables and
+`DELETE` on an unrelated table (`moa_task_breakers`) both still work.
+Negative control: re-granted `DELETE` on `capability_requests` directly in
+Postgres, confirmed the targeted test failed, revoked it back, confirmed
+byte-identical migration source throughout (the control was a live grant,
+not a source edit, so the invariant checked is "database state matches the
+migration," verified before and after).
+
+The bare-`.venv` workflow's default (`backend/app/config.py`) is
+unchanged — it still defaults to the `ados` superuser unless `DATABASE_URL`
+is exported — a documented, deliberate simplicity trade-off for that path,
+not an oversight; the compose path is what actually ships the fix.
+
+### 2. Observability — TESTED (six named gaps), Metrics/alerting still NOT BUILT
+
+Re-reading (not trusting) the P8 claim that logging was "DEMONSTRATED"
+found five of the six operator-visibility moments named by this phase had
+no log line at all: a mission starting, a capability parking for approval,
+an execution landing at `outcome_unknown`, a reconciliation pass
+completing, and a build-identity mismatch (`orphan discovered/cleaned` was
+already logged, correctly, from `main.py`'s periodic loop — confirmed by
+reading it, not touched). One structured log line was added at each,
+through the existing `JsonLogFormatter`/request-id-correlation machinery
+(`observability.py`, unchanged) — never the arguments, tokens, or raw
+connector payloads.
+
+`backend/tests/test_observability_logging.py`: one test proves each new
+line actually fires with the field an alert would key on (not vacuous —
+disabling the `outcome_unknown` line was used as this area's negative
+control and the targeted assertion failed as expected, then the line was
+restored, byte-identical); a second test runs a realistic mixed pass
+(park → connector failure → reconciliation → stale build) through the
+*real* `JsonLogFormatter` and asserts a distinctive bearer token and a
+distinctive ServiceNow password never appear in any rendered line.
+
+**Still open, unaffected by this:** this phase closed exactly the six named
+log-visibility gaps, not §6's separate "Metrics/alerting" blocker.
+`observability.py` still deliberately declines a `/metrics` endpoint ("no
+scraper to serve") — that remains **NOT BUILT**, as it was.
+
+### 3. Backups/restore — DEMONSTRATED (mechanism), documented gaps
+
+P8: "No backup/restore tooling found for Postgres; compose uses a bare
+named volume" — durability is not a backup. `scripts/backup_postgres.sh` /
+`scripts/restore_postgres.sh` are the smallest mechanism this repository
+can actually own: `pg_dump`/`pg_restore` through the real, already-running
+Postgres container's own bundled tools (no invented infrastructure, no new
+dependency). `restore_postgres.sh` requires an explicit target database
+with no default, specifically so it cannot silently overwrite the live
+database by falling through to one.
+
+**Live evidence:** `backend/tests/test_backup_restore.py` (`docker`-marked,
+3 tests), run against the real container: a marker row survives a real
+dump → restore into an independent, disposable scratch database,
+independently re-queried against the scratch DB rather than assumed; a
+second test restores two different dumps in sequence into the same scratch
+database and confirms the first restore's row is gone after the second —
+`--clean` really replaces, not merges. Negative control: removed `--clean
+--if-exists` from the restore script, the replace test failed (the second
+`pg_restore` errored outright trying to recreate already-existing objects),
+restored, byte-identical hash confirmed.
+
+**Explicitly not built, and not pretended:** point-in-time recovery (WAL
+archiving), offsite/off-host storage, a retention policy, and a restore
+rehearsal cadence are operational decisions for whoever runs this in
+production — named as an explicit dependency, not invented here.
+
+### 4. Build-identity guard on the capability path — TESTED, same inherited limitation as §5.2's origin
+
+`verify_no_drift_since_process_start()` is now called at the top of
+`_execute_capability` (`backend/app/mcp_gateway.py`) — the single choke
+point both the autonomous and human-approval paths call through — closing
+the gap §5.2 named: a commit landing mid-mission was never re-checked for
+that mission's remaining capability calls. Raises the same
+`StaleGatewayError`, caught by the same pre-existing `except Exception`,
+refusing before `default_hub().invoke()` — before any connector, and
+therefore any external side effect, is reached.
+
+`backend/tests/test_capability_path_build_identity.py` (3 tests): a stale
+build refuses with a stub hub that fails the test if ever reached (proving
+zero connector contact, not just a returned error); a matching build
+proceeds exactly once; the real repository right now passes with no
+mocking. Negative control: commented out the one added call, confirmed the
+stale-build test failed with the connector actually being reached, restored,
+byte-identical.
+
+**Inherited, not new:** confirmed live (§1 above) that the actual shipped
+Docker image reports `commit: "unknown"` (no `.git` in the build context,
+by the existing `.dockerignore` design) — meaning this guard, like the
+P7-B/D one it extends, is a no-op inside the container as shipped today,
+and only real for a bare-`.venv`/uvicorn-without-`--reload` deployment.
+This is the same limitation `test_drift_check_is_a_no_op_when_the_frozen_
+identity_is_unknown` already documented for the original guard, not a
+regression introduced here.
+
+### 5. Reconciliation operational safety — CONFIRMED, no changes required
+
+Re-read `orchestrate/runtime/capability_reconcile.py` and its P9 tests
+against each specific P10 requirement rather than assuming they still
+held: not auto-scheduled (confirmed — still only reachable via
+`scripts/reconcile_capability_requests.py`, unchanged); `outcome_unknown`
+transitions only to `executed`, only on a positive match
+(`test_a_matching_external_record_resolves_the_row_to_executed`) and never
+back to something executable on a negative or unanswerable one
+(`test_no_match_leaves_the_row_at_outcome_unknown_but_records_the_attempt`,
+`test_a_query_that_could_not_be_answered_is_not_treated_as_a_negative_
+answer`); forged/unrelated provenance cannot hijack it
+(`test_a_forged_agent_authored_provenance_block_cannot_hijack_
+reconciliation`); `mark_stalled_executions_unknown` has exactly one status
+write in its source (`STATUS_OUTCOME_UNKNOWN`) and every existing test
+asserting its outcome asserts that exact value, which a mistaken write of
+`failed`/`executed` would already fail. No gap found; no code or new tests
+were needed here.
+
+### 6. NULL-expiry / legacy session state — the count was wrong; now closed for future risk
+
+§5.6 and P9 §15 both describe "three... pre-P6-D... fossil rows,"
+"closed, non-growing." Re-deriving from the live dev database (not
+trusting that count) found **31** rows with `token_expires_at IS NULL`, 17
+non-terminal — and, critically, **one created after P6-D shipped**
+(2026-08-11, title `"P9 crash/recovery"`), because `scripts/p9_crash_
+recovery_e2e.py` — P9's own tooling — constructed `RuntimeSessionRow`
+directly, bypassing the real creation path, without setting
+`token_expires_at`, unlike its sibling e2e scripts which deliberately do.
+The category was not closed; P9's own script was quietly reopening it.
+Fixed: the script now sets `token_expires_at` identically to its siblings.
+
+More seriously: two of the pre-existing (2026-08-09, genuinely dev-era —
+mission titles "Synthetic incident investigation") fossil rows had
+`pending_approval` capability requests still sitting **live-approvable**
+through the real, unmodified `/runtime/capability-requests/{id}/approve`
+endpoint right now — `_live_session_or_409` only checks `state`, and the
+fossil session's `state` was `running`. Approving either would have created
+a real ServiceNow incident for a mission with no runtime behind it. Closed
+via the existing, safe `reject` endpoint (no raw SQL, no reinterpretation
+of the session row's own `state`/`token_expires_at`) — the same pattern
+P7-C's own one-time manual exception used.
+
+**The general class, not just today's two rows:** `runtime_approvals.py`
+gained `_confirm_token_expiry_recorded_or_409`, called only from
+`approve_capability_request` (never from `reject`, which has no side
+effect and must remain the way to safely close a stale request tied to
+exactly this kind of row). Every session the real creation path
+(`integrations/connectors/prime_runtime.py`) writes has set
+`token_expires_at` unconditionally since P6-D — a NULL is proof this row
+did not come from a currently-live mission, independent of `state`.
+`backend/tests/test_approval_crash_recovery.py::test_a_null_expiry_
+session_cannot_authorize_approval`: constructs the exact fossil shape,
+confirms approval is refused (409) and reject still succeeds. Negative
+control: commented out the one added call, confirmed a real ServiceNow
+POST (201) actually fired for the fossil session's request, restored,
+byte-identical.
+
+**What is still, deliberately, unchanged:** the session rows themselves —
+`state`, `token_expires_at` — were not mutated or reinterpreted; §5.6's
+original reasoning (no deterministic abandonment signal exists for a row
+that was never given an expiry, so building a second, guessing
+reconciliation mechanism would be effort spent on the wrong thing) still
+holds and is not revisited here. What changed is narrower and stronger:
+these rows can no longer authorize a new external side effect through
+approval, regardless of how long they sit there or what `state` claims.
+
+### 7. Production-readiness matrix — this section, plus updates below
+
+Every item below is classified DEMONSTRATED / TESTED / DESIGNED-PARTIAL /
+NOT BUILT / OPEN DEFECT, distinguishing live evidence from unit/mock
+evidence, per this section's own numbered findings:
+
+| §11 item | State before P10 | State after P10 | Evidence |
+|---|---|---|---|
+| Postgres non-superuser role | Absent | **DEMONSTRATED** | §16.1 — real container rebuilt/restarted under the role, 12 tests, 1 negative control |
+| Build-identity guard (capability path) | Absent | **TESTED** | §16.4 — no-op inside the shipped image, same as the guard it extends; real for bare-`.venv` |
+| Minimum-viable observability (6 named gaps) | Absent | **TESTED** | §16.2 — structured logs; Metrics/alerting (the separate, broader §6 item) unaffected, still NOT BUILT |
+| Backups/restore | Absent | **DEMONSTRATED** (mechanism) | §16.3 — real round trip, `docker`-marked; retention/offsite/PITR explicitly out of scope |
+| `capability_requests` reconciliation safety | Closed (P9) | **CONFIRMED**, unchanged | §16.5 — re-verified against every P10 sub-requirement, no gap found |
+| NULL-expiry / legacy session rows | Believed closed (3, non-growing) | **CORRECTED + narrowed** | §16.6 — was actually 31 and growing (via P9's own script); script fixed, 2 live exposures closed, general class closed via a new approval-time guard; the rows themselves remain untouched, undecided legacy state by design |
+
+None of the §11 items outside this list (metrics/alerting beyond the six
+log lines, session resume, heartbeats, scheduling, subagents,
+multi-tenancy, the kernel-held approval architecture, Docker socket
+exposure, JWT-in-localStorage) were in scope for P10 and remain exactly as
+§6/§11 described them.
+
+### Regression
+
+806 passed, 0 failed, 18 deselected (2 `external` + 16 `docker` — 13
+pre-existing + 3 new backup/restore tests), one full pass, immediately
+after P10's changes. Two pre-existing test fixtures required updates
+(`test_capability_request_provenance.py`, `test_runtime_approval_round_
+trip.py`, alongside `test_approval_crash_recovery.py`'s own new test) —
+each constructed a `RuntimeSessionRow` without a token expiry, which is
+now what the new approval-time guard correctly refuses; each was updated
+to set one identically to the real creation path, not to weaken the guard.
+
+### Updated verdict
+
+Of §11's model-B minimum blocker set, this phase closes the Postgres role
+and the six named observability gaps, demonstrates a real backup/restore
+mechanism, closes the build-identity gap on the capability path (with the
+same shipped-image caveat the original guard already carried), confirms
+reconciliation safety was already sound, and corrects and closes a
+NULL-expiry exposure this phase's own re-derivation found — one neither P8
+nor P9 had actually tested, only asserted. See §17 (final P10 report) for
+the complete PASS/NOT READY determination and every remaining honest gap.

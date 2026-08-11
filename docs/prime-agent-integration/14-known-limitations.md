@@ -579,6 +579,57 @@ Full detail, the crash-window-by-crash-window analysis, and 6 negative
 controls: `docs/prime-agent-integration/18-production-readiness-review.md`
 §15.
 
+### ~~The Postgres role backing the backend was a superuser~~ — FIXED 2026-08-12 (P10)
+
+`docker-compose.yml`'s own comment used to say so directly: "the Postgres
+role is a superuser (which voids the append-only guarantee on the approval
+ledger)." The backend connected with the exact same role (`ados`) that
+`alembic upgrade head` uses to run DDL — a superuser bypasses every ACL
+check, so a prior migration's `REVOKE UPDATE, DELETE ON capability_
+promotion_events` was a documented no-op, by its own comment, waiting for
+a non-superuser role to actually bind to.
+
+**Fixed 2026-08-12 (P10).** Alembic revision `f4a5b6c7d8e9` provisions
+`ados_app`: DML across the schema (the backend needs that broadly, not only
+for Prime Agent tables), no CREATE, no ownership of anything, and `DELETE`
+explicitly revoked on `missions`/`runtime_sessions`/`capability_requests`/
+`capability_promotion_events`. `docker-compose.yml`'s `backend` service now
+connects as `ados_app`; `migrate` still uses the superuser, which is where
+DDL — including the LangGraph checkpointer's own `.setup()`, moved here
+from the app's lifespan for the same reason — belongs.
+
+**Live-verified 2026-08-12:** the real `ados-backend-1` container was
+rebuilt and restarted against the new role and came up healthy. 12 tests
+(`backend/tests/test_database_role_privileges.py`) prove `ados_app` cannot
+`CREATE`/`DROP`/`ALTER`/`TRUNCATE` or `DELETE` from the audit tables, and
+that ordinary application DML still works. Full detail: `docs/prime-agent-
+integration/18-production-readiness-review.md` §16.1.
+
+### ~~The NULL-expiry fossil count ("three, non-growing") was wrong~~ — CORRECTED 2026-08-12 (P10)
+
+§5.6 of the readiness review described three pre-P6-D `runtime_sessions`
+rows with no token expiry, "closed, non-growing," deliberately left alone.
+Re-derivation from the live database during P10 found 31 such rows, not
+three — and the category was not closed: `scripts/p9_crash_recovery_e2e.py`
+(P9's own tooling) had been constructing sessions directly, bypassing the
+real creation path, without setting a token expiry, unlike its sibling
+scripts. Worse, two of the genuinely old (2026-08-09) rows had
+`pending_approval` capability requests still approvable through the real,
+unmodified approval endpoint — `_live_session_or_409` only checked `state`,
+and the fossil session's state was `running`. Approving either would have
+created a real ServiceNow incident for a mission with no runtime behind it.
+
+**Fixed 2026-08-12 (P10).** The script now sets a token expiry like its
+siblings. The two live requests were closed via the ordinary `reject`
+endpoint (no raw SQL, no reinterpretation of the session rows). Approval
+now separately refuses any session with no recorded token expiry
+(`_confirm_token_expiry_recorded_or_409`) — every session the real path
+creates has had one unconditionally since P6-D, so a NULL is proof of
+exactly this fossil shape, independent of `state`. The session rows
+themselves were not mutated; §5.6's original reasoning (no deterministic
+abandonment signal exists for them) still holds. Full detail:
+`docs/prime-agent-integration/18-production-readiness-review.md` §16.6.
+
 ### Two concurrent sessions cannot reach each other — measured 2026-08-11
 
 Per-session networks were the design from P5, but with only one boundary ever
