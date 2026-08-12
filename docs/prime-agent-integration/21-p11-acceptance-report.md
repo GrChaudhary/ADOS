@@ -2,8 +2,9 @@
 
 Compiled 2026-08-12. **Baseline:** `7381122` (P10 — "production readiness
 blockers: Postgres role, capability-path build identity, observability,
-backups, NULL-expiry approval exposure"). **P11 commit:** `<filled in below,
-this section's own self-reference — see the note>`.
+backups, NULL-expiry approval exposure"). **P11 commit:** `0017369` — "P11:
+controlled internal production operationalization -- metrics, admission
+control, runbook, live recovery exercise."
 
 This report uses the same taxonomy every prior phase in this programme has
 used, applied strictly:
