@@ -137,6 +137,8 @@ def verify_build_matches(expected: BuildRevision, actual: BuildRevision) -> None
         "Build identity mismatch detected — refusing to proceed",
         extra={"expected": expected.label, "actual": actual.label, "actual_source": actual.source},
     )
+    from backend.app.metrics import build_identity_drift_refusals_total
+    build_identity_drift_refusals_total.inc()
     raise StaleGatewayError(
         "gateway build revision does not match the expected source revision — "
         "the running process is not serving the code under test.\n"

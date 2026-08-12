@@ -63,3 +63,10 @@ fastmcp==2.14.7
 # present transitively (langchain-core, jsonschema-path both pull it in),
 # but pinned explicitly now that code here imports it directly.
 pyyaml==6.0.3
+
+# P11 — metrics export surface (backend/app/metrics.py, GET /metrics).
+# Pure-Python in-process registry + text exposition format; no server
+# component, no new container. This repo runs no Prometheus/Alertmanager
+# itself (see docs/prime-agent-integration/19-metrics-and-alerting.md) —
+# this dependency is the export surface an operator's own scraper reads.
+prometheus_client==0.26.0

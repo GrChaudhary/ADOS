@@ -19,6 +19,11 @@ dictionaries and no runtime existed at all.
 | [14-known-limitations.md](14-known-limitations.md) | Everything observed to be limited, incomplete, or provider-specific |
 | [15-provider-benchmark.md](15-provider-benchmark.md) | NVIDIA NIM vs Groq vs local Ollama, measured |
 | [16-external-side-effect-run.md](16-external-side-effect-run.md) | The end-to-end run that created a real ServiceNow incident, and the two defects it exposed |
+| [17-final-acceptance-report.md](17-final-acceptance-report.md) | Consolidated DEMONSTRATED/TESTED/DESIGNED/NOT BUILT statement through P7-D |
+| [18-production-readiness-review.md](18-production-readiness-review.md) | The running production-readiness record — P8 through P11 |
+| [19-metrics-and-alerting.md](19-metrics-and-alerting.md) | P11 — the metric catalog and the alerting contract |
+| [20-operator-runbook.md](20-operator-runbook.md) | P11 — the operator runbook: symptom / verify / remediate / do-NOT / verify-recovery |
+| [21-p11-acceptance-report.md](21-p11-acceptance-report.md) | P11 — full evidence ledger and the Model A/B/C verdict |
 
 ---
 

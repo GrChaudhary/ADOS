@@ -9,8 +9,9 @@ example resolution:
 
 from typing import Optional
 
-from contracts import CallStatus, CapabilityCall, CapabilityResponse
+from contracts import Capability, CallStatus, CapabilityCall, CapabilityResponse
 
+from .admission_control import AdmissionControl
 from .capability_manifest import CapabilityManifestRegistry, hot_disable_policy_rule
 from .capability_registry import CapabilityRegistry
 from .connectors.console import ConsoleConnector
@@ -25,7 +26,11 @@ from .policy_engine import ConnectorPolicyEngine, PolicyViolation, require_gover
 
 
 class IntegrationHub:
-    def __init__(self, manifests: Optional[CapabilityManifestRegistry] = None):
+    def __init__(
+        self,
+        manifests: Optional[CapabilityManifestRegistry] = None,
+        admission_control: Optional[AdmissionControl] = None,
+    ):
         self.registry = CapabilityRegistry()
         # manifests defaults to a fresh, empty registry rather than None so
         # this is always wired in — see hot_disable_policy_rule's docstring
@@ -42,20 +47,89 @@ class IntegrationHub:
         self.policy_engine = ConnectorPolicyEngine(
             self.registry, rules=[require_governance, hot_disable_policy_rule(self.manifests)]
         )
+        # P11: per-instance, not a module-level singleton — see
+        # admission_control.py's own docstring for why (~800 tests each
+        # construct their own hub; a global would leak concurrency state
+        # between them).
+        self.admission_control = admission_control if admission_control is not None else AdmissionControl()
 
     async def invoke(self, call: CapabilityCall) -> CapabilityResponse:
+        # Local imports: backend.app.metrics is an outer-layer module and
+        # importing it at module scope here would invert the dependency
+        # direction (integrations/ is imported BY backend/app, not the other
+        # way around) — the same reasoning prime_runtime.py's own local
+        # `from backend.app.mcp_gateway import hash_token` import already
+        # documents.
+        from backend.app.metrics import (
+            admission_rejections_total,
+            authorization_denials_total,
+            capability_execution_duration_seconds,
+            capability_executions_total,
+        )
+
         try:
             connector = self.policy_engine.select_connector(call)
         except PolicyViolation as e:
+            authorization_denials_total.labels(reason="policy_violation").inc()
             return CapabilityResponse(
                 request_id=call.request_id,
                 status=CallStatus.FAILED,
                 error=str(e),
             )
-        return await connector.execute(call)
+
+        # P11 admission control — BEFORE connector.execute(), i.e. before any
+        # external side effect (Docker container start, an HTTP call to
+        # ServiceNow/SAP/etc.). Two gates: a general ceiling on every
+        # capability execution in flight, and — only for the capability that
+        # starts a Docker container — a tighter, specific ceiling on
+        # concurrent Prime Agent missions, the heaviest resource in this
+        # system. Both are checked server-side only: nothing in `call.input`
+        # (agent-supplied) is ever consulted here.
+        if not self.admission_control.try_acquire_capability_slot():
+            admission_rejections_total.labels(gate="capability_concurrency").inc()
+            return CapabilityResponse(
+                request_id=call.request_id,
+                status=CallStatus.FAILED,
+                connector=connector.name,
+                error="admission control: too many concurrent capability executions; try again shortly",
+            )
+
+        mission_slot_acquired = False
+        try:
+            if call.capability == Capability.RUN_PRIME_RLM_AGENT:
+                if not self.admission_control.try_acquire_mission_slot():
+                    admission_rejections_total.labels(gate="mission_concurrency").inc()
+                    return CapabilityResponse(
+                        request_id=call.request_id,
+                        status=CallStatus.FAILED,
+                        connector=connector.name,
+                        error="admission control: too many concurrent Prime Agent missions; try again shortly",
+                    )
+                mission_slot_acquired = True
+
+            with capability_execution_duration_seconds.labels(capability=call.capability.value).time():
+                response = await connector.execute(call)
+        finally:
+            if mission_slot_acquired:
+                self.admission_control.release_mission_slot()
+            self.admission_control.release_capability_slot()
+
+        _OUTCOME_LABEL = {
+            CallStatus.SUCCEEDED: "executed",
+            CallStatus.FAILED: "failed",
+            CallStatus.UNKNOWN: "outcome_unknown",
+        }
+        capability_executions_total.labels(
+            capability=call.capability.value,
+            outcome=_OUTCOME_LABEL.get(response.status, "failed"),
+        ).inc()
+        return response
 
 
-def default_hub(manifests: Optional[CapabilityManifestRegistry] = None) -> IntegrationHub:
+def default_hub(
+    manifests: Optional[CapabilityManifestRegistry] = None,
+    admission_control: Optional[AdmissionControl] = None,
+) -> IntegrationHub:
     """Real connectors registered first so the Connector Policy Engine's
     "preferred systems" rule (docs/006-integration-hub.md) picks them once
     configured; Console registered last as the universal fallback for
@@ -74,7 +148,7 @@ def default_hub(manifests: Optional[CapabilityManifestRegistry] = None) -> Integ
     and both connectors report is_configured() = True by default — without
     this ordering, ConsoleConnector would silently win and no dynamically
     onboarded capability would ever actually execute."""
-    hub = IntegrationHub(manifests=manifests)
+    hub = IntegrationHub(manifests=manifests, admission_control=admission_control)
     # Before ConsoleConnector for a reason worth stating plainly: Console
     # declares `capabilities = set(Capability)` and is_configured() = True, so
     # if it won the selection for FetchIncidentEvidence it would return

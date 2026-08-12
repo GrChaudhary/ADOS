@@ -795,3 +795,75 @@ Raising `max_wall_clock_seconds` changes how long ADOS waits, never what ADOS
 accepts. Two runs were correctly **rejected** for running out of budget before
 `NotifyITHelpdesk` executed, with the kernel working perfectly (10/10 successful
 executions in one of them).
+
+## Operations (P11, 2026-08-12)
+
+Full account in
+[21-p11-acceptance-report.md](21-p11-acceptance-report.md); this section adds
+the operations-facing limitations found or closed along the way.
+
+### ~~No metrics, no admission control~~ — CLOSED
+
+`18-production-readiness-review.md` §6/§11/§16 named these as the last two
+open items in Model B's minimum blocker set (metrics/alerting "alone," plus
+rate limiting flagged "Yes, for B/C" in the same section's own matrix). Both
+closed in P11: `backend/app/metrics.py` + `GET /metrics`
+([19-metrics-and-alerting.md](19-metrics-and-alerting.md)), and four
+admission-control gates (mission concurrency, capability concurrency,
+approval-queue depth, per-session activity) at the two real choke points
+(`IntegrationHub.invoke()`, `mcp_gateway.request_capability`). No Prometheus/
+Alertmanager is deployed by this repository — the endpoint is the export
+surface an operator's own scraper reads, not a claim that paging is wired up.
+
+### A real SQLAlchemy identity-map gotcha, found writing the session-activity gate
+
+`select(RuntimeSessionRow).where(...).with_for_update()`, re-querying a row
+already loaded earlier in the same session (by `_resolve_session`'s own plain,
+unlocked read), silently returned the **stale, already-loaded** Python object
+rather than the freshly locked database row — SQLAlchemy does not overwrite
+an already-identity-mapped object's attributes from a later plain `select()`
+unless `.execution_options(populate_existing=True)` is set. Six concurrent
+callers each computed `0 + 1 = 1` and the last commit won, instead of
+incrementing to 6 — a real, live bug caught only because the concurrent-race
+test asserted an exact admitted count against real Postgres rather than "no
+exception was raised." Fixed with `populate_existing=True`. Worth knowing for
+any future `FOR UPDATE` read on a row a caller already touched earlier in the
+same session.
+
+### A real autoflush ordering bug, found writing the approval-queue gate
+
+The first implementation counted `pending_approval` rows *after*
+`db.add(row)` had already staged this request's own row — SQLAlchemy's
+autoflush silently flushed that pending INSERT into the same transaction
+before the COUNT query ran, so the COUNT included the very row being
+admitted, refusing one request earlier than the configured limit. Fixed by
+moving the admission check before the row is constructed at all, so nothing
+can count against itself. Both this and the identity-map issue above were
+caught by the concurrent-race tests specifically — a below/at/over-limit
+test run sequentially would not have exposed either.
+
+### Pre-existing, unrelated: real ServiceNow effects from an unmocked legacy test — PARTIALLY OPEN
+
+`tests/test_phase3_cross_integration.py` (Phase 3, predates the Prime Agent
+integration entirely) constructs `default_hub()` with no transport override.
+Whenever real ServiceNow credentials are present in `.env` — needed
+elsewhere, for this integration's own live-effect proof — the Connector
+Policy Engine's "prefer a configured real connector over console" rule meant
+this unrelated test was silently creating real Change Requests on every full
+default-suite run. Discovered incidentally while gathering P11's own
+acceptance evidence: a read-only query found **42** pre-existing `Line-X1`-
+and **41** pre-existing `Line-X2`-tagged records already on the instance
+(`dev397690.service-now.com`, short_description `"requested by ADOS
+(ScheduleMaintenance)"`), clearly accumulated over a long prior history, not
+caused by this phase. **Fixed the leak** (the test now mocks
+`ServiceNowConnector`'s transport, the same pattern every other test file
+that can reach ServiceNow already uses) and **closed the two records this
+session's own test runs created** (`CHG0030986`, `CHG0030987` — state 4/
+Canceled, independently re-verified via a fresh read). **Left deliberately
+untouched, by explicit decision:** the 42+/41+ pre-existing records — not
+created by P11, not this phase's to bulk-remediate. A grep also found five
+other test files with the same *structural* pattern
+(`default_hub()` with no ServiceNow mock) that did not, empirically, cause
+any real effect in this session's full-suite runs (confirmed by grep against
+the actual httpx request log, not assumed) — worth a future audit, not fixed
+here without evidence they cause anything.

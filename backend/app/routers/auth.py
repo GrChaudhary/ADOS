@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.session import get_db_session
 
 from .. import user_store
+from ..metrics import authentication_failures_total
 from ..rbac import Role, User, create_access_token, get_current_user, require_role
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -44,6 +45,7 @@ class ResetPasswordRequest(BaseModel):
 async def login(body: LoginRequest, session: AsyncSession = Depends(get_db_session)):
     user = await user_store.verify_login(session, body.username, body.password)
     if user is None:
+        authentication_failures_total.inc()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
     return LoginResponse(token=create_access_token(user), user=user)
 

@@ -39,7 +39,7 @@ from typing import Any, Dict, Optional
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_http_headers
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from contracts import Capability, PolicyTier
@@ -54,6 +54,8 @@ from orchestrate.runtime.capability_execution import (
     canonical_idempotency_key,
     outcome_status_for,
 )
+
+from .config import settings
 
 logger = logging.getLogger("ados.mcp_gateway")
 
@@ -107,6 +109,8 @@ async def _resolve_session(session_db) -> tuple[RuntimeSessionRow, MissionRow]:
     if row.state not in _LIVE_STATES:
         raise _Denied(f"session is {row.state} and can no longer act")
     if row.token_expires_at is not None and datetime.now(timezone.utc) > row.token_expires_at:
+        from .metrics import token_expiry_refusals_total
+        token_expiry_refusals_total.inc()
         raise _Denied("session token expired")
 
     mission = await session_db.get(MissionRow, row.mission_id)
@@ -219,12 +223,52 @@ async def request_capability(
                     "Capability request denied — outside mission grant",
                     extra={"capability": capability, "mission_id": str(mission.mission_id)},
                 )
+                from .metrics import authorization_denials_total
+                authorization_denials_total.labels(reason="not_in_grant").inc()
                 return {"status": "denied", "request_id": str(denial.request_id), "reason": denial.reason}
 
             try:
                 cap = Capability(capability)
             except ValueError:
                 return {"status": "denied", "reason": f"'{capability}' is not a known ADOS capability"}
+
+            # P11: per-session activity/repeat-attempt admission control.
+            # Re-fetches session_row WITH A ROW LOCK — the plain, unlocked
+            # read _resolve_session already did is not enough on its own:
+            # two concurrent calls from the SAME session could both read the
+            # same stale count and both pass. This lock is scoped to just
+            # this check (not _resolve_session's general read, which three
+            # other, mostly read-only tools share and shouldn't pay for it).
+            # Reuses RuntimeSessionRow.capability_request_count — already
+            # incremented below on every request that reaches this point —
+            # rather than inventing new state.
+            locked_session_row = (
+                await db.execute(
+                    select(RuntimeSessionRow)
+                    .where(RuntimeSessionRow.session_id == session_row.session_id)
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar_one()
+            if (locked_session_row.capability_request_count or 0) >= settings.max_capability_requests_per_session:
+                denial = CapabilityRequestRow(
+                    session_id=session_row.session_id,
+                    mission_id=mission.mission_id,
+                    capability=capability,
+                    arguments=arguments,
+                    status="denied",
+                    reason=(
+                        f"session has reached its capability request limit "
+                        f"({settings.max_capability_requests_per_session}); a new mission/session is required"
+                    ),
+                    idempotency_key=key,
+                )
+                db.add(denial)
+                await db.commit()
+                from .metrics import admission_rejections_total
+                admission_rejections_total.labels(gate="session_activity").inc()
+                return {"status": "denied", "request_id": str(denial.request_id), "reason": denial.reason}
+            session_row = locked_session_row
 
             # Same policy engine the MOA uses — one governance implementation, not
             # a parallel one for agents.
@@ -234,6 +278,53 @@ async def request_capability(
                 estimated_cost_usd=float(arguments.get("_estimated_cost_usd", 0.0)),
             )
             risk = CAPABILITY_RISK_CLASS.get(cap, "unclassified")
+
+            if tier != PolicyTier.AUTONOMOUS:
+                # P11: approval-queue-depth admission control, checked BEFORE
+                # this request's own row is constructed/added — deliberately,
+                # not after. `db.add(row)` followed by a SELECT on this same
+                # session auto-flushes the pending INSERT first, so a COUNT
+                # run after adding the row would count this very row against
+                # itself and refuse one request too early. Checking first
+                # means the COUNT below can only ever see requests that
+                # already, genuinely exist.
+                #
+                # The advisory lock is transaction-scoped (auto-released at
+                # this transaction's commit/rollback below) and serializes
+                # the count-then-park sequence against every other concurrent
+                # park — the same "let Postgres serialize it" idiom this
+                # codebase already uses via FOR UPDATE SKIP LOCKED elsewhere,
+                # here the transactional-lock variant since this is a COUNT
+                # rather than a specific row claim.
+                await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('ados_approval_queue_admission'))"))
+                pending_count = (
+                    await db.execute(
+                        select(func.count())
+                        .select_from(CapabilityRequestRow)
+                        .where(CapabilityRequestRow.status == "pending_approval")
+                    )
+                ).scalar_one()
+                if pending_count >= settings.max_pending_approvals:
+                    denial = CapabilityRequestRow(
+                        session_id=session_row.session_id,
+                        mission_id=mission.mission_id,
+                        capability=capability,
+                        arguments=arguments,
+                        policy_tier=int(tier),
+                        risk_class=risk,
+                        idempotency_key=key,
+                        status="denied",
+                        reason=(
+                            f"approval queue is at capacity ({pending_count} pending); "
+                            "try again once an operator has cleared backlog"
+                        ),
+                    )
+                    db.add(denial)
+                    session_row.capability_request_count = (session_row.capability_request_count or 0) + 1
+                    await db.commit()
+                    from .metrics import admission_rejections_total
+                    admission_rejections_total.labels(gate="approval_queue").inc()
+                    return {"status": "denied", "request_id": str(denial.request_id), "reason": denial.reason}
 
             row = CapabilityRequestRow(
                 session_id=session_row.session_id,
@@ -325,6 +416,8 @@ async def request_capability(
             "Capability execution outcome unknown — requires reconciliation",
             extra={"request_id": str(request_id), "capability": capability},
         )
+        from .metrics import outcome_unknown_total
+        outcome_unknown_total.inc()
 
     return {
         "status": outcome_status,

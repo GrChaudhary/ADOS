@@ -224,6 +224,8 @@ def _confirm_token_expiry_recorded_or_409(runtime_session: RuntimeSessionRow) ->
     this check is about were closed, during P10, by rejecting them.
     """
     if runtime_session.token_expires_at is None:
+        from ..metrics import token_expiry_refusals_total
+        token_expiry_refusals_total.inc()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(

@@ -123,6 +123,8 @@ def get_current_user(
 
     user = decode_access_token(token)
     if not user.active:
+        from .metrics import authorization_denials_total
+        authorization_denials_total.labels(reason="inactive_account").inc()
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account deactivated")
     return user
 
@@ -147,17 +149,22 @@ def authorize_governance_decision(
       * Tier 2 (executive-approval) needs EXECUTIVE or ADMIN;
       * the action's estimated cost must be within the approver's own limit.
     """
+    from .metrics import authorization_denials_total
+
     if user.role == Role.AUDITOR:
+        authorization_denials_total.labels(reason="role_readonly").inc()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Auditors have read-only access and cannot decide {subject}s",
         )
     if policy_tier == 2 and user.role not in (Role.EXECUTIVE, Role.ADMIN):
+        authorization_denials_total.labels(reason="tier_role_mismatch").inc()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Role '{user.role.value}' cannot decide Tier 2 (executive-approval) {subject}s",
         )
     if user.approval_limit_usd < estimated_cost_usd:
+        authorization_denials_total.labels(reason="over_approval_limit").inc()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Approval limit ${user.approval_limit_usd:,.0f} is below this action's "

@@ -102,7 +102,32 @@ async def mark_stalled_executions_unknown(
     session_reconcile.py, runtime_approvals.py's decision lock): a row a live
     request is still legitimately holding mid-execution is SKIPPED, not
     stolen, so this can safely run concurrently with real traffic.
+
+    P11: wrapped for `ados_reconciliation_runs_total{result}` — success means
+    this pass RAN, not that it found or resolved anything (an empty pass is
+    still a successful pass); failure means it raised, most plausibly a
+    Postgres error, before it could reach its own commit/rollback.
     """
+    from backend.app.metrics import reconciliation_runs_total
+
+    try:
+        stalled = await _mark_stalled_executions_unknown_impl(
+            session_factory, stall_seconds=stall_seconds, limit=limit, now=now,
+        )
+    except Exception:
+        reconciliation_runs_total.labels(result="failure").inc()
+        raise
+    reconciliation_runs_total.labels(result="success").inc()
+    return stalled
+
+
+async def _mark_stalled_executions_unknown_impl(
+    session_factory,
+    *,
+    stall_seconds: float,
+    limit: int,
+    now: Optional[datetime],
+) -> List[StalledExecution]:
     now = now or datetime.now(timezone.utc)
     stalled: List[StalledExecution] = []
 
@@ -150,6 +175,8 @@ async def mark_stalled_executions_unknown(
             "Capability executions stalled — moved to outcome_unknown",
             extra={"count": len(stalled), "request_ids": [str(s.request_id) for s in stalled]},
         )
+        from backend.app.metrics import outcome_unknown_total
+        outcome_unknown_total.inc(len(stalled))
 
     return stalled
 
@@ -181,7 +208,27 @@ async def reconcile_outcome_unknown(
     Capabilities with no ServiceNow table mapping (`_CAPABILITY_TABLE`) have
     no automated reconciliation path today and are left untouched — an honest
     "cannot reconcile this automatically" rather than a false "resolved".
+
+    P11: wrapped for `ados_reconciliation_runs_total{result}` — same success/
+    failure meaning as mark_stalled_executions_unknown above.
     """
+    from backend.app.metrics import reconciliation_runs_total
+
+    try:
+        outcomes = await _reconcile_outcome_unknown_impl(session_factory, limit=limit, connector=connector)
+    except Exception:
+        reconciliation_runs_total.labels(result="failure").inc()
+        raise
+    reconciliation_runs_total.labels(result="success").inc()
+    return outcomes
+
+
+async def _reconcile_outcome_unknown_impl(
+    session_factory,
+    *,
+    limit: int,
+    connector: Optional[ServiceNowConnector],
+) -> List[ReconciliationOutcome]:
     connector = connector or ServiceNowConnector()
     outcomes: List[ReconciliationOutcome] = []
     now_iso = datetime.now(timezone.utc).isoformat()

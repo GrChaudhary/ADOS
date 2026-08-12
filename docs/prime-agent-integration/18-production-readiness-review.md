@@ -1007,3 +1007,255 @@ reconciliation safety was already sound, and corrects and closes a
 NULL-expiry exposure this phase's own re-derivation found — one neither P8
 nor P9 had actually tested, only asserted. See §17 (final P10 report) for
 the complete PASS/NOT READY determination and every remaining honest gap.
+
+---
+
+## 17. P11 update: Controlled Internal Production Operationalization (2026-08-12)
+
+Closes the two items §6/§11 named as the last of Model B's minimum blocker
+set after P10 — "Metrics/alerting" and "Rate limiting / admission control"
+— and adds the operator runbook and a live recovery exercise §4D/§11 had
+also flagged missing. **Baseline:** `7381122` (P10's own commit).
+
+Full evidence ledger, exact commands, and the DEMONSTRATED/TESTED/
+CONFIRMED/DESIGNED-PARTIAL/NOT BUILT/OPEN DEFECT classification for every
+item is in
+[21-p11-acceptance-report.md](21-p11-acceptance-report.md); this section is
+the summary that belongs in the running readiness record.
+
+### 1. Metrics and alerting — TESTED (emission), designed contract (delivery not built)
+
+`backend/app/metrics.py` (`prometheus_client`, a new but tiny dependency —
+no server component) + `GET /metrics`
+(`backend/app/routers/metrics.py`), exporting 17 metric families covering
+every signal this phase's own instructions named: missions started/
+completed, capability executions + duration, admission rejections, approval
+queue depth/age, `outcome_unknown` count/age, reconciliation success/
+failure, orphan discovery/cleanup, authentication failures, authorization
+denials, build-identity drift refusals, token-expiry refusals. Every label
+is a fixed, closed enum (a `Capability` name or a hand-enumerated outcome/
+result/reason/gate string) — never a request/mission/session id, token, or
+agent-authored free text, proven by
+`backend/tests/test_metrics.py::test_no_sensitive_or_high_cardinality_data_in_metrics`
+(a realistic pass carrying a real token, a fake ServiceNow password, and
+distinct UUIDs/free text, then asserting none of them appear in
+`GET /metrics`'s output). One test per metric proves it fires at the exact
+lifecycle point it claims, by delta (the registry is process-global across
+the whole pytest session — every assertion reads before/after and checks
+the difference, never an absolute value).
+
+**Full detail, the metric catalog, and the alerting contract:**
+[19-metrics-and-alerting.md](19-metrics-and-alerting.md). **Explicitly not
+built:** a Prometheus server, Alertmanager, or any paging/notification path
+— this repository runs no monitoring stack of its own. The alerting
+contract is a specification for an operator's own Prometheus + Alertmanager
+to consume against the `/metrics` scrape target; it is not a claim that
+alert delivery exists. Reversing `observability.py`'s original "no
+scraper to serve" decision is the explicit revisit its own docstring called
+for, updated in the same commit.
+
+### 2. Rate limiting / admission control — TESTED (real Postgres/asyncio concurrency, one docker-marked proof)
+
+Zero admission control existed before this phase (confirmed: the only
+concurrency primitive anywhere was `orchestrate/agent_runner.py`'s single
+`asyncio.Lock`, a correctness lock for two agents' shared mutable state, not
+a resource ceiling — §6/§11's own finding, re-confirmed). Four gates added,
+all server-side only (nothing in `CapabilityCall.input` is ever consulted):
+
+* **Mission concurrency** (`max_concurrent_prime_missions`, default 3) and
+  **capability-execution concurrency** (`max_concurrent_capability_
+  executions`, default 10) — both at `IntegrationHub.invoke()`, the one
+  place every capability call in the system reaches a connector (mission-
+  starting `RunPrimeRLMAgent` calls **and** in-mission `mcp_gateway`-
+  originated calls alike — a stronger choke point than `mcp_gateway.
+  _execute_capability`, which only sees the second category).
+  `integrations/admission_control.py::AdmissionControl` — synchronous,
+  no-`await` check-then-increment, per-`IntegrationHub`-instance (not a
+  module singleton, deliberately: ~800 tests each construct their own hub).
+* **Approval-queue depth** (`max_pending_approvals`, default 50) and
+  **per-session activity** (`max_capability_requests_per_session`, default
+  200) — both in `backend/app/mcp_gateway.py::request_capability`, real
+  Postgres transactional serialization (a `pg_advisory_xact_lock` for the
+  queue-depth COUNT, a `SELECT ... FOR UPDATE` row lock reusing the
+  existing `RuntimeSessionRow.capability_request_count` column for
+  per-session activity).
+
+**Critical invariant, proven not asserted:** a rejected request never
+reaches a connector. `test_integration_hub_admission.py` proves this with a
+real concurrent race (`asyncio.gather`, a fake connector holding its slot
+open on an `asyncio.Event`) — peak-concurrent connector executions never
+exceeds the configured limit, and a rejected call's `execute()` count stays
+at zero. A **docker-marked** variant
+(`test_admission_control_docker.py`) proves the same for the real
+`PrimeRuntimeConnector`: a second concurrent mission attempt is refused
+*before* `PrimeAgentRuntime.start()` — an actual `docker run` — ever runs
+for it, verified by an independent `docker ps` count, not by trusting the
+connector's own return value.
+
+**Two real concurrency bugs found and fixed while building the two
+Postgres-backed gates** (both caught only by the concurrent-race tests
+asserting an *exact* admitted count against real Postgres, not by a
+below/at/over-limit test run sequentially): a SQLAlchemy identity-map
+gotcha (`select().with_for_update()` silently returned an already-loaded,
+stale Python object rather than the freshly locked row — fixed with
+`.execution_options(populate_existing=True)`), and an autoflush ordering
+bug (counting `pending_approval` rows *after* `db.add()`'d this request's
+own not-yet-committed row counted it against itself — fixed by moving the
+check before the row is constructed). Both are written up in
+[14-known-limitations.md](14-known-limitations.md)'s new Operations
+section for anyone touching a similar `FOR UPDATE`/autoflush pattern later.
+
+**Scope boundary, explicit:** single-process, in-memory-for-the-hot-path
+(the two `IntegrationHub` gates) or Postgres-transaction-serialized (the
+two `mcp_gateway` gates). This bounds one ADOS process, matching Model A's
+single-process envelope (§5 below) — not a distributed rate limiter, and
+building one would be over-building for an architecture with no second
+process to coordinate with.
+
+### 3. Operator runbook — DESIGNED, one scenario DEMONSTRATED live
+
+[20-operator-runbook.md](20-operator-runbook.md) — the first formal runbook
+for this integration (§4D's own prior finding: only scattered scripts and
+this limitations doc functioning informally). Covers all fourteen scenarios
+this phase's instructions named: Docker/engine unavailable, gateway stale/
+build mismatch, gateway unhealthy, mission failure, stuck approval,
+`outcome_unknown`, reconciliation, orphaned resources, token/session
+expiry, unexpected ServiceNow records, Postgres backup/restore, database
+recovery, admission-control rejection, metrics/alert interpretation. Each
+entry: symptom / verify / remediation / do-NOT / independent verification.
+No credentials or secrets anywhere in it. Built entirely from
+already-existing operator tools (`scripts/sweep_orphans.py`, `scripts/
+reconcile_capability_requests.py`, `scripts/backup_postgres.sh`/
+`restore_postgres.sh`, `scripts/reset_user_password.py`) plus the new
+`/metrics` endpoint — no new operator commands invented.
+
+### 4. Recovery exercise — DEMONSTRATED, real Docker + real Postgres, no ServiceNow
+
+`scripts/p11_orphan_recovery_exercise.py` — the complete operator loop this
+phase's instructions asked for, against real infrastructure throughout:
+
+1. **Failure**: a real Prime Agent container starts for real (`docker run`,
+   a real per-session egress boundary), then the script simply stops
+   before teardown — exactly what a real SIGKILL/OOM kill mid-mission
+   leaves behind: a real, detached, orphaned container and two real
+   networks.
+2. **Detection**: `session_reconcile.reconcile_abandoned_sessions()` — the
+   exact function `backend/app/main.py`'s periodic loop calls — marks the
+   session `failed` with an orphan-bearing `failure_reason`.
+3. **Diagnosis**: an independent `docker ps`/`docker network ls`/`docker
+   inspect` confirms the flagged resources are real and carry this
+   session's own `ados.session_id` label.
+4. **Remediation**: `orphan_sweep.sweep_once()` — the exact function
+   `scripts/sweep_orphans.py` wraps — issues real `docker rm -f`/`docker
+   network rm` calls.
+5. **Independent verification**: a *fresh* `docker ps`/`docker network ls`
+   (not the sweep's own reported outcome) confirms zero resources remain;
+   the session's own durable `events` column shows five real
+   `orphan_sweep.cleaned` entries (container, relay, two networks,
+   workspace).
+
+Real effect: one real, local Docker container/network set, created and
+fully torn down by the exercise itself — nothing external, nothing left
+behind, independently confirmed clean (`docker ps -a` shows only the five
+persistent compose-stack containers before and after). Chose this scenario
+over repeating P9's own real-ServiceNow crash-recovery proof specifically
+because it needs no external side effect to demonstrate the full loop —
+matching this phase's own bar for when ServiceNow use is "genuinely
+necessary" (it wasn't, here).
+
+### 5. Production constraints — Model A envelope, stated explicitly
+
+Single ADOS process; controlled, known internal users (no multi-tenant
+isolation claim); bounded concurrency via the four new admission-control
+gates (3 missions / 10 capability executions / 50 pending approvals / 200
+requests-per-session by default, every one operator-tunable via `Settings`);
+manual/operator-assisted recovery for crash scenarios (reconciliation and
+sweep are either periodic-automatic or hand-run — never "the system heals
+itself" without a human able to inspect what happened); no resume-after-
+process-death claim; no heartbeat claim; no scheduling/subagent claim. These
+match §5/§12's own prior "acceptable out-of-scope for Model A" list exactly
+— P11 did not change what Model A does or doesn't claim, only made
+operating within it observable and bounded.
+
+### 6. An unrelated, real defect found incidentally while gathering acceptance evidence
+
+Running the full default suite as P11's own acceptance evidence surfaced a
+real, pre-existing, unrelated issue: `tests/test_phase3_cross_integration.py`
+(Phase 3, predates this integration) had been silently creating real
+ServiceNow Change Requests on every full-suite run for a long time (42+/41+
+pre-existing tagged records found on the configured dev instance) because
+it never mocks its `ServiceNowConnector` transport. Not caused by P11 —
+found because P11's evidence-gathering discipline runs the real full suite
+and greps its own httpx logs rather than trusting "0 failed" alone. Fixed
+(the test now mocks ServiceNow, matching every other test file that can
+reach it) and the two records this session's own runs created were closed
+and independently re-verified; the 42+/41+ pre-existing records were
+deliberately left untouched — not this phase's defect to bulk-remediate.
+Full account in [14-known-limitations.md](14-known-limitations.md)'s
+Operations section.
+
+### 7. Regression
+
+Three full, clean `pytest -q` runs after all changes (one immediately after
+the ServiceNow-mock fix, one after the full negative-control cycle, one
+final confirmation): **847 passed, 0 failed, 19 deselected** (2 `external` +
+17 `docker` — 16 pre-existing + 1 new mission-concurrency docker test) each
+time. Baseline was 806 passed / 18 deselected (824 total, P10 §16); P11 adds
+42 new tests (824 + 42 = 866 = 847 + 19, reconciled exactly). All 17
+`docker`-marked tests pass together; Docker state independently confirmed
+clean before and after (only the five persistent compose-stack containers;
+zero leaked `ados-rt-*`/`ados-relay-*`/`ados-prime-*` networks or
+containers).
+
+Two isolated, transient test failures were observed across the several full
+runs this phase's evidence-gathering required, **both confirmed non-
+regressions by an isolated rerun, neither touching any file this phase
+modified**: `test_capability_onboarding.py`'s real-Docker-build test failed
+once immediately after Docker Desktop was freshly started (a base-image
+pull `DeadlineExceeded` — Docker's own networking still stabilizing),
+passed cleanly on rerun; `tests/test_orchestrate.py`'s tier-1-approval test
+(pre-existing, tight `asyncio.wait_for(..., timeout=5)`) failed once during
+a run immediately following several other full-suite executions in a row,
+passed cleanly (4.33s of its 5s budget) on rerun. Neither is claimed as
+part of the "847 passed" headline number — both are reported here for
+completeness, with their isolated-pass evidence, rather than silently
+re-run until clean.
+
+### 8. Negative controls
+
+Seven, each: guard/hook disabled directly in real source (a `False and`
+short-circuit, or the metric call commented out), targeted test(s) run and
+confirmed to fail for the expected reason, guard restored, `shasum -a 256`
+confirmed byte-identical before and after.
+
+| # | Guard/hook disabled | File | Targeted result |
+|---|---|---|---|
+| 1 | Capability-concurrency admission check | `integrations/hub.py` | Real concurrent-race test: peak concurrent connector executions hit 10 against a configured limit of 3 |
+| 2 | Mission-concurrency admission check | `integrations/hub.py` | Targeted test hung/timed out: the second mission was admitted and blocked on the same shared connector instead of being refused |
+| 3 | Approval-queue-depth check | `backend/app/mcp_gateway.py` | Both targeted tests failed: 8/8 concurrent parks admitted against a real-Postgres-enforced limit of 3 |
+| 4 | Per-session activity check | `backend/app/mcp_gateway.py` | Both targeted tests failed: 6/6 concurrent requests admitted against a real-Postgres-enforced limit of 2 |
+| 5 | `ados_build_identity_drift_refusals_total` increment | `orchestrate/runtime/build_identity.py` | Targeted metric test failed: counter did not move on a real drift refusal |
+| 6 | `ados_authentication_failures_total` increment | `backend/app/routers/auth.py` | Targeted metric test failed: counter did not move on a real login failure |
+| 7 | `ados_orphan_discovered_total`/`ados_orphan_cleanup_total` increments | `orchestrate/runtime/orphan_sweep.py` | Targeted metric test failed: counters did not move on a real (3-candidate) sweep |
+
+All seven files verified `shasum -a 256` byte-identical to their pre-control
+state after restoration.
+
+### 9. Updated verdict
+
+Of §11's model-B minimum blocker set as last stated by P10 ("Model B's
+remaining blocker is metrics/alerting alone," with §6's own matrix
+separately flagging rate limiting "Yes, for B/C"), P11 closes both items
+P10 actually named. This is reported narrowly: every P10-named Model-B
+blocker is now closed; this is **not** a fresh, independently-derived
+"Model B: READY" verdict — P11's mandate was the six operational gaps
+listed in its own instructions, not a full re-audit of Model B's entire
+envelope (session resume/heartbeat necessity, single-process implications,
+etc. were not re-examined here). **Model C** remains **NOT READY**,
+unaffected by this phase by explicit instruction: multi-host Docker
+ownership, a tenancy concept, and distributed rate limiting are all still
+`NOT BUILT`, and building them was explicitly out of scope.
+
+For **Model A** specifically — the target decision this phase was actually
+scoped to answer — see [21-p11-acceptance-report.md](21-p11-acceptance-report.md)'s
+final section for the complete verdict and its supporting evidence.

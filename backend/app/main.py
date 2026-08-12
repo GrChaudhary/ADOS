@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from db.engine import async_session_factory, engine as db_engine
 from db.health import check_connectivity_or_raise
 from integrations import CapabilityManifestRegistry, default_hub
+from integrations.admission_control import AdmissionControl
 from orchestrate import DecisionOrchestrator
 from orchestrate.onboarding import runtime_registry as onboarding_runtime_registry
 
@@ -19,7 +20,7 @@ from .config import settings
 from .mcp_gateway import mcp_http_app
 from .eventbus import get_event_bus
 from .observability import RequestIdMiddleware, configure_logging
-from .routers import ai_services, agents_registry, auth, capabilities, capability_onboarding, copilot, digital_twin, events, events_stream, executive, governance, health, incidents, integrations, knowledge_graph, langgraph_agents, learning, memory, moa, runtime_approvals, settings as settings_router
+from .routers import ai_services, agents_registry, auth, capabilities, capability_onboarding, copilot, digital_twin, events, events_stream, executive, governance, health, incidents, integrations, knowledge_graph, langgraph_agents, learning, memory, metrics as metrics_router, moa, runtime_approvals, settings as settings_router
 
 _FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
@@ -148,7 +149,13 @@ async def lifespan(app: FastAPI):
         kwargs = {"bootstrap_servers": settings.kafka_bootstrap_servers, "topic": settings.kafka_topic}
     app.state.event_bus = get_event_bus(settings.event_bus_backend, **kwargs)
     await app.state.event_bus.start()
-    app.state.integration_hub = default_hub(manifests=CapabilityManifestRegistry(session_factory=async_session_factory))
+    app.state.integration_hub = default_hub(
+        manifests=CapabilityManifestRegistry(session_factory=async_session_factory),
+        admission_control=AdmissionControl(
+            max_concurrent_capability_executions=settings.max_concurrent_capability_executions,
+            max_concurrent_missions=settings.max_concurrent_prime_missions,
+        ),
+    )
     # Capability onboarding (orchestrate/onboarding/) — static track ->
     # executor wiring (independent of any specific capability), then
     # rehydrate the dynamic connector's dispatch table and MOA's
@@ -317,7 +324,7 @@ _ROUTERS = (
     events_stream.router, knowledge_graph.router, integrations.router,
     ai_services.router, agents_registry.router, governance.router,
     settings_router.router, copilot.router, langgraph_agents.router, moa.router,
-    capability_onboarding.router, runtime_approvals.router,
+    capability_onboarding.router, runtime_approvals.router, metrics_router.router,
 )
 
 for _router in _ROUTERS:

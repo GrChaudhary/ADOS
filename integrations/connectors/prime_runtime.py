@@ -211,6 +211,8 @@ class PrimeRuntimeConnector(Connector):
                 "Prime Agent mission started",
                 extra={"mission_id": str(mission_id), "session_id": str(session_id), "domain": str(call.input.get("domain", "general"))},
             )
+            from backend.app.metrics import missions_started_total
+            missions_started_total.inc()
             objective = mission.objective
 
         spec = AgentSessionSpec(
@@ -336,6 +338,8 @@ async def _finalize_session(
                 mission.status = "completed" if did_work else "failed"
                 mission.result = outcome.final_answer if outcome is not None else None
                 mission.failure_reason = row.failure_reason
+                from backend.app.metrics import missions_completed_total
+                missions_completed_total.labels(outcome=mission.status).inc()
 
             await db.commit()
     except Exception:  # noqa: BLE001 — see the docstring

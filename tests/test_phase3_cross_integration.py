@@ -7,13 +7,59 @@ rather than each side's own tests in isolation.
 """
 
 import asyncio
+import sys
 
+import httpx
 import pytest
 
 from backend.app.eventbus import InMemoryEventBus
 from executive import KPIEngine, RecommendationEngine
 from integrations import default_hub
+from integrations.connectors.servicenow import ServiceNowConnector
 from orchestrate import DecisionOrchestrator, PriorityInputs
+
+
+@pytest.fixture(autouse=True)
+def _no_real_servicenow_effects(monkeypatch):
+    """P11 finding: this file's incidents resolve ScheduleMaintenance/
+    CreateChangeRequest capabilities, and the Connector Policy Engine
+    prefers a configured real connector over the simulated console
+    fallback — so whenever real ServiceNow credentials happen to be present
+    in .env (needed elsewhere for the Prime Agent integration's own live-
+    effect proof, unrelated to this file), a plain `pytest` run of this
+    file was silently creating real Change Requests on a live instance.
+    Found during P11's acceptance run
+    (docs/prime-agent-integration/21-p11-acceptance-report.md) — dozens of
+    pre-existing, un-mocked records were discovered this way, none of
+    which this fix touches; it only stops new ones. Every other test file
+    that could reach ServiceNow already forces a mock transport the same
+    way (see backend/tests/test_observability_logging.py's
+    `_install_servicenow_transport`); this file simply never had the
+    guard. Only the ServiceNow connector is replaced — every other
+    connector `default_hub()` would have registered (console, etc.) is
+    left exactly as built, so this changes no other capability's
+    resolution.
+    """
+
+    def simulated(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(201, json={"result": {"sys_id": "test-sys-id", "number": "TEST0000000"}})
+
+    real_default_hub = default_hub
+
+    def safe_default_hub():
+        hub = real_default_hub()
+        original_connectors_for = hub.registry.connectors_for
+        monkeypatch.setattr(
+            hub.registry, "connectors_for",
+            lambda cap: [
+                ServiceNowConnector(transport=httpx.MockTransport(simulated))
+                if isinstance(c, ServiceNowConnector) else c
+                for c in original_connectors_for(cap)
+            ],
+        )
+        return hub
+
+    monkeypatch.setattr(sys.modules[__name__], "default_hub", safe_default_hub)
 
 
 async def _run_one_incident(orchestrator: DecisionOrchestrator, line_id: str):

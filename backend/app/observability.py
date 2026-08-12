@@ -18,11 +18,14 @@ Three pieces, all stdlib -- no new dependency:
    since the v2 schema and that no producer has ever populated. That is what
    makes an incident's HTTP request and its event trail joinable.
 
-Deliberately NOT included: a /metrics endpoint. This codebase has a strong,
-consistently applied rule against building infrastructure with no consumer
-(see infrastructure/OPA_POLICY_SPIKE.md and KEYCLOAK_IDENTITY_DECISION.md),
-and there is no scraper to serve. Logs are useful the moment they exist;
-metrics without Prometheus are decoration. Revisit when something scrapes.
+A /metrics endpoint was deliberately NOT included here when this module was
+written, on the grounds that no scraper existed to serve. P11
+(docs/prime-agent-integration/19-metrics-and-alerting.md) is that revisit:
+GET /metrics (backend/app/routers/metrics.py) now exports Prometheus text
+exposition from backend/app/metrics.py's counters/gauges. This repository
+still runs no Prometheus/Alertmanager/Grafana itself — the endpoint is the
+export surface an operator's own scrape target reads, not a claim that
+alerting is wired up end to end.
 """
 
 import json

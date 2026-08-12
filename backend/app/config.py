@@ -80,6 +80,17 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = True
 
+    # P11 admission control (integrations/admission_control.py,
+    # backend/app/mcp_gateway.py) — bounds on one ADOS process, sized for
+    # controlled internal use (Model A), not a distributed limiter. See
+    # docs/prime-agent-integration/19-metrics-and-alerting.md's scope
+    # boundary paragraph. Every one of these is an operator-tunable ceiling,
+    # not a claim about real capacity anyone has load-tested.
+    max_concurrent_prime_missions: int = 3
+    max_concurrent_capability_executions: int = 10
+    max_pending_approvals: int = 50
+    max_capability_requests_per_session: int = 200
+
     # Real persistence (db/) — dev-only default matching docker-compose.yml's
     # postgres service defaults, same convention as jwt_secret's dev-only
     # fallback below: safe for a fresh clone to import without `.env` set,

@@ -444,4 +444,18 @@ async def sweep_once(
     claimed = await claim_batch(session_factory, limit=limit, lease_seconds=lease_seconds, sweep_id=sweep_id)
     outcomes = await process_claimed(claimed)
     await finalize_batch(session_factory, outcomes)
-    return SweepReport(sweep_id=sweep_id, claimed=len(claimed), outcomes=outcomes)
+    report = SweepReport(sweep_id=sweep_id, claimed=len(claimed), outcomes=outcomes)
+
+    # P11: metriced here (not just at main.py's periodic caller) so a manual
+    # scripts/sweep_orphans.py run — or any future caller — is counted too.
+    if report.claimed:
+        from backend.app.metrics import orphan_cleanup_total, orphan_discovered_total
+        orphan_discovered_total.inc(report.claimed)
+        for status_name, count in (
+            ("cleaned", report.cleaned), ("absent", report.absent),
+            ("failed", report.failed), ("refused", report.refused),
+        ):
+            if count:
+                orphan_cleanup_total.labels(result=status_name).inc(count)
+
+    return report
