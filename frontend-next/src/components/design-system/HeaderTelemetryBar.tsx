@@ -3,15 +3,21 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { clearSession } from "@/lib/api";
+import { clearSession, setActiveTenantId } from "@/lib/api";
 import { useCurrentUser } from "@/lib/useCurrentUser";
+import { useActiveTenantId } from "@/lib/useActiveTenant";
 import { NovusHeaderIcon } from "./NovusHeaderIcon";
 import portalStyles from "./PortalTransition.module.css";
+
+function shortTenantId(tenantId: string): string {
+  return tenantId.length > 8 ? `${tenantId.slice(0, 8)}…` : tenantId;
+}
 
 const NOVUS_STUDIO_DEST = "/novus-studio#signal";
 
 export function HeaderTelemetryBar() {
   const currentUser = useCurrentUser();
+  const activeTenantId = useActiveTenantId();
   const pathname = usePathname();
   const router = useRouter();
 
@@ -89,6 +95,29 @@ export function HeaderTelemetryBar() {
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
           <span>Nova Motors · Plant 04</span>
         </div>
+        {currentUser && activeTenantId && (
+          <div
+            className="hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-purple-950/50 border border-purple-500/20 text-purple-200"
+            title={`Active tenant: ${activeTenantId}`}
+          >
+            <span className="text-purple-300/60 uppercase text-[10px]">Tenant</span>
+            {currentUser.tenantIds.length > 1 ? (
+              <select
+                value={activeTenantId}
+                onChange={(e) => setActiveTenantId(e.target.value)}
+                className="bg-transparent text-white text-[11px] font-mono focus:outline-none cursor-pointer"
+              >
+                {currentUser.tenantIds.map((tenantId) => (
+                  <option key={tenantId} value={tenantId} className="bg-[#08051a]">
+                    {shortTenantId(tenantId)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-white font-mono text-[11px]">{shortTenantId(activeTenantId)}</span>
+            )}
+          </div>
+        )}
         {currentUser ? (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-purple-950/50 border border-purple-500/20 text-purple-200">
             <span className="text-white font-semibold">{currentUser.displayName}</span>

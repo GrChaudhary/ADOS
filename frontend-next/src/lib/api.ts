@@ -14,6 +14,16 @@ const USER_KEY = "ados_current_user"; // RBAC (backend/app/rbac.py) - the User r
 const PROXY_BASE = "/api/backend"; // next.config.ts rewrites this to the real backend's /api/v1
 const BACKEND_ORIGIN = process.env.NEXT_PUBLIC_ADOS_BACKEND_ORIGIN ?? "http://localhost:8000";
 
+// P17 tenant awareness (backend/app/tenancy.py). Before this, apiFetch never
+// sent X-Tenant-Id at all - harmless only because every seeded user today has
+// exactly one tenant membership (the backend's own "needs no extra step"
+// branch). The moment a real multi-tenant user exists, every tenant-scoped
+// call from that user would 400 with no UI explanation. See
+// getActiveTenantId()'s own docstring for the selection rule.
+const ACTIVE_TENANT_KEY = "ados_active_tenant";
+const TENANT_CHANGED_EVENT = "ados-tenant-changed";
+const TENANT_HEADER = "X-Tenant-Id";
+
 export function getToken(): string {
   if (typeof window === "undefined") return "";
   return window.localStorage.getItem(TOKEN_KEY) ?? "";
@@ -69,7 +79,64 @@ function setStoredUser(user: AuthUser): void {
 export function clearSession(): void {
   window.localStorage.removeItem(TOKEN_KEY);
   window.localStorage.removeItem(USER_KEY);
+  window.localStorage.removeItem(ACTIVE_TENANT_KEY);
   window.dispatchEvent(new Event(TOKEN_CHANGED_EVENT));
+}
+
+/**
+ * The tenant every request should be scoped to (backend/app/tenancy.py's
+ * X-Tenant-Id contract). Selection rule, matching the backend exactly:
+ *   - no logged-in user, or zero memberships -> null (nothing safe to send;
+ *     the backend's own "user has no tenant memberships" 403 will explain).
+ *   - exactly one membership -> that one, always (no ambiguity, nothing to
+ *     persist or let the user pick wrong).
+ *   - more than one membership -> whichever the user last explicitly chose
+ *     (setActiveTenantId), re-validated against their CURRENT memberships on
+ *     every call (a stale/foreign value in localStorage, e.g. from a
+ *     previous account on the same browser, is never trusted); falls back
+ *     to the first membership if nothing valid is stored yet.
+ */
+export function getActiveTenantId(): string | null {
+  const user = getStoredUser();
+  const memberships = user?.tenantIds ?? [];
+  if (memberships.length === 0) return null;
+  if (memberships.length === 1) return memberships[0];
+  if (typeof window === "undefined") return memberships[0];
+  const stored = window.localStorage.getItem(ACTIVE_TENANT_KEY);
+  if (stored && memberships.includes(stored)) return stored;
+  return memberships[0];
+}
+
+/**
+ * Explicit tenant switch. Only ever accepts one of the CURRENT user's own
+ * memberships - never arbitrary client-supplied text - so this can never be
+ * used to point requests at a tenant the user doesn't belong to (the
+ * backend would refuse it too, with a 403, but refusing here means the UI
+ * never even shows a misleading "switched" state for an invalid choice).
+ */
+export function setActiveTenantId(tenantId: string): void {
+  const user = getStoredUser();
+  if (!user?.tenantIds.includes(tenantId)) {
+    throw new Error("cannot switch to a tenant this user is not a member of");
+  }
+  window.localStorage.setItem(ACTIVE_TENANT_KEY, tenantId);
+  window.dispatchEvent(new Event(TENANT_CHANGED_EVENT));
+}
+
+export function subscribeToTenantChanges(callback: () => void): () => void {
+  window.addEventListener(TENANT_CHANGED_EVENT, callback);
+  // A login/logout/user-switch changes which memberships are even valid,
+  // so anything watching the active tenant must also re-check then.
+  window.addEventListener(TOKEN_CHANGED_EVENT, callback);
+  return () => {
+    window.removeEventListener(TENANT_CHANGED_EVENT, callback);
+    window.removeEventListener(TOKEN_CHANGED_EVENT, callback);
+  };
+}
+
+function tenantHeader(): Record<string, string> {
+  const tenantId = getActiveTenantId();
+  return tenantId ? { [TENANT_HEADER]: tenantId } : {};
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -78,6 +145,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       Authorization: `Bearer ${getToken()}`,
       "Content-Type": "application/json",
+      ...tenantHeader(),
       ...(init?.headers ?? {}),
     },
   });
@@ -103,7 +171,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 // (unlike openIncidentEventStream below) this doesn't need a ?token= param.
 async function apiFetchBlob(path: string): Promise<Blob> {
   const res = await fetch(`${PROXY_BASE}${path}`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: { Authorization: `Bearer ${getToken()}`, ...tenantHeader() },
   });
   if (!res.ok) {
     throw new Error(`${res.status} ${path}`);
@@ -511,7 +579,20 @@ export interface AgentRegistryEntry {
   stage: AgentStage;
   isBuiltIn: boolean;
   instructions: string;
+  division?: string;
+  vibe?: string;
   createdAt: string;
+}
+
+export interface RunAgentResult {
+  agent_id: string;
+  label: string;
+  division?: string;
+  status: "success" | "error" | "not_configured";
+  model_used?: string;
+  execution_time_seconds?: number;
+  response?: string;
+  error?: string;
 }
 
 // RBAC (backend/app/rbac.py) - real per-user login, replacing the shared
@@ -525,11 +606,48 @@ export interface AuthUser {
   role: Role;
   approvalLimitUsd: number;
   active: boolean;
+  // P17 (backend/app/rbac.py User.tenant_ids) - which tenants this user
+  // belongs to. Defaults to [] here (not the backend's own single-default-
+  // tenant fallback) so a stored user from before this field existed reads
+  // as "no known memberships" rather than silently, incorrectly implying
+  // membership in a specific tenant this client never actually confirmed.
+  tenantIds: string[];
 }
 
 export interface LoginResponse {
   token: string;
   user: AuthUser;
+}
+
+// backend/app/routers/runtime_approvals.py's `_view()` — every field this
+// router ever returns, from list/detail/approve/reject alike. `status` is
+// the full lifecycle (orchestrate/runtime/capability_execution.py):
+// pending_approval | executing | executed | failed | outcome_unknown |
+// denied. `outcome_unknown` means an approved call's real-world result
+// could not be confirmed (see that module's own docstring) - never treat it
+// as either success or failure in the UI, only as "needs a human to check
+// the external system."
+export interface CapabilityRequestView {
+  requestId: string;
+  missionId: string;
+  sessionId: string;
+  capability: string;
+  arguments: Record<string, unknown>;
+  status: string;
+  policyTier: number | null;
+  riskClass: string | null;
+  estimatedCostUsd: number;
+  decidedBy: string | null;
+  reason: string | null;
+  result: unknown;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface CapabilityRequestListResponse {
+  status: string;
+  count: number;
+  requests: CapabilityRequestView[];
 }
 
 export interface GovernancePolicies {
@@ -622,6 +740,9 @@ export const api = {
   createAgent: (body: CreateAgentRequest) =>
     apiFetch<AgentRegistryEntry>("/agents-registry", { method: "POST", body: JSON.stringify(body) }),
   deleteAgent: (id: string) => apiFetch<null>(`/agents-registry/${id}`, { method: "DELETE" }),
+  syncAgents: () => apiFetch<{ status: string; ingested_count: number }>("/agents-registry/sync", { method: "POST" }),
+  runAgent: (agentId: string, prompt: string, context?: Record<string, unknown>, provider_override?: string) =>
+    apiFetch<RunAgentResult>(`/agents-registry/${agentId}/run`, { method: "POST", body: JSON.stringify({ prompt, context, provider_override }) }),
   // RBAC (backend/app/routers/auth.py)
   login: async (username: string, password: string) => {
     const res = await apiFetch<LoginResponse>("/auth/login", {
@@ -693,6 +814,21 @@ export const api = {
     }),
   activateOnboardingSession: (id: string) =>
     apiFetch<ActivateSessionResponse>(`/capability-onboarding/sessions/${id}/activate`, { method: "POST", body: JSON.stringify({}) }),
+  // Runtime capability-request approvals (backend/app/routers/
+  // runtime_approvals.py) — the human half of the Prime Agent's Tier 1/2
+  // approval loop. Previously had no frontend coverage at all; see
+  // CapabilityRequestView's own docstring for the wire shape.
+  listCapabilityRequests: (statusFilter = "pending_approval") =>
+    apiFetch<CapabilityRequestListResponse>(`/runtime/capability-requests?status_filter=${encodeURIComponent(statusFilter)}`),
+  getCapabilityRequest: (requestId: string) =>
+    apiFetch<CapabilityRequestView>(`/runtime/capability-requests/${requestId}`),
+  approveCapabilityRequest: (requestId: string) =>
+    apiFetch<CapabilityRequestView>(`/runtime/capability-requests/${requestId}/approve`, { method: "POST" }),
+  rejectCapabilityRequest: (requestId: string, reason?: string) =>
+    apiFetch<CapabilityRequestView>(`/runtime/capability-requests/${requestId}/reject`, {
+      method: "POST",
+      body: JSON.stringify(reason ? { reason } : {}),
+    }),
 };
 
 // ---------------------------------------------------------------------

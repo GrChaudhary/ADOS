@@ -20,6 +20,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: "/jarvis", icon: "🧠", label: "Jarvis / MOA" },
       { href: "/incidents", icon: "🚨", label: "Incidents" },
+      { href: "/approvals", icon: "✅", label: "Runtime Approvals" },
       { href: "/executive/enterprise", icon: "📊", label: "Executive" },
     ],
   },
@@ -27,6 +28,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: "Governance & Platform",
     items: [
       { href: "/governance", icon: "🛡️", label: "Governance" },
+      { href: "/agents/network", icon: "🤖", label: "Agent Registry" },
       { href: "/capability-onboarding", icon: "🚀", label: "BYOC Studio" },
       { href: "/integrations", icon: "🔌", label: "Integrations" },
       { href: "/memory", icon: "💾", label: "Memory" },
