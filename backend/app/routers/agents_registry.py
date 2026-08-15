@@ -15,17 +15,23 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
+import time
 import uuid
+import yaml
 from datetime import datetime, timezone
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.models.custom_agent import CustomAgentRow
 from db.session import get_db_session
+from knowledge.local_llm_client import local_llm_client
 from ..auth import get_current_user
 
 router = APIRouter(tags=["agents-registry"], dependencies=[Depends(get_current_user)])
@@ -64,7 +70,15 @@ class AgentRegistryEntry(BaseModel):
     stage: StageLiteral = "Reasoning"
     isBuiltIn: bool = False
     instructions: str = ""
+    division: Optional[str] = None
+    vibe: Optional[str] = None
     createdAt: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class RunAgentRequest(BaseModel):
+    prompt: str = Field(..., min_length=2, max_length=5000)
+    context: Optional[Dict[str, Any]] = None
+    provider_override: Optional[str] = None
 
 
 class CreateAgentRequest(BaseModel):
@@ -336,6 +350,8 @@ STAGE_TEMPLATES = {
 }
 
 
+AGENCY_AGENTS_REPO_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "agency-agents-repo"))
+
 def _row_to_entry(row: CustomAgentRow) -> AgentRegistryEntry:
     return AgentRegistryEntry(
         id=row.id,
@@ -351,8 +367,87 @@ def _row_to_entry(row: CustomAgentRow) -> AgentRegistryEntry:
         stage=row.stage,
         isBuiltIn=False,
         instructions=row.instructions,
+        division=getattr(row, "division", None),
+        vibe=getattr(row, "vibe", None),
         createdAt=row.created_at,
     )
+
+
+async def sync_agency_agents_to_db(session: AsyncSession) -> int:
+    divisions_path = os.path.join(AGENCY_AGENTS_REPO_DIR, "divisions.json")
+    if not os.path.exists(divisions_path):
+        return 0
+
+    with open(divisions_path, "r", encoding="utf-8") as f:
+        divisions_data = json.load(f).get("divisions", {})
+
+    # Ensure division and vibe columns exist
+    try:
+        await session.execute(text("ALTER TABLE custom_agents ADD COLUMN IF NOT EXISTS division VARCHAR;"))
+        await session.execute(text("ALTER TABLE custom_agents ADD COLUMN IF NOT EXISTS vibe VARCHAR;"))
+        await session.commit()
+    except Exception:
+        await session.rollback()
+
+    count = 0
+    for div_key, div_info in divisions_data.items():
+        div_dir = os.path.join(AGENCY_AGENTS_REPO_DIR, div_key)
+        if not os.path.exists(div_dir) or not os.path.isdir(div_dir):
+            continue
+
+        for file_name in os.listdir(div_dir):
+            if not file_name.endswith(".md"):
+                continue
+            file_path = os.path.join(div_dir, file_name)
+            agent_id = file_name[:-3]
+
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            meta = {}
+            body = content
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    try:
+                        meta = yaml.safe_load(parts[1]) or {}
+                    except Exception:
+                        pass
+                    body = parts[2].strip()
+
+            label = meta.get("name") or agent_id.replace("-", " ").title()
+            description = meta.get("description") or f"Specialized {div_info.get('label')} agent"
+            color = meta.get("color") or div_info.get("color", "cobalt")
+            emoji = meta.get("emoji") or "🤖"
+            vibe = meta.get("vibe") or ""
+
+            stmt = text("""
+                INSERT INTO custom_agents (id, label, icon, color, description, model, input_schema, output_schema, memory_rag, target_tier, stage, instructions, division, vibe, created_at)
+                VALUES (:id, :label, :icon, :color, :description, 'Groq Cloud / Llama 3.3 70B', 'User Query & Domain Context', 'Structured Reasoning & Deliverables', true, 'Tier 1 (Engineer Approval)', 'Reasoning', :instructions, :division, :vibe, :created_at)
+                ON CONFLICT (id) DO UPDATE SET
+                    label = EXCLUDED.label,
+                    icon = EXCLUDED.icon,
+                    color = EXCLUDED.color,
+                    description = EXCLUDED.description,
+                    instructions = EXCLUDED.instructions,
+                    division = EXCLUDED.division,
+                    vibe = EXCLUDED.vibe;
+            """)
+            await session.execute(stmt, {
+                "id": agent_id,
+                "label": label,
+                "icon": emoji,
+                "color": color,
+                "description": description,
+                "instructions": body if body else content,
+                "division": div_key,
+                "vibe": vibe,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            count += 1
+
+    await session.commit()
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -362,12 +457,114 @@ def _row_to_entry(row: CustomAgentRow) -> AgentRegistryEntry:
 @router.get("/agents-registry", response_model=List[AgentRegistryEntry])
 async def list_agents_registry(session: AsyncSession = Depends(get_db_session)) -> List[AgentRegistryEntry]:
     """
-    Returns all registered agents: the 8 built-ins plus any custom agents
-    persisted in Postgres (db/models/custom_agent.py).
+    Returns all registered agents: the built-ins plus whatever agency agents
+    are persisted in `custom_agents`.
+
+    READ-ONLY, deliberately. Importing from agency-agents-repo is
+    `POST /agents-registry/sync` and nothing else.
+
+    This briefly auto-ingested when the table came back empty, and fell back to
+    ingesting again inside a bare `except Exception`. Both were workarounds for
+    a real defect rather than a feature: `custom_agents` was missing its
+    `division` and `vibe` columns, because migration `c3d4e5f6a7b8` had been
+    authored against a stale head and left Alembic with two heads — so
+    `alembic upgrade head` failed, the migrate service exited 255, and the
+    columns were never added. With the chain linearized the migration applies
+    and the explicit sync works, so the workaround has nothing left to work
+    around.
+
+    Restoring read-only matters beyond tidiness. `sync_agency_agents_to_db`
+    issues `ALTER TABLE`, so the old path ran DDL from a GET; the bare
+    `except Exception` turned any transient database error into a write and
+    swallowed the diagnosis; and two concurrent readers of an empty table both
+    started importing 255 records. A catalog read should not be able to do any
+    of that.
     """
     rows = (await session.execute(select(CustomAgentRow))).scalars().all()
     custom_agents = [_row_to_entry(row) for row in rows]
     return [*BUILTIN_AGENTS, *custom_agents]
+
+
+@router.post("/agents-registry/sync")
+async def sync_agents_registry(session: AsyncSession = Depends(get_db_session)):
+    """Manually trigger ingestion of agency agents from agency-agents-repo."""
+    count = await sync_agency_agents_to_db(session)
+    return {"status": "success", "ingested_count": count}
+
+
+@router.post("/agents-registry/{agent_id}/run")
+async def run_agent(
+    agent_id: str,
+    body: RunAgentRequest,
+    session: AsyncSession = Depends(get_db_session)
+):
+    """
+    Executes a specific agent (built-in or agency agent) live with LLM generation.
+    Uses Groq / configured LLM client.
+    """
+    agent_entry: Optional[AgentRegistryEntry] = None
+    for b in BUILTIN_AGENTS:
+        if b.id == agent_id:
+            agent_entry = b
+            break
+
+    if agent_entry is None:
+        try:
+            row = await session.get(CustomAgentRow, agent_id)
+            if row:
+                agent_entry = _row_to_entry(row)
+        except Exception:
+            pass
+
+    if agent_entry is None:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
+
+    system_instructions = agent_entry.instructions or agent_entry.description
+    vibe_context = f"\nAgent Vibe: {agent_entry.vibe}" if agent_entry.vibe else ""
+    division_context = f"\nDivision: {agent_entry.division}" if agent_entry.division else ""
+
+    full_system_prompt = (
+        f"You are operating as {agent_entry.label} ({agent_entry.icon}).{division_context}{vibe_context}\n\n"
+        f"--- SYSTEM INSTRUCTIONS ---\n{system_instructions}\n"
+        "--- END SYSTEM INSTRUCTIONS ---\n\n"
+        "Analyze the user request carefully. Provide your expert reasoning and deliverables."
+    )
+
+    combined_user_prompt = f"{full_system_prompt}\n\nUSER REQUEST:\n{body.prompt}"
+    if body.context:
+        combined_user_prompt += f"\n\nADDITIONAL CONTEXT:\n{json.dumps(body.context, indent=2)}"
+
+    start_time = time.time()
+
+    def _call_llm():
+        if body.provider_override:
+            return local_llm_client._dispatch(body.provider_override, combined_user_prompt, max_tokens=2500, temperature=0.3)
+        return local_llm_client._generate_text(combined_user_prompt, max_tokens=2500, temperature=0.3)
+
+    result = await asyncio.to_thread(_call_llm)
+    duration = time.time() - start_time
+
+    if result.get("status") in ("error", "not_configured"):
+        return {
+            "agent_id": agent_id,
+            "label": agent_entry.label,
+            "division": agent_entry.division,
+            "status": result.get("status"),
+            "model_used": result.get("model_used"),
+            "execution_time_seconds": round(duration, 2),
+            "response": None,
+            "error": result.get("error", "LLM call failed or provider not configured"),
+        }
+
+    return {
+        "agent_id": agent_id,
+        "label": agent_entry.label,
+        "division": agent_entry.division,
+        "status": "success",
+        "model_used": result.get("model_used", "Groq Llama 3.3 70B"),
+        "execution_time_seconds": round(duration, 2),
+        "response": result.get("text", ""),
+    }
 
 
 @router.get("/agents-registry/stage-templates")

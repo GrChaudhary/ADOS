@@ -346,7 +346,18 @@ async def test_a_null_expiry_session_cannot_authorize_approval(_as_runtime, monk
     `pending_approval` request still sitting genuinely approvable through
     this exact endpoint. This is the regression test for the fix, not a
     reconciliation change — the session row itself (state, token_expires_at)
-    is untouched; only approval's own liveness check was tightened."""
+    is untouched; only approval's own liveness check was tightened.
+
+    The `pending_approval` row is constructed directly here, not via
+    `_park`/`request_capability` — P12 closed the same NULL-expiry gap one
+    layer upstream, in `_resolve_session` itself (mcp_gateway.py), so a
+    session shaped like this can no longer park a request through the real
+    path at all (see the companion test below). This test is now
+    specifically the defense-in-depth case P10's own dev-database finding
+    actually was: a `pending_approval` row that already exists — however it
+    got there, e.g. residue from before either guard existed — must still
+    be refused by the approval endpoint's own independent check, not rely
+    on the newer, earlier guard as the only line of defense."""
     _install_servicenow(monkeypatch, lambda r: httpx.Response(201, json={"result": {}}))
     async with async_session_factory() as db:
         mission = MissionRow(
@@ -361,9 +372,15 @@ async def test_a_null_expiry_session_cannot_authorize_approval(_as_runtime, monk
             # Deliberately NOT set — this is the exact fossil shape.
         )
         db.add(sess)
+        await db.flush()
+        row = CapabilityRequestRow(
+            session_id=sess.session_id, mission_id=mission.mission_id,
+            capability="NotifyITHelpdesk", arguments=dict(EXPENSIVE),
+            status="pending_approval", policy_tier=int(PolicyTier.EXECUTIVE_APPROVAL),
+        )
+        db.add(row)
         await db.commit()
-
-    request_id = await _park(_as_runtime, token)
+        request_id = str(row.request_id)
 
     with pytest.raises(HTTPException) as exc:
         await _approve(request_id)
@@ -380,6 +397,43 @@ async def test_a_null_expiry_session_cannot_authorize_approval(_as_runtime, monk
             request_id, _FakeRequest(), current_user=_user(), session=db, body={"reason": "cleanup"},
         )
     assert result["status"] == "denied"
+
+
+async def test_a_null_expiry_session_cannot_call_request_capability(_as_runtime):
+    """P12 — the gap the above test used to exercise upstream: `_resolve_
+    session` (mcp_gateway.py), shared by every MCP tool including
+    `request_capability`, now refuses a NULL-expiry session outright, the
+    same proof-not-guess reasoning P10 gave the approval endpoint, extended
+    to cover the autonomous auto-execute path too (which needs no human at
+    all — the more serious half of the gap)."""
+    async with async_session_factory() as db:
+        mission = MissionRow(
+            title="p12 null-expiry fossil — capability path", objective="o", domain="it",
+            allowed_capabilities=["NotifyITHelpdesk"], status="running",
+        )
+        db.add(mission)
+        await db.flush()
+        token = "tok-" + uuid.uuid4().hex
+        sess = RuntimeSessionRow(
+            mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            # Deliberately NOT set — this is the exact fossil shape.
+        )
+        db.add(sess)
+        await db.commit()
+
+    _as_runtime(token)
+    answer = await request_capability.fn("NotifyITHelpdesk", {"summary": "x"})
+    assert answer["status"] == "denied"
+    assert "expiry" in answer["reason"]
+
+    async with async_session_factory() as db:
+        rows = (
+            await db.execute(
+                text("SELECT count(*) FROM capability_requests WHERE mission_id = :m"),
+                {"m": str(mission.mission_id)},
+            )
+        ).scalar_one()
+    assert rows == 0, "a denied-at-_resolve_session call must never reach a connector or write a request row"
 
 
 # --- an ordinary (non-crash) failure ends up unambiguously failed, not unknown -

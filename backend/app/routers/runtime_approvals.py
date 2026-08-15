@@ -56,13 +56,22 @@ from orchestrate.runtime.capability_execution import (
 from ..auth import get_current_user
 from ..mcp_gateway import _LIVE_STATES, _execute_capability
 from ..rbac import User, authorize_governance_decision
+from ..tenancy import get_tenant_context
 
 logger = logging.getLogger("ados.runtime_approvals")
 
 router = APIRouter(
     prefix="/runtime/capability-requests",
     tags=["runtime-approvals"],
-    dependencies=[Depends(get_current_user)],
+    # P17 — get_tenant_context resolves the caller's active tenant and
+    # scopes every ORM query below (db/tenancy.py's do_orm_execute filter)
+    # to it automatically. This is the exact fix for the defect P16 proved
+    # live: before this, every route here queried CapabilityRequestRow with
+    # no ownership filter at all. No route body below changes as a result
+    # -- a cross-tenant GET now 404s and a cross-tenant approve/reject now
+    # 404s before ever reaching a decision, because the row is invisible to
+    # the query, not because of a new explicit check.
+    dependencies=[Depends(get_current_user), Depends(get_tenant_context)],
 )
 
 
@@ -168,6 +177,18 @@ async def _load_pending_or_404(
         # 409, not 200. Deciding an already-decided request must not execute it
         # a second time — a double approval of `NotifyITHelpdesk` would raise
         # two real tickets, and of a payment capability, worse.
+        #
+        # P15 — the FOR UPDATE lock above (query.with_for_update()) is what
+        # makes this branch reachable at all under real concurrency: without
+        # it, two racing decisions could both read 'pending_approval' and
+        # both pass this check (proven live, as a negative control, in
+        # scripts/p15_multiprocess_concurrency_proof.py's Case 1). The
+        # metric below is this branch's own observability — previously a
+        # 409 with no Prometheus signal, a genuine gap this phase's Phase 10
+        # review found (its own required signal list names "duplicate
+        # approval refusal" explicitly).
+        from ..metrics import authorization_denials_total
+        authorization_denials_total.labels(reason="already_decided").inc()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"request is already '{row.status}' and cannot be decided again",

@@ -67,6 +67,7 @@ nothing to wait out.
 from __future__ import annotations
 
 import shutil
+import socket
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -74,14 +75,26 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from db.models.mission import RuntimeSessionRow
+from db.tenancy import all_tenants_session
 
 from .base import TERMINAL_STATES
 from .egress import LABEL_SESSION, _SAFE_SUFFIX
 
 _TERMINAL_VALUES = {s.value for s in TERMINAL_STATES}
+
+
+def effective_node_id(configured: str = "") -> str:
+    """P16 — the identity this process stamps onto sessions it creates and
+    filters sweep claims by. `configured` is Settings.node_id; an operator
+    who never sets it (every deployment today) gets socket.gethostname(),
+    which is exactly right for a single host and merely a reasonable,
+    human-readable default for a multi-host one — a real multi-host rollout
+    is expected to set ADOS_NODE_ID explicitly rather than trust hostnames
+    to be distinct (they are not, under container orchestration)."""
+    return configured or socket.gethostname()
 
 #: The existing, unmodified producer-side signal (see module docstring).
 ORPHAN_MARKER = "orphaned"
@@ -116,12 +129,18 @@ class ClaimedItem:
     kind: str
     name: str
     sweep_id: str
+    # True only when this item's owning session's owner_host is neither this
+    # sweeper's own node_id nor NULL — i.e. it was only claimable because its
+    # owning host was passed in `dead_node_ids`. See node_heartbeat.py's
+    # module docstring for why a real Docker/filesystem check is never
+    # attempted for these (this host cannot observe another host's daemon).
+    via_dead_host_reclaim: bool = False
 
 
 @dataclass(frozen=True)
 class Outcome:
     item: ClaimedItem
-    status: str  # "cleaned" | "absent" | "failed" | "refused"
+    status: str  # "cleaned" | "absent" | "failed" | "refused" | "unverifiable"
     detail: str
 
 
@@ -146,6 +165,10 @@ class SweepReport:
     @property
     def refused(self) -> int:
         return sum(1 for o in self.outcomes if o.status == "refused")
+
+    @property
+    def unverifiable(self) -> int:
+        return sum(1 for o in self.outcomes if o.status == "unverifiable")
 
 
 _DOCKER_KINDS = {"container", "relay", "network_internal", "network_egress"}
@@ -202,6 +225,13 @@ def _eligible_for_claim(
     common case: most of a session's candidate set never really leaked)
     reclaimed forever, on every single sweep, indefinitely.
 
+    `unverifiable` is also terminal, for a related but distinct reason: it
+    is recorded only for a declared-dead host's resource, which by
+    construction no live sweeper can ever check — reprocessing it on every
+    future sweep would not converge on a better answer, only repeat the same
+    honest non-verification forever. See node_heartbeat.py's module
+    docstring.
+
     Anything else (never attempted, failed, refused, or a claim whose lease
     has expired) is eligible again. A live, unexpired claim is not — that is
     the one thing this function exists to refuse, since it is what keeps two
@@ -209,7 +239,7 @@ def _eligible_for_claim(
     status = _latest_sweep_status(events, kind, name)
     if status is None:
         return True
-    if status["type"] in ("orphan_sweep.cleaned", "orphan_sweep.absent"):
+    if status["type"] in ("orphan_sweep.cleaned", "orphan_sweep.absent", "orphan_sweep.unverifiable"):
         return False
     if status["type"] == "orphan_sweep.claimed":
         claimed_at = _parse_iso(status["at"])
@@ -225,6 +255,8 @@ async def claim_batch(
     lease_seconds: float = CLAIM_LEASE_SECONDS_DEFAULT,
     sweep_id: Optional[str] = None,
     now: Optional[datetime] = None,
+    node_id: Optional[str] = None,
+    dead_node_ids: Optional[Sequence[str]] = None,
 ) -> List[ClaimedItem]:
     """Phase 1 — the only phase that touches the database transactionally.
 
@@ -232,18 +264,57 @@ async def claim_batch(
     are not currently locked by a concurrent sweep; a row already held by
     another sweeper is skipped, not waited on, so two sweepers running at once
     partition the work instead of serializing behind each other.
+
+    P16 — `node_id`, when given, additionally restricts the claim to rows
+    whose `owner_host` is either this exact host or NULL (a pre-P16 row, or a
+    single-host deployment that never set Settings.node_id). This is the
+    entire multi-host safety mechanism: `_process_docker` below can only ever
+    check the LOCAL Docker daemon this process can reach, so a resource that
+    was actually created on a different host is indistinguishable, from here,
+    from one that genuinely no longer exists. Without this filter a sweeper on
+    host A could claim host B's session, see nothing on its own daemon, and
+    durably record the resource as `absent` — a terminal status
+    (`_eligible_for_claim` never reclaims it) — even though it is alive and
+    running on host B. `node_id=None` (the default) preserves the exact
+    pre-P16 behavior: every terminal orphan-marked row is claimable, which is
+    correct as long as there is truly only one host, and is also what every
+    caller that has not been updated for multi-host awareness still gets.
+
+    Dead-host reclamation — `dead_node_ids`, when given (backend/app/main.py,
+    from orchestrate/runtime/node_heartbeat.py::declared_dead_node_ids),
+    additionally widens the claim to rows owned by one of those hosts. A row
+    claimed this way is marked `via_dead_host_reclaim=True` on its
+    `ClaimedItem` so `_process_one` never attempts a real Docker/filesystem
+    check against it (this host still cannot observe another host's daemon —
+    only *whether* to keep waiting on that host has changed, not what this
+    host can see). Default `()` preserves the exact pre-existing behavior:
+    no caller that has not been updated for dead-host awareness widens
+    anything.
     """
     sweep_id = sweep_id or str(uuid.uuid4())
     now = now or datetime.now(timezone.utc)
     claimed: List[ClaimedItem] = []
 
-    async with session_factory() as db:
+    # P17 — background orphan sweeping, not a user request: scans every
+    # tenant's terminal, orphan-marked sessions by design, exactly as it
+    # already scans every host's (P16's owner_host/node_id, a parallel,
+    # independent boundary this does not change). See
+    # db/tenancy.py::use_all_tenants's own docstring.
+    async with all_tenants_session(session_factory) as db:
+        query = (
+            select(RuntimeSessionRow)
+            .where(RuntimeSessionRow.state.in_(_TERMINAL_VALUES))
+            .where(RuntimeSessionRow.failure_reason.ilike(f"%{ORPHAN_MARKER}%"))
+        )
+        dead_ids = list(dead_node_ids or ())
+        if node_id is not None:
+            allowed = [RuntimeSessionRow.owner_host.is_(None), RuntimeSessionRow.owner_host == node_id]
+            if dead_ids:
+                allowed.append(RuntimeSessionRow.owner_host.in_(dead_ids))
+            query = query.where(or_(*allowed))
         rows = (
             await db.execute(
-                select(RuntimeSessionRow)
-                .where(RuntimeSessionRow.state.in_(_TERMINAL_VALUES))
-                .where(RuntimeSessionRow.failure_reason.ilike(f"%{ORPHAN_MARKER}%"))
-                .order_by(RuntimeSessionRow.created_at)
+                query.order_by(RuntimeSessionRow.created_at)
                 .limit(limit)
                 .with_for_update(skip_locked=True)
             )
@@ -251,6 +322,11 @@ async def claim_batch(
 
         any_claimed = False
         for row in rows:
+            # A row only reaches here via the widened dead_ids branch when
+            # its owner_host is neither NULL nor this node_id (both of those
+            # are always separately allowed above) — so this is exactly the
+            # "claimed only because the owning host was declared dead" case.
+            via_dead = bool(row.owner_host) and row.owner_host != node_id
             events = list(row.events or [])
             row_claimed_any = False
             for candidate in candidates_for_session(row):
@@ -263,7 +339,12 @@ async def claim_batch(
                         "detail": {"kind": candidate.kind, "name": candidate.name, "sweep_id": sweep_id},
                     }
                 )
-                claimed.append(ClaimedItem(session_id=row.session_id, kind=candidate.kind, name=candidate.name, sweep_id=sweep_id))
+                claimed.append(
+                    ClaimedItem(
+                        session_id=row.session_id, kind=candidate.kind, name=candidate.name,
+                        sweep_id=sweep_id, via_dead_host_reclaim=via_dead,
+                    )
+                )
                 row_claimed_any = True
             if row_claimed_any:
                 row.events = events  # reassign (not in-place mutate) so SQLAlchemy tracks the change
@@ -371,6 +452,15 @@ async def _process_workspace(item: ClaimedItem) -> Outcome:
 
 
 async def _process_one(item: ClaimedItem) -> Outcome:
+    if item.via_dead_host_reclaim:
+        # This host cannot check another host's Docker daemon or filesystem
+        # — attempting `_process_docker`/`_process_workspace` here would not
+        # verify anything, it would just always report "absent" regardless
+        # of the real state on the (declared-dead, possibly merely
+        # partitioned) owning host. `unverifiable` says exactly and only
+        # what is true: bookkeeping is closed, nothing was confirmed
+        # removed. See node_heartbeat.py's module docstring.
+        return Outcome(item, "unverifiable", "owner host declared dead; cannot verify from this host's Docker/filesystem")
     try:
         if item.kind == "workspace":
             return await _process_workspace(item)
@@ -402,7 +492,12 @@ async def finalize_batch(session_factory, outcomes: Sequence[Outcome]) -> None:
     if not by_session:
         return
 
-    async with session_factory() as db:
+    # P17 — background orphan sweeping, not a user request: scans every
+    # tenant's terminal, orphan-marked sessions by design, exactly as it
+    # already scans every host's (P16's owner_host/node_id, a parallel,
+    # independent boundary this does not change). See
+    # db/tenancy.py::use_all_tenants's own docstring.
+    async with all_tenants_session(session_factory) as db:
         for session_id, items in by_session.items():
             row = (
                 await db.execute(
@@ -436,12 +531,28 @@ async def sweep_once(
     limit: int = DEFAULT_CLAIM_LIMIT,
     lease_seconds: float = CLAIM_LEASE_SECONDS_DEFAULT,
     sweep_id: Optional[str] = None,
+    node_id: Optional[str] = None,
+    dead_node_ids: Optional[Sequence[str]] = None,
 ) -> SweepReport:
     """The one public entry point. Claim, process, finalize — bounded to
     `limit` sessions, safe to call repeatedly (idempotent), safe to call
-    concurrently with another in-flight sweep (see module docstring)."""
+    concurrently with another in-flight sweep (see module docstring).
+
+    P16 — `node_id=None` (every existing caller) claims every eligible row
+    regardless of `owner_host`, unchanged from pre-P16 behavior. A
+    multi-host-aware caller passes its own `effective_node_id()` so it only
+    ever claims sessions it can actually verify against its own Docker
+    daemon; see claim_batch's docstring.
+
+    Dead-host reclamation — `dead_node_ids`, when given, is forwarded
+    unchanged to `claim_batch`. See that function's and node_heartbeat.py's
+    docstrings for the full design.
+    """
     sweep_id = sweep_id or str(uuid.uuid4())
-    claimed = await claim_batch(session_factory, limit=limit, lease_seconds=lease_seconds, sweep_id=sweep_id)
+    claimed = await claim_batch(
+        session_factory, limit=limit, lease_seconds=lease_seconds, sweep_id=sweep_id,
+        node_id=node_id, dead_node_ids=dead_node_ids,
+    )
     outcomes = await process_claimed(claimed)
     await finalize_batch(session_factory, outcomes)
     report = SweepReport(sweep_id=sweep_id, claimed=len(claimed), outcomes=outcomes)
@@ -454,6 +565,7 @@ async def sweep_once(
         for status_name, count in (
             ("cleaned", report.cleaned), ("absent", report.absent),
             ("failed", report.failed), ("refused", report.refused),
+            ("unverifiable", report.unverifiable),
         ):
             if count:
                 orphan_cleanup_total.labels(result=status_name).inc(count)

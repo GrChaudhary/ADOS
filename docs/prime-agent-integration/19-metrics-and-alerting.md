@@ -19,14 +19,25 @@ instruction to close the metrics/alerting gap.
 Prometheus text format.
 
 **Not built:** a Prometheus server, an Alertmanager, a Grafana dashboard, or
-any alert-delivery mechanism. This repository still runs no monitoring stack
-of its own. `GET /metrics` is the **export surface** — the thing an
-operator's own Prometheus deployment scrapes. The "alerting contract" below
-is a specification for wiring that scrape target into rules and routing that
-live outside this repository, not a claim that paging or notification is
-implemented here. **Do not read this document as "alerting is implemented."
-Metric emission is implemented and tested; alert delivery is an external
-dependency.**
+any alert-delivery mechanism, as part of the ADOS application itself — none
+of `docker-compose.yml`, the backend, or its startup path runs or depends on
+one. `GET /metrics` is the **export surface** — the thing an operator's own
+Prometheus deployment scrapes. The "alerting contract" below is a
+specification for wiring that scrape target into rules and routing. **Do not
+read this document as "alerting is implemented." Metric emission is
+implemented and tested; alert delivery is an external dependency.**
+
+**Update:** that external dependency has since been stood up and proven,
+locally, as a separate, later piece of work — repo-owned Prometheus/
+Alertmanager configuration under `infrastructure/prometheus/`, running as
+local processes (not part of the app or `docker-compose.yml`), with the full
+chain (scrape → evaluate → alert → deliver → resolve) demonstrated against
+real infrastructure, plus three negative controls. See
+[22-metrics-alerting-operationalization.md](22-metrics-alerting-operationalization.md).
+This still is **not** a production paging system — see that document's own
+"Limitations" section — but "an operator's own Prometheus deployment" from
+the paragraph above is no longer hypothetical; a working, reproducible
+example of it now exists in this repository.
 
 This satisfies the instruction's own conditional: "If Prometheus/client
 metrics are appropriate and infrastructure exists, use it. If not, do not
@@ -64,9 +75,11 @@ none of them appear anywhere in `GET /metrics`'s rendered output.
 | `ados_missions_completed_total` | Counter | `outcome`={completed,failed} | A mission reached a terminal state | `prime_runtime.py::_finalize_session` |
 | `ados_capability_executions_total` | Counter | `capability` (33-value closed enum from `contracts.Capability`), `outcome`={executed,failed,outcome_unknown} | A capability call reached a connector | `integrations/hub.py::IntegrationHub.invoke()` — the one choke point for every capability execution in the system, mission-starting and in-mission alike |
 | `ados_capability_execution_duration_seconds` | Histogram | `capability` | Wall-clock time inside `connector.execute()` | same hook |
-| `ados_admission_rejections_total` | Counter | `gate`={capability_concurrency,mission_concurrency,approval_queue,session_activity} | A request was refused by admission control before any external side effect | the four gates — see §2 below and [18](18-production-readiness-review.md)'s admission-control section |
+| `ados_admission_rejections_total` | Counter | `gate`={capability_concurrency,mission_concurrency,approval_queue,session_activity,mission_start_rate} | A request was refused by admission control before any external side effect | the five gates — see §2 below and [18](18-production-readiness-review.md)'s admission-control section. `mission_start_rate` added P12 (`integrations/rate_limiter.py`) — a rate limit, not a concurrency ceiling; see that module's docstring |
 | `ados_approval_queue_depth` | Gauge | none | Capability requests currently `pending_approval`, queried live at scrape time | `GET /metrics` handler |
 | `ados_approval_queue_oldest_age_seconds` | Gauge | none | Age of the oldest pending approval, 0 when empty | same |
+| `ados_admission_leases_active` | Gauge | `gate`={capability_concurrency,mission_concurrency} | **P12** — currently-held Postgres-backed admission slots, queried live | `GET /metrics` handler, from `admission_leases` |
+| `ados_admission_lease_oldest_age_seconds` | Gauge | `gate` | **P12** — age of the oldest currently-held lease, 0 when none held; a real crash leak shows up here before the periodic reclaim removes it | same |
 | `ados_outcome_unknown_total` | Counter | none | A `capability_requests` row transitioned into `outcome_unknown` (P9) | `mcp_gateway.py` (synchronous UNKNOWN), `capability_reconcile.py::mark_stalled_executions_unknown` (stall detection) |
 | `ados_outcome_unknown_open` | Gauge | none | `outcome_unknown` rows not yet resolved, queried live | `GET /metrics` handler |
 | `ados_outcome_unknown_oldest_age_seconds` | Gauge | none | Age of the oldest unresolved one, 0 when none | same |
@@ -76,7 +89,7 @@ none of them appear anywhere in `GET /metrics`'s rendered output.
 | `ados_authentication_failures_total` | Counter | none | A failed `/auth/login` attempt | `backend/app/routers/auth.py::login` |
 | `ados_authorization_denials_total` | Counter | `reason`={role_readonly,tier_role_mismatch,over_approval_limit,inactive_account,not_in_grant,policy_violation} | A request was refused by an authorization check | `rbac.py` (3 sites), `mcp_gateway.py` (grant check), `integrations/hub.py` (policy violation) |
 | `ados_build_identity_drift_refusals_total` | Counter | none | The running process refused to proceed because its source no longer matches what it loaded at import | `orchestrate/runtime/build_identity.py::verify_build_matches` — the single raise site for all three callers |
-| `ados_token_expiry_refusals_total` | Counter | none | A runtime session token was expired or never given a recorded expiry | `mcp_gateway.py::_resolve_session`, `runtime_approvals.py::_confirm_token_expiry_recorded_or_409` |
+| `ados_token_expiry_refusals_total` | Counter | none | A runtime session token was expired or never given a recorded expiry | `mcp_gateway.py::_resolve_session`, `runtime_approvals.py::_confirm_token_expiry_recorded_or_409` — **note:** this row described the intended design accurately when P11 wrote it, but `_resolve_session` did not actually check the NULL case until P12 closed that gap (it previously only checked expiry *in the past*, `is not None and expired`); the catalog entry is now true of the code, not only of the intent — see doc 18 §16.6/P12 |
 
 ### Why these labels are safe
 
@@ -118,20 +131,33 @@ file shipped here.
 | `increase(ados_admission_rejections_total{gate="capability_concurrency"}[5m]) > 0` sustained | The general capability-execution ceiling is saturated | Same as above, for `max_concurrent_capability_executions` |
 | `increase(ados_admission_rejections_total{gate="approval_queue"}[5m]) > 0` | New Tier 1/2 requests are being refused outright because the approval backlog is already at `max_pending_approvals` | This compounds with the queue-depth alert above — an operator needs to clear the backlog, not just raise the limit | 
 | `increase(ados_admission_rejections_total{gate="session_activity"}[5m]) > 0` for one session | One mission is hammering the gateway with capability requests — either a runaway agent loop or a mission that has genuinely outgrown the per-session budget | Inspect that session's `capability_requests` rows for a repeating pattern; consider whether the mission needs to be stopped, not just have its limit raised |
+| **P12** `increase(ados_admission_rejections_total{gate="mission_start_rate"}[15m]) > 0` sustained | Missions are being *started* faster than the configured rate, independent of concurrency — the pattern this catches is start/fail-immediately/restart, which stays under any concurrency ceiling while still hammering a paid LLM provider | Check for a caller stuck in a restart loop; see `integrations/rate_limiter.py` |
+| **P12** `ados_admission_lease_oldest_age_seconds{gate=...} > 1200` sustained | An admission-control slot has been held far longer than a normal call takes — most likely a process crashed before releasing it | No action needed by default — the periodic reclaim pass removes it automatically past `admission_lease_max_age_seconds` (1800s); this alert is the early warning before that self-heals |
 | No successful scrape of `/metrics` at all | The process is down, or `/metrics` is unreachable — this is itself the last-resort "the app might be down" signal, since it shares fate with every other endpoint | Check `GET /healthz`; see runbook "gateway unhealthy" |
 
 ## Scope boundary
 
-This is **single-process, in-process metrics**. There is no metrics
-aggregation across replicas, no push gateway, and no long-term storage —
-`GET /metrics` reflects only the state of the one ADOS process answering the
-request, at that moment (counters since process start; gauges computed live
-from Postgres at scrape time). This is the correct-sized mechanism for
-Model A (§5 of [18](18-production-readiness-review.md) — single ADOS
-process); it is explicitly not a distributed-observability platform, and
-building one would be over-building for an architecture that has no second
-process to aggregate across. Revisit if and when Model B/C's multi-process
-or multi-host requirements are actually being built.
+This is **single-process, in-process metrics** — that part is unchanged by
+P12. There is no metrics aggregation across replicas, no push gateway, and
+no long-term storage — `GET /metrics` reflects only the state of the one
+ADOS process answering the request, at that moment (counters since process
+start; gauges computed live from Postgres at scrape time). If two ADOS
+processes ran, an operator's Prometheus would need to scrape both targets
+and sum at query time (PromQL, not this repository's job) to see a combined
+`ados_missions_started_total`.
+
+**Distinct from the above, and now different as of P12:** whether the
+*admission-control ceilings themselves* stay correct across processes.
+`mission_concurrency`/`capability_concurrency` (the two `IntegrationHub`
+gates) used to be plain in-process counters — real for Model A's
+single-process envelope, but not globally correct if a second process
+existed. Both are now additionally backed by a Postgres table
+(`admission_leases`), so the *ceiling* — not the *metrics view* — is
+globally enforced regardless of how many processes are running. See
+[20-operator-runbook.md](20-operator-runbook.md) §13 for the full account.
+This narrows, but does not close, the gap this section originally
+described: the metrics themselves are still per-process views; only the
+two admission gates gained cross-process correctness.
 
 See [20-operator-runbook.md](20-operator-runbook.md) for what to do when any
 of the above fires.

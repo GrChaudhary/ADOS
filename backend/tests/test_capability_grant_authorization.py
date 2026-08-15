@@ -50,6 +50,7 @@ from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRo
 from integrations.connectors.servicenow import ServiceNowConnector
 from integrations.hub import IntegrationHub, default_hub
 from orchestrate.governance import CAPABILITY_RISK_CLASS
+from orchestrate.runtime.prime import token_expiry
 
 GRANTED = Capability.NOTIFY_IT_HELPDESK          # risk class: low  -> autonomous
 WITHHELD = Capability.CREATE_CHANGE_REQUEST      # risk class: high -> tier 2
@@ -121,6 +122,7 @@ async def _session(*grants: str):
         token = "tok-" + uuid.uuid4().hex
         db.add(RuntimeSessionRow(
             mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            token_expires_at=token_expiry(1800.0),
         ))
         await db.commit()
         return mission.mission_id, token

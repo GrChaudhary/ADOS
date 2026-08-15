@@ -34,7 +34,7 @@ lifetime, not across a restart.
 
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -140,6 +140,59 @@ class AuditTrail:
             if record.incident_id == incident_id:
                 return record
         return None
+
+    async def get_from_db(self, incident_id: str) -> Optional[IncidentRecord]:
+        """P13 — a live Postgres read, bypassing the in-memory list.
+
+        `get()` above only ever sees what THIS process's `hydrate_from_db()`
+        loaded at ITS OWN startup, or appended itself. A worker process that
+        never ran a given incident's `run_incident()` coroutine and started
+        before `persist_snapshot()` wrote it has no way to see it via `get()`
+        — this is the read half of the cross-worker visibility gap P13
+        closes (see DecisionOrchestrator.resolve_pending_approval, the only
+        caller). Not merged into `get()` itself: every other caller of
+        `get()` (list_incidents, executive/ KPI reads) is a hot, frequent
+        path this module's own docstring already documents as
+        in-memory-is-ground-truth-for-reads; making every one of those pay
+        for a Postgres round trip would be a much larger behavior change
+        than the one specific gap this method exists to close."""
+        if self._session_factory is None:
+            return None
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(select(IncidentRow).where(IncidentRow.incident_id == incident_id))
+            ).scalar_one_or_none()
+        return row_to_incident_record(row) if row is not None else None
+
+    async def claim_awaiting_approval(self, incident_id: str) -> bool:
+        """P13 — atomically transitions `incident_id` from `AwaitingApproval`
+        to `Executing` (an existing, already-meaningful IncidentState —
+        contracts/incident_state.py — not a new invented value), and returns
+        whether THIS caller is the one that made that transition.
+
+        Reconstructing a PendingApproval on a process that never ran the
+        incident (get_from_db, above) makes it newly POSSIBLE for two
+        processes to both reconstruct and act on the same decision at
+        once — something that could never happen before, since only the
+        one originating process ever had the incident visible at all. This
+        is the write-side guard that keeps that possibility from becoming a
+        real double execution: a single conditional `UPDATE ... WHERE
+        final_state = 'AwaitingApproval'` is serialized by Postgres itself,
+        so of any number of processes racing to claim the same row, exactly
+        one sees `rowcount == 1`. Mirrors P9's "durable checkpoint before
+        any external call" discipline (orchestrate/runtime/
+        capability_execution.py) for this pipeline's first time needing it.
+        """
+        if self._session_factory is None:
+            return True  # no Postgres wired -- one in-memory instance can't race with itself
+        async with self._session_factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    update(IncidentRow)
+                    .where(IncidentRow.incident_id == incident_id, IncidentRow.final_state == "AwaitingApproval")
+                    .values(final_state="Executing")
+                )
+            return result.rowcount == 1
 
     def all(self) -> List[IncidentRecord]:
         return list(self._records)

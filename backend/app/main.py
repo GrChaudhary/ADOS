@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import logging
 from contextlib import asynccontextmanager
 from typing import Any
@@ -12,11 +13,13 @@ from db.engine import async_session_factory, engine as db_engine
 from db.health import check_connectivity_or_raise
 from integrations import CapabilityManifestRegistry, default_hub
 from integrations.admission_control import AdmissionControl
+from integrations.rate_limiter import RateLimiter
 from orchestrate import DecisionOrchestrator
 from orchestrate.onboarding import runtime_registry as onboarding_runtime_registry
 
 from . import user_store
 from .config import settings
+from . import mcp_gateway
 from .mcp_gateway import mcp_http_app
 from .eventbus import get_event_bus
 from .observability import RequestIdMiddleware, configure_logging
@@ -60,20 +63,69 @@ async def _refresh_llm_settings_periodically() -> None:
 
 
 async def _reconcile_and_sweep_orphans_periodically() -> None:
-    """Reconciles sessions abandoned by a process failure (orchestrate/
-    runtime/session_reconcile.py), then sweeps whatever is now — or was
-    already — marked orphaned (orchestrate/runtime/orphan_sweep.py), on a
-    fixed interval. Reconcile first: a session an earlier ADOS process died
-    on has to become terminal-and-marked before the sweeper's own, unchanged
-    claim query will ever see it.
+    """The ONE centralized background scheduler for every automatic
+    recovery/cleanup pass in this process — P12 folded two more passes into
+    what P7-D built as session+orphan cleanup, deliberately into this same
+    loop rather than starting a second independent one (this phase's own
+    instructions: "do not scatter independent background loops"). All four
+    passes share one interval, one failure posture, and one bounded-work
+    guarantee:
 
-    Same failure posture as _refresh_llm_settings_periodically: a bad pass
-    is logged and the loop keeps ticking, rather than a transient DB or
-    Docker hiccup silently ending background cleanup for the rest of the
-    process's life.
+    1. Reconcile sessions abandoned by a process failure (orchestrate/
+       runtime/session_reconcile.py).
+    2. Sweep whatever is now — or was already — marked orphaned
+       (orchestrate/runtime/orphan_sweep.py). Must run after (1): a session
+       an earlier process died on has to become terminal-and-marked before
+       the sweeper's own, unchanged claim query will ever see it.
+    3. P12 — mark `capability_requests` rows stuck `executing` past the
+       stall bound as `outcome_unknown` (orchestrate/runtime/
+       capability_reconcile.py::mark_stalled_executions_unknown). Until this
+       phase this was manual-only (scripts/reconcile_capability_requests.py)
+       — safe either way (the correctness guarantee never depended on
+       automation), but "safe" and "a long-running service's audit trail
+       stays current without a human remembering a command" are different
+       claims, and only the second is what Model B needs.
+    4. P12 — resolve `outcome_unknown` rows against real external evidence
+       (capability_reconcile.py::reconcile_outcome_unknown) — a read-only
+       query against the external system by canonical request_id, never a
+       retry/re-invocation of the capability (see that module's own
+       docstring: "outcome_unknown is otherwise a dead end on purpose").
+       Automating this queries external systems more often, but never
+       writes to one and never guesses a negative/unanswerable result into
+       a positive — the exact safety property P9 built stays intact.
+    5. P12 — reclaim `admission_leases` a crashed process never released and
+       prune old `rate_limit_events` (orchestrate/runtime/
+       admission_lease_reclaim.py) — the same bounded-staleness argument as
+       (1), applied to admission control's own state instead of a session.
+    6. Dead-host reclamation — record this process's own heartbeat, then
+       compute every OTHER host whose heartbeat has gone stale past a
+       conservative threshold (orchestrate/runtime/node_heartbeat.py). Must
+       run before (2): the resulting `dead_node_ids` list is what lets this
+       tick's orphan sweep widen its claim beyond its own host. See
+       node_heartbeat.py's module docstring for the full safety argument —
+       the Model-C Decision Gate's one genuine required engineering blocker
+       (docs/prime-agent-integration/31-model-c-decision-gate.md).
+
+    Each pass is independently try/excepted below (not just the whole
+    function) so one pass's failure — e.g. reconciliation's external HTTP
+    call timing out — never prevents the others from running that same
+    tick, matching P7-C/D's own "one failure must never abort the batch"
+    posture used throughout orphan_sweep.py itself. A heartbeat-pass failure
+    is deliberately not fatal to the orphan sweep that follows it: on
+    failure `dead_node_ids` simply falls back to `[]`, i.e. this tick's
+    sweep degrades to its pre-existing own-host-only scope rather than
+    skipping entirely.
     """
-    from orchestrate.runtime.orphan_sweep import sweep_once
+    from orchestrate.runtime.admission_lease_reclaim import reclaim_stale_admission_state
+    from orchestrate.runtime.capability_reconcile import mark_stalled_executions_unknown, reconcile_outcome_unknown
+    from orchestrate.runtime.node_heartbeat import declared_dead_node_ids, record_heartbeat
+    from orchestrate.runtime.orphan_sweep import effective_node_id, sweep_once
     from orchestrate.runtime.session_reconcile import reconcile_abandoned_sessions
+
+    # P16 — this process's own sweep only ever claims sessions it (or a
+    # pre-P16 row with no recorded owner) can actually verify against its own
+    # Docker daemon. See orphan_sweep.claim_batch's docstring.
+    node_id = effective_node_id(settings.node_id)
 
     interval = settings.orphan_reconcile_interval_seconds
     while True:
@@ -85,19 +137,76 @@ async def _reconcile_and_sweep_orphans_periodically() -> None:
                     "Reconciled sessions abandoned by a prior process failure",
                     extra={"count": len(reconciled)},
                 )
-            report = await sweep_once(async_session_factory)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Session reconcile pass failed; will retry next interval", exc_info=True)
+
+        dead_node_ids: list[str] = []
+        try:
+            await record_heartbeat(async_session_factory, node_id)
+            dead_node_ids = await declared_dead_node_ids(
+                async_session_factory,
+                dead_after_seconds=settings.node_heartbeat_dead_after_seconds,
+                exclude_node_id=node_id,
+            )
+            if dead_node_ids:
+                logger.warning(
+                    "Declaring hosts dead for orphan-sweep reclamation purposes only",
+                    extra={"dead_node_ids": dead_node_ids},
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Heartbeat/dead-host pass failed; sweeping own host only this tick", exc_info=True)
+
+        try:
+            report = await sweep_once(async_session_factory, node_id=node_id, dead_node_ids=dead_node_ids)
             if report.claimed:
                 logger.info(
                     "Orphan sweep",
                     extra={
                         "claimed": report.claimed, "cleaned": report.cleaned,
                         "absent": report.absent, "failed": report.failed, "refused": report.refused,
+                        "unverifiable": report.unverifiable,
                     },
                 )
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.warning("Orphan reconcile/sweep pass failed; will retry next interval", exc_info=True)
+            logger.warning("Orphan sweep pass failed; will retry next interval", exc_info=True)
+
+        try:
+            stalled = await mark_stalled_executions_unknown(async_session_factory)
+            if stalled:
+                logger.info(
+                    "Marked stalled capability executions outcome_unknown",
+                    extra={"count": len(stalled)},
+                )
+            # reconcile_outcome_unknown logs its own "Reconciliation pass
+            # complete" summary internally (capability_reconcile.py) —
+            # nothing duplicated here.
+            await reconcile_outcome_unknown(async_session_factory)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Capability-request reconciliation pass failed; will retry next interval", exc_info=True)
+
+        try:
+            reclaimed = await reclaim_stale_admission_state(
+                async_session_factory,
+                lease_max_age_seconds=settings.admission_lease_max_age_seconds,
+                rate_limit_event_retention_seconds=settings.rate_limit_event_retention_seconds,
+            )
+            if reclaimed.leases_reclaimed:
+                logger.warning(
+                    "Reclaimed admission leases a crashed process never released",
+                    extra={"count": reclaimed.leases_reclaimed},
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Admission-state reclaim pass failed; will retry next interval", exc_info=True)
 
 
 # The MCP sub-app is rebuilt for EVERY lifespan run, not once at import.
@@ -154,7 +263,13 @@ async def lifespan(app: FastAPI):
         admission_control=AdmissionControl(
             max_concurrent_capability_executions=settings.max_concurrent_capability_executions,
             max_concurrent_missions=settings.max_concurrent_prime_missions,
+            # P12: makes the two concurrency gates globally correct across
+            # processes, not just within this one — see admission_control.py.
+            session_factory=async_session_factory,
         ),
+        rate_limiter=RateLimiter(session_factory=async_session_factory),
+        mission_start_rate_limit_max=settings.mission_start_rate_limit_max,
+        mission_start_rate_limit_window_seconds=settings.mission_start_rate_limit_window_seconds,
     )
     # Capability onboarding (orchestrate/onboarding/) — static track ->
     # executor wiring (independent of any specific capability), then
@@ -164,6 +279,14 @@ async def lifespan(app: FastAPI):
     # this restart path and the two live activation endpoints all funnel
     # through the same register_runtime()).
     onboarding_runtime_registry.register_default_executors(app.state.integration_hub.dynamic_capability_connector)
+    # P14 — self-heal on a dispatch-config cache miss by consulting
+    # Postgres directly, instead of only ever being invocable on whichever
+    # single worker happened to handle the activation request. Closes the
+    # other deferred P13 gap (dynamic capability registry propagation);
+    # see runtime_registry.resolve_dispatch_config's own docstring.
+    app.state.integration_hub.dynamic_capability_connector.set_resolver(
+        functools.partial(onboarding_runtime_registry.resolve_dispatch_config, async_session_factory)
+    )
     hydrated = await onboarding_runtime_registry.hydrate_all(
         async_session_factory, app.state.integration_hub.manifests, app.state.integration_hub.dynamic_capability_connector
     )
@@ -282,10 +405,19 @@ async def lifespan(app: FastAPI):
     _mcp_gateway = mcp_http_app()
     async with _mcp_gateway.router.lifespan_context(app):
         _mcp_current = _mcp_gateway
+        # P13: mcp_gateway._execute_capability (the Prime Agent in-mission
+        # capability path) used to call default_hub() fresh on every call
+        # instead of the properly-configured app.state.integration_hub —
+        # see mcp_gateway.py's own _active_hub docstring for why that
+        # meant admission control never actually bounded this traffic at
+        # all. Set for the lifetime of this lifespan, mirroring
+        # _mcp_current immediately above.
+        mcp_gateway._active_hub = app.state.integration_hub
         try:
             yield
         finally:
             _mcp_current = None
+            mcp_gateway._active_hub = None
 
     if getattr(app.state, "llm_settings_refresh_task", None):
         app.state.llm_settings_refresh_task.cancel()

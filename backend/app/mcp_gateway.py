@@ -45,6 +45,7 @@ from sqlalchemy.exc import IntegrityError
 from contracts import Capability, PolicyTier
 from db.engine import async_session_factory
 from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
+from db.tenancy import all_tenants_session
 from orchestrate.governance import CAPABILITY_RISK_CLASS, assign_policy_tier
 from orchestrate.runtime.capability_execution import (
     STATUS_EXECUTED,
@@ -64,6 +65,57 @@ mcp = FastMCP("ADOS Capability Gateway")
 # Session states in which a runtime may still act. A completed or torn-down
 # session's token is dead even if it has not expired by wall clock.
 _LIVE_STATES = {"starting", "running", "waiting_approval"}
+
+# P13: the real, globally-coordinated hub (app.state.integration_hub —
+# admission_control/rate_limiter wired with session_factory=async_session_
+# factory, per backend/app/main.py's lifespan), not the always-fresh
+# default_hub() _execute_capability used to call unconditionally below.
+#
+# THE BUG THIS CLOSES: FastMCP tools run on a separate ASGI sub-app with no
+# Depends()/request.app.state access (get_http_headers() above is FastMCP's
+# OWN, different, request-scoped mechanism — it doesn't reach app.state
+# either). `default_hub()` with no arguments constructs a BRAND NEW
+# IntegrationHub — and therefore a brand new AdmissionControl/RateLimiter
+# with session_factory=None — on every single call. Every in-mission
+# capability call a running Prime Agent makes (FetchIncidentEvidence,
+# NotifyITHelpdesk, ...) went through this path and, as a direct
+# consequence, was NEVER actually bounded by admission control's
+# capability_concurrency ceiling, in any deployment, single- or
+# multi-process — a real, pre-existing correctness gap this phase found
+# while auditing whether admission control's own claims still held.
+#
+# Mirrors the exact pattern _mcp_current/_mcp_delegator already use a few
+# lines below in main.py's own lifespan: a module-level slot, set for the
+# lifetime of the real app's lifespan, None outside it (every test/script
+# that imports this module directly and never runs that lifespan keeps
+# calling default_hub() fresh, unchanged — see the fallback below).
+_active_hub: Any = None
+
+# Captured once, at import time, before any test's monkeypatch can touch it
+# — the ONLY way to tell "integrations.hub.default_hub is still the real
+# function" apart from "a test replaced it wholesale"
+# (monkeypatch.setattr("integrations.hub.default_hub", lambda: hub), an
+# established convention across many existing test files, predating P13,
+# to inject a controlled/mocked hub even while a real TestClient lifespan
+# is running). `_hub_for_execution()` below only prefers `_active_hub` when
+# `default_hub` is still this exact original object — a monkeypatched
+# `default_hub` always wins, so every existing test's own explicit
+# injection keeps meaning what it says.
+from integrations.hub import default_hub as _original_default_hub
+
+
+def _hub_for_execution():
+    """The real app's properly-configured hub when the lifespan has wired
+    one in AND nothing has monkeypatched `integrations.hub.default_hub`
+    out from under it; `default_hub()` (whatever it currently resolves to
+    — real or test-monkeypatched) otherwise. A local function, not an
+    inline ternary, so callers read as `_hub_for_execution().invoke(...)`
+    rather than repeating the check."""
+    import integrations.hub as _hub_module
+
+    if _active_hub is not None and _hub_module.default_hub is _original_default_hub:
+        return _active_hub
+    return _hub_module.default_hub()
 
 
 def hash_token(token: str) -> str:
@@ -108,7 +160,21 @@ async def _resolve_session(session_db) -> tuple[RuntimeSessionRow, MissionRow]:
         raise _Denied("unrecognized session token")
     if row.state not in _LIVE_STATES:
         raise _Denied(f"session is {row.state} and can no longer act")
-    if row.token_expires_at is not None and datetime.now(timezone.utc) > row.token_expires_at:
+    # P12: closes an asymmetry P10's NULL-expiry guard left open. P10 taught
+    # `_confirm_token_expiry_recorded_or_409` (runtime_approvals.py) that a
+    # NULL token_expires_at is proof a row did not come from the real,
+    # current session-creation path (which has set it unconditionally since
+    # P6-D) — but applied that reasoning only to the approval endpoint, not
+    # here. A NULL-expiry row whose `state` still reads a live value (every
+    # known fossil row's actual shape) passed this function unchecked and
+    # could call request_capability, including straight through to
+    # autonomous auto-execution — no human approval step at all. Same proof,
+    # same refusal, extended to every tool _resolve_session gates.
+    if row.token_expires_at is None:
+        from .metrics import token_expiry_refusals_total
+        token_expiry_refusals_total.inc()
+        raise _Denied("session has no recorded token expiry and cannot authorize any action")
+    if datetime.now(timezone.utc) > row.token_expires_at:
         from .metrics import token_expiry_refusals_total
         token_expiry_refusals_total.inc()
         raise _Denied("session token expired")
@@ -130,7 +196,13 @@ async def list_capabilities() -> Dict[str, Any]:
 
     Exposed so the agent discovers its grant instead of guessing, and so a
     denial later is informative rather than mysterious."""
-    async with async_session_factory() as db:
+    # P17 — this module is reached over the runtime's opaque, possessed
+    # session token (_resolve_session below), never a user JWT/tenant
+    # context. That token is itself a narrower, stronger proof than tenant
+    # membership, and every query in this module is a targeted lookup by
+    # an id the caller already legitimately holds — never a list. See
+    # db/tenancy.py::use_all_tenants's own docstring for why that's safe.
+    async with all_tenants_session(async_session_factory) as db:
         try:
             _, mission = await _resolve_session(db)
         except _Denied as e:
@@ -174,7 +246,13 @@ async def request_capability(
     session_id_for_replay: Optional[uuid.UUID] = None
 
     try:
-        async with async_session_factory() as db:
+        # P17 — this module is reached over the runtime's opaque, possessed
+        # session token (_resolve_session below), never a user JWT/tenant
+        # context. That token is itself a narrower, stronger proof than
+        # tenant membership, and every query in this module is a targeted
+        # lookup by an id the caller already legitimately holds — never a
+        # list. See db/tenancy.py::use_all_tenants's own docstring.
+        async with all_tenants_session(async_session_factory) as db:
             try:
                 session_row, mission = await _resolve_session(db)
             except _Denied as e:
@@ -211,6 +289,7 @@ async def request_capability(
                 denial = CapabilityRequestRow(
                     session_id=session_row.session_id,
                     mission_id=mission.mission_id,
+                    tenant_id=mission.tenant_id,
                     capability=capability,
                     arguments=arguments,
                     status="denied",
@@ -254,6 +333,7 @@ async def request_capability(
                 denial = CapabilityRequestRow(
                     session_id=session_row.session_id,
                     mission_id=mission.mission_id,
+                    tenant_id=mission.tenant_id,
                     capability=capability,
                     arguments=arguments,
                     status="denied",
@@ -308,6 +388,7 @@ async def request_capability(
                     denial = CapabilityRequestRow(
                         session_id=session_row.session_id,
                         mission_id=mission.mission_id,
+                        tenant_id=mission.tenant_id,
                         capability=capability,
                         arguments=arguments,
                         policy_tier=int(tier),
@@ -329,6 +410,7 @@ async def request_capability(
             row = CapabilityRequestRow(
                 session_id=session_row.session_id,
                 mission_id=mission.mission_id,
+                tenant_id=mission.tenant_id,
                 capability=capability,
                 arguments=arguments,
                 policy_tier=int(tier),
@@ -397,21 +479,55 @@ async def request_capability(
         result = {"outcome_status": STATUS_FAILED, "capability": capability, "error": f"{type(exc).__name__}: {exc}"}
 
     outcome_status = result.get("outcome_status", STATUS_FAILED)
-    async with async_session_factory() as db:
+    # P15 — guards against a race runtime_approvals.py's approve path
+    # already closed (its own Phase 3 comment) but this, the OTHER writer
+    # of a capability_requests completion, did not: the periodic
+    # reconciliation pass (orchestrate/runtime/capability_reconcile.py::
+    # mark_stalled_executions_unknown) can mark this exact row
+    # outcome_unknown WHILE `_execute_capability` above is still
+    # genuinely in flight (no lock is held across that call, deliberately
+    # — see the comment above it), and reconcile_outcome_unknown can then
+    # resolve it further to `executed` with real external evidence before
+    # this slow call ever returns. Unconditionally overwriting row.status
+    # here would silently reverse whatever an independent, evidence-gated
+    # process already decided — discovered by this phase's audit, not by
+    # any pre-existing test.
+    resolved_elsewhere = False
+    # P17 — this module is reached over the runtime's opaque, possessed
+    # session token (_resolve_session below), never a user JWT/tenant
+    # context. That token is itself a narrower, stronger proof than tenant
+    # membership, and every query in this module is a targeted lookup by
+    # an id the caller already legitimately holds — never a list. See
+    # db/tenancy.py::use_all_tenants's own docstring for why that's safe.
+    async with all_tenants_session(async_session_factory) as db:
         row = await db.get(CapabilityRequestRow, request_id)
-        row.status = outcome_status
-        row.result = result
-        row.reason = None if outcome_status == STATUS_EXECUTED else result.get("error")
-        row.decided_by = "policy:autonomous"
-        await db.commit()
+        if row.status != STATUS_EXECUTING:
+            resolved_elsewhere = True
+            logger.warning(
+                "Capability execution completed after its request row was "
+                "independently resolved elsewhere; the row's own state is kept",
+                extra={"request_id": str(request_id), "row_status": row.status, "late_outcome": outcome_status},
+            )
+            outcome_status = row.status
+            result = row.result or result
+        else:
+            row.status = outcome_status
+            row.result = result
+            row.reason = None if outcome_status == STATUS_EXECUTED else result.get("error")
+            row.decided_by = "policy:autonomous"
+            await db.commit()
 
-    if outcome_status == STATUS_OUTCOME_UNKNOWN:
+    if outcome_status == STATUS_OUTCOME_UNKNOWN and not resolved_elsewhere:
         # P10: this is the anomaly `orchestrate/runtime/capability_reconcile.py`
         # exists to resolve — a connector reported it could not tell whether
         # the action happened. Durable state already carries it (row.status);
         # this is what makes it visible without querying the database, e.g.
         # for an alert on this exact log line. Never the arguments or the
         # connector's raw error text, which may embed request content.
+        # Skipped when `resolved_elsewhere` is True: the reconciliation pass
+        # that made this row outcome_unknown already logged and counted it
+        # itself (capability_reconcile.py) — counting it again here would
+        # double the metric for one real event.
         logger.warning(
             "Capability execution outcome unknown — requires reconciliation",
             extra={"request_id": str(request_id), "capability": capability},
@@ -444,7 +560,13 @@ async def _replay_or_raise(session_id: uuid.UUID, key: str) -> Dict[str, Any]:
     the triggering `IntegrityError` OUTSIDE the session that raised it, for
     exactly this reason — see that catch's own comment.
     """
-    async with async_session_factory() as db:
+    # P17 — this module is reached over the runtime's opaque, possessed
+    # session token (_resolve_session below), never a user JWT/tenant
+    # context. That token is itself a narrower, stronger proof than tenant
+    # membership, and every query in this module is a targeted lookup by
+    # an id the caller already legitimately holds — never a list. See
+    # db/tenancy.py::use_all_tenants's own docstring for why that's safe.
+    async with all_tenants_session(async_session_factory) as db:
         prior = (
             await db.execute(
                 select(CapabilityRequestRow).where(
@@ -469,7 +591,13 @@ async def get_capability_request(request_id: str) -> Dict[str, Any]:
     """Current state of a previously submitted request.
 
     How the agent waits for a human without anyone holding a socket open."""
-    async with async_session_factory() as db:
+    # P17 — this module is reached over the runtime's opaque, possessed
+    # session token (_resolve_session below), never a user JWT/tenant
+    # context. That token is itself a narrower, stronger proof than tenant
+    # membership, and every query in this module is a targeted lookup by
+    # an id the caller already legitimately holds — never a list. See
+    # db/tenancy.py::use_all_tenants's own docstring for why that's safe.
+    async with all_tenants_session(async_session_factory) as db:
         try:
             session_row, _ = await _resolve_session(db)
         except _Denied as e:
@@ -537,11 +665,13 @@ async def _execute_capability(
     may already have happened. See `orchestrate.runtime.capability_execution.
     outcome_status_for`.
     """
-    # default_hub(), not a bare IntegrationHub(): the bare constructor has NO
-    # connectors registered, so every capability comes back
-    # "no connector registered for capability X" — which the first real run of
-    # this gateway did, calmly, while reporting success.
-    from integrations.hub import default_hub  # local import: avoids a cycle at app import time
+    # _hub_for_execution() (module-level function above): the real app's
+    # properly-configured, globally-coordinated hub when the lifespan has
+    # wired one in, default_hub() otherwise — never a bare IntegrationHub():
+    # the bare constructor has NO connectors registered, so every
+    # capability comes back "no connector registered for capability X" —
+    # which the first real run of this gateway did, calmly, while
+    # reporting success.
     from contracts import CapabilityCall, GovernanceInfo
     from orchestrate.runtime.build_identity import verify_no_drift_since_process_start
 
@@ -557,9 +687,9 @@ async def _execute_capability(
         # StaleGatewayError (a RuntimeError), caught by the `except
         # Exception` below exactly like every other failure constructing or
         # executing this call — no new error shape, and importantly this
-        # runs BEFORE default_hub().invoke() below, so a stale gateway is
-        # refused before any connector, and therefore any external side
-        # effect, is ever reached.
+        # runs BEFORE _hub_for_execution().invoke() below, so a stale
+        # gateway is refused before any connector, and therefore any
+        # external side effect, is ever reached.
         verify_no_drift_since_process_start()
         call = CapabilityCall(
             capability=Capability(capability),
@@ -578,7 +708,7 @@ async def _execute_capability(
         )
         # hub.invoke(), the same entry point orchestrate/moa/graph.py uses —
         # one execution path for agents and for the MOA, not a parallel one.
-        outcome = await default_hub().invoke(call)
+        outcome = await _hub_for_execution().invoke(call)
         payload = _jsonable(outcome)
 
         # "No exception" is NOT "it worked". CapabilityResponse carries its own

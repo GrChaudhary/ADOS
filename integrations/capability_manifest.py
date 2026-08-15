@@ -682,6 +682,65 @@ class CapabilityManifestRegistry:
         """Synchronous on purpose — hot path, see module docstring."""
         return self._manifests.get(capability_id)
 
+    async def refresh_from_db(self, capability_id: str) -> Optional[CapabilityManifest]:
+        """P14 — the authoritative, per-call read used at an actual
+        execution boundary (IntegrationHub.invoke(), DynamicCapability
+        Connector.execute()), immediately before a capability may run.
+
+        manifest_for()'s in-memory dict is only ever updated by a mutating
+        call THIS instance made, or by list_manifests(). A hot_disable()
+        issued through a DIFFERENT process's CapabilityManifestRegistry
+        instance (the normal case under `--workers 2+`, or simply two
+        separate ADOS processes) writes Postgres but never touches this
+        instance's cache — so a status this process already cached as
+        ACTIVE stays ACTIVE here forever, not just briefly stale. That is
+        the actual multi-process safety gap (P13 named it; this closes
+        it): this method always re-reads Postgres (when persisted) right
+        before the decision that matters, and repairs the cache to match,
+        rather than trusting whatever happens to be cached already.
+
+        Deliberately a plain SELECT, not `with_for_update()` — this is a
+        fast, non-blocking snapshot read on the hot path of every gated
+        capability call, not a state transition; see hot_disable/activate
+        for the write-side row lock this doesn't need to duplicate. A
+        transition that commits in the narrow window between this read
+        returning and the caller actually dispatching is a bounded,
+        sub-millisecond race, not the unbounded staleness this method
+        exists to close — see docs/prime-agent-integration/24-p13-
+        horizontal-scale-out.md's P14 section for the exact consistency
+        guarantee this provides versus a lock would.
+
+        In pure in-memory mode (no session_factory — every bare
+        construction in tests/scripts, unchanged) there is no second copy
+        of the truth to consult, so this degrades to exactly
+        manifest_for()'s existing cache-only read.
+        """
+        if self._session_factory is None:
+            return self._manifests.get(capability_id)
+
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    select(CapabilityManifestRow).where(CapabilityManifestRow.capability_id == capability_id)
+                )
+            ).scalar_one_or_none()
+
+        if row is None:
+            self._manifests.pop(capability_id, None)
+            return None
+
+        manifest = _row_to_manifest(row)
+        cached = self._manifests.get(capability_id)
+        stale = cached is not None and cached.status is not manifest.status
+        self._manifests[capability_id] = manifest
+        if stale:
+            # Local import: backend.app.metrics is an outer-layer module —
+            # see integrations/hub.py::invoke()'s own identical comment.
+            from backend.app.metrics import capability_registry_stale_cache_detected_total
+
+            capability_registry_stale_cache_detected_total.inc()
+        return manifest
+
     async def list_manifests(self) -> List[CapabilityManifest]:
         """All registered manifests. With a session_factory, reads from
         Postgres (the authority) and refreshes the in-memory hot-path
@@ -727,41 +786,15 @@ class CapabilityManifestRegistry:
         return manifest
 
 
-def hot_disable_policy_rule(manifests: CapabilityManifestRegistry):
-    """Builds a ConnectorPolicyEngine rule (policy_engine.PolicyRule shape
-    — Callable[[CapabilityCall], None], raises PolicyViolation to deny)
-    that enforces §8.7's capability-level circuit breaker: a HOT_DISABLED
-    capability is blocked at the policy layer, before any connector is
-    selected, so pulling a misbehaving capability doesn't require touching
-    connector registration or orchestrator code.
-
-    Deliberately only blocks HOT_DISABLED, not DEPRECATED — deprecation is
-    a soft retirement signal, not an emergency pull; a deprecated
-    capability keeps working until whatever depends on it migrates off.
-
-    A capability with no manifest at all (true for every built-in
-    Capability today — none of them have gone through the §8 onboarding
-    pipeline) is allowed through unchanged. This rule only starts having
-    an effect once something actually calls
-    CapabilityManifestRegistry.propose() for a given capability_id.
-
-    Dynamically onboarded capabilities (Capability.DYNAMIC_CAPABILITY, see
-    integrations/connectors/dynamic.py) all share that one sentinel enum
-    value — their real identity travels in call.input["capability_id"], not
-    call.capability.value. Looking this rule up by call.capability.value
-    alone would resolve every dynamic call to the same fixed string
-    ("DynamicCapability") regardless of which onboarded capability it
-    actually is, so hot-disabling one onboarded capability would never
-    actually match it. Resolve by the real id for dynamic calls instead.
-    """
-
-    def _rule(call: CapabilityCall) -> None:
-        if call.capability is Capability.DYNAMIC_CAPABILITY:
-            lookup_id = call.input.get("capability_id", call.capability.value)
-        else:
-            lookup_id = call.capability.value
-        manifest = manifests.manifest_for(lookup_id)
-        if manifest is not None and manifest.status is CapabilityStatus.HOT_DISABLED:
-            raise PolicyViolation(f"capability {lookup_id} is hot-disabled and cannot be invoked")
-
-    return _rule
+def resolve_capability_lookup_id(call: CapabilityCall) -> str:
+    """The manifest-registry key for a call — the real onboarded id for a
+    DYNAMIC_CAPABILITY call (which always carries the fixed sentinel enum
+    value in call.capability; the real identity travels in
+    call.input["capability_id"] instead, see integrations/connectors/
+    dynamic.py), the enum's own value for everything else. Used by
+    IntegrationHub.invoke()'s authoritative §8.7 hot-disable re-check
+    (P14) — see that call site for why this used to also back a
+    synchronous PolicyRule and no longer does."""
+    if call.capability is Capability.DYNAMIC_CAPABILITY:
+        return call.input.get("capability_id", call.capability.value)
+    return call.capability.value

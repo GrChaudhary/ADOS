@@ -692,6 +692,66 @@ full trace and test list.
 No resume after ADOS restart, no heartbeats, no schedules, no subagents, no
 agent-to-agent messaging, no multi-session missions.
 
+### ~~No tenant isolation model~~ — CONFIRMED absent P16 (2026-08-14), BUILT and DEMONSTRATED P17 (2026-08-15)
+
+Every mission, runtime session, and capability request used to live in one
+flat, global namespace, with role-based-only authorization and no ownership
+check anywhere. Proven live by `scripts/p16_tenant_boundary_proof.py`
+(2026-08-14). P17 (2026-08-15) built a real tenant model — `tenants`/
+`tenant_memberships` tables, tenant membership baked into the login JWT,
+and a SQLAlchemy `do_orm_execute` global filter (fail-closed by default)
+scoping every existing query against `missions`/`runtime_sessions`/
+`capability_requests` with zero call-site changes — and proved the exact
+same scenario P16 demonstrated now correctly refuses with a 404, live,
+with two real tenants and two real users
+(`scripts/p17_tenant_isolation_proof.py`). Full report:
+[28-multi-tenancy-and-tenant-isolation.md](28-multi-tenancy-and-tenant-isolation.md).
+Not everything was closed by P17: a Postgres RLS backstop was designed
+but not built, the separate MOA/incidents surface remains untenanted by
+deliberate scope decision, and P17 believed mission creation had no
+user-facing entry point to attribute a real caller's tenant to.
+
+**P18 (2026-08-15) found that last belief was wrong.**
+`POST /capabilities/invoke` — a generic, pre-Prime-Agent capability-
+dispatch endpoint any authenticated user can already reach — was a real,
+reachable path to `RunPrimeRLMAgent`, and was silently stamping every
+mission it created with the default tenant regardless of who called it.
+Harmless while only one tenant has real users; a real cross-tenant
+misattribution the moment a second one does. **Fixed**: the endpoint now
+resolves the caller's tenant via `get_tenant_context`
+(`backend/app/tenancy.py`) before the call reaches
+`PrimeRuntimeConnector._run()`, which now reads the resolved tenant from
+the existing `ContextVar` instead of hardcoding the default. Proven live
+over real HTTP with a real second tenant
+(`backend/tests/test_mission_creation_tenant_attribution.py`, 4/4). P18
+also re-evaluated Postgres RLS independently and found a sharper, more
+concrete reason it remains unsafe to build without further work than P17
+had identified (a session-GUC approach would silently stop applying
+mid-approval-flow, since `approve_capability_request`'s own three-phase
+design spans multiple transactions on one session) — still DESIGNED, NOT
+BUILT, now with a precise prerequisite named rather than a general one.
+The MOA/incidents boundary was re-confirmed, more strongly than before,
+via an exhaustive full-repo grep finding zero shared code paths. Full
+report:
+[29-p18-tenant-production-hardening.md](29-p18-tenant-production-hardening.md).
+
+### ~~Multi-host orphan sweep could misattribute a live container as "absent"~~ — FIXED 2026-08-14 (P16)
+
+`orphan_sweep.py`'s cleanup sweep had no host affinity: in a deployment with
+more than one ADOS host sharing one Postgres database but each with its own
+Docker daemon, any host's sweeper could claim any other host's terminal,
+orphan-marked session row, find nothing on its own local daemon (a
+container that only exists on a different host's daemon is indistinguishable
+from one that genuinely never existed), and durably record it `absent` — a
+terminal status, never reclaimed, while the real container leaked
+permanently. Fixed with a nullable `RuntimeSessionRow.owner_host` column and
+a `node_id`-scoped claim filter in `claim_batch`, fully backward-compatible
+with every single-host deployment (`node_id=None` preserves the exact
+pre-P16 behavior everywhere it isn't explicitly opted into). Proven under
+real Postgres including a genuine concurrent-race test; **not** independently
+verified against two real Docker daemons (none were available) — see doc 27
+§12 for exactly what that would still require.
+
 ---
 
 ## Model behaviour

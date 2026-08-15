@@ -178,6 +178,29 @@ class PrimeRuntimeConnector(Connector):
         )
 
         async with async_session_factory() as db:
+            from db.tenancy import DEFAULT_TENANT_ID, current_tenant
+
+            # P18 — most real callers of this capability today are internal
+            # ADOS/MOA code with no HTTP request behind them at all, for
+            # which current_tenant.get() correctly reads None (fail-closed
+            # default) — DEFAULT_TENANT_ID remains the right, honest
+            # attribution for those, exactly as P17 reasoned. But
+            # backend/app/routers/capabilities.py::invoke_capability IS a
+            # real, reachable, authenticated HTTP path to this capability
+            # (P16/P17's own grep for a RunPrimeRLMAgent caller missed it —
+            # it dispatches by capability *value*, not by a direct Python
+            # call), and that endpoint now resolves the caller's tenant via
+            # get_tenant_context before reaching here. Since this whole call
+            # chain (HTTP handler -> hub.invoke() -> connector.execute() ->
+            # this method) runs as one plain `await` sequence in the same
+            # asyncio Task, contextvars.ContextVar propagates it here with
+            # no new plumbing through CapabilityCall/GovernanceInfo needed.
+            # Anything other than a concrete tenant id (None, or the
+            # background-job ALL_TENANTS sentinel, never expected on this
+            # path but not asserted unreachable) falls back to the default.
+            _resolved = current_tenant.get()
+            tenant_id = _resolved if isinstance(_resolved, uuid.UUID) else DEFAULT_TENANT_ID
+
             mission = MissionRow(
                 title=f"RunPrimeRLMAgent ({call.input.get('domain', 'general')})",
                 objective=prompt,
@@ -187,18 +210,26 @@ class PrimeRuntimeConnector(Connector):
                 allowed_capabilities=[],
                 status="running",
                 created_by=str(call.requested_by or "system"),
+                tenant_id=tenant_id,
             )
             db.add(mission)
             await db.flush()
             token = mint_session_token()
+            from backend.app.config import settings
+            from orchestrate.runtime.orphan_sweep import effective_node_id
+
             session = RuntimeSessionRow(
                 mission_id=mission.mission_id,
+                tenant_id=mission.tenant_id,
                 state="starting",
                 token_hash=hash_token(token),
                 # Set here rather than left NULL: state alone cannot revoke a
                 # credential if the process that writes state dies. See
                 # orchestrate/runtime/prime.py:token_expiry.
                 token_expires_at=token_expiry(wall_clock),
+                # P16 — which host is about to docker-run this session's real
+                # container. See orphan_sweep.claim_batch's docstring.
+                owner_host=effective_node_id(settings.node_id),
             )
             db.add(session)
             await db.commit()

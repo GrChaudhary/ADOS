@@ -33,6 +33,7 @@ from db.engine import async_session_factory
 from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
 from fastapi import HTTPException
 from integrations.connectors.prime_runtime import PrimeRuntimeConnector
+from orchestrate.runtime.prime import token_expiry
 from integrations.connectors.servicenow import ServiceNowConnector
 from integrations.hub import IntegrationHub, default_hub
 from orchestrate.runtime import build_identity
@@ -84,6 +85,7 @@ async def _mission_and_session(capability="NotifyITHelpdesk", allowed=None):
         token = "tok-" + uuid.uuid4().hex
         sess = RuntimeSessionRow(
             mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            token_expires_at=token_expiry(1800.0),
         )
         db.add(sess)
         await db.commit()
@@ -334,6 +336,31 @@ async def test_authorization_denials_total_not_in_grant(monkeypatch):
     assert _counter_value(metrics.authorization_denials_total, reason="not_in_grant") == before + 1
 
 
+async def test_authorization_denials_total_already_decided():
+    """P15 — backend/app/routers/runtime_approvals.py::_load_pending_or_404's
+    409 branch (a decision racing an already-decided request) previously had
+    no Prometheus signal at all, a gap this phase's observability review
+    (Phase 10) found; see that call site's own comment."""
+    from backend.app.routers.runtime_approvals import _load_pending_or_404
+
+    mission_id, session_id, _ = await _mission_and_session()
+    async with async_session_factory() as db:
+        row = CapabilityRequestRow(
+            session_id=session_id, mission_id=mission_id, capability="NotifyITHelpdesk",
+            arguments={}, status="executing", policy_tier=1,
+        )
+        db.add(row)
+        await db.commit()
+        request_id = row.request_id
+
+    before = _counter_value(metrics.authorization_denials_total, reason="already_decided")
+    async with async_session_factory() as db:
+        with pytest.raises(HTTPException) as exc_info:
+            await _load_pending_or_404(db, str(request_id))
+    assert exc_info.value.status_code == 409
+    assert _counter_value(metrics.authorization_denials_total, reason="already_decided") == before + 1
+
+
 async def test_authorization_denials_total_policy_violation():
     bare_hub = IntegrationHub()  # no connectors registered — see hub.py's own docstring
     call = CapabilityCall(
@@ -399,6 +426,8 @@ def test_metrics_endpoint_renders_valid_prometheus_text(client):
         "ados_orphan_cleanup_total", "ados_authentication_failures_total",
         "ados_authorization_denials_total", "ados_build_identity_drift_refusals_total",
         "ados_token_expiry_refusals_total",
+        "ados_capability_registry_authoritative_lookups_total",
+        "ados_capability_registry_stale_cache_detected_total",
     ):
         assert name in body, f"{name} missing from /metrics output"
 

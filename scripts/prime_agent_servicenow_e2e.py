@@ -60,6 +60,7 @@ from sqlalchemy import select
 
 from backend.app.mcp_gateway import hash_token
 from db.engine import async_session_factory, engine
+from db.tenancy import all_tenants_session  # P17 -- see p15_multiprocess_concurrency_proof.py's identical reasoning
 from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
 from integrations.connectors.servicenow import ServiceNowConnector
 from orchestrate.runtime.acceptance import evaluate_mission
@@ -237,7 +238,7 @@ async def main() -> int:
     marker = f"{MARKER} mission={mission_id}"
     print(f"[0] marker     {marker}")
 
-    async with async_session_factory() as db:
+    async with all_tenants_session(async_session_factory) as db:
         mission = MissionRow(
             mission_id=mission_id,
             title=f"{MARKER} Root-cause the checkout-api 502 incident (SYN-4417)",
@@ -326,7 +327,7 @@ async def main() -> int:
                     f"blocking what it is supposed to permit: {boundary}"
                 )
 
-        async with async_session_factory() as db:
+        async with all_tenants_session(async_session_factory) as db:
             row = await db.get(RuntimeSessionRow, session_id)
             row.state, row.container_name = "running", runtime.container_name
             row.workspace_path = str(runtime.workspace)
@@ -344,7 +345,7 @@ async def main() -> int:
         if rp.exists():
             report = rp.read_text()
 
-        async with async_session_factory() as db:
+        async with all_tenants_session(async_session_factory) as db:
             requests = (
                 await db.execute(
                     select(CapabilityRequestRow)
@@ -381,7 +382,7 @@ async def main() -> int:
         print("[8] container removed, workspace deleted")
 
     # ---------------------------------------------------------------- trace --
-    async with async_session_factory() as db:
+    async with all_tenants_session(async_session_factory) as db:
         m = await db.get(MissionRow, mission_id)
         s = await db.get(RuntimeSessionRow, session_id)
         requests = (
@@ -499,7 +500,7 @@ async def main() -> int:
         if "Capability request: " not in description:
             raise RunFailed("the ticket carries no capability request id")
         in_ticket = description.split("Capability request: ")[1].split("\n")[0].strip()
-        async with async_session_factory() as db:
+        async with all_tenants_session(async_session_factory) as db:
             resolved = await db.get(CapabilityRequestRow, uuid.UUID(in_ticket))
         if resolved is None:
             raise RunFailed(

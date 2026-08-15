@@ -145,6 +145,28 @@ async def register_runtime(
     return True
 
 
+async def resolve_dispatch_config(
+    session_factory: async_sessionmaker,
+    capability_id: str,
+) -> "DynamicDispatchConfig | None":
+    """P14 — DynamicCapabilityConnector's own designed cache-miss fallback
+    (its `resolver` constructor argument), wired in for the first time
+    (backend/app/main.py's lifespan). Closes the other deferred P13 gap:
+    a capability activated on worker A previously stayed uninvokable on
+    worker B (`_dispatch` is a plain process-local dict, populated only by
+    register_runtime() calls THIS process made) until B restarted. Reuses
+    the exact same DB-authoritative lookup register_runtime() already
+    does, just returns the config instead of also touching
+    dynamic_registry (that's MOA's action-menu visibility — a separate,
+    non-execution-blocking concern, not this fallback's job)."""
+    row = await _latest_activated_session(session_factory, capability_id)
+    if row is None:
+        return None
+    synthesized = row.synthesized_manifest or {}
+    runtime = synthesized.get("runtime", {})
+    return DynamicDispatchConfig(track=row.track, **runtime)
+
+
 async def hydrate_all(
     session_factory: async_sessionmaker,
     manifests: CapabilityManifestRegistry,

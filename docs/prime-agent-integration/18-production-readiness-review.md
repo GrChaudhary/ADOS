@@ -1259,3 +1259,524 @@ ownership, a tenancy concept, and distributed rate limiting are all still
 For **Model A** specifically — the target decision this phase was actually
 scoped to answer — see [21-p11-acceptance-report.md](21-p11-acceptance-report.md)'s
 final section for the complete verdict and its supporting evidence.
+
+---
+
+## 18. P12 update: Production Operational Hardening — Model B Readiness (2026-08-13)
+
+Targets Model B directly, per its own instructions: distributed admission
+control, process crash recovery, automatic reconciliation, rate limiting,
+Docker resource ownership, and a fresh re-derivation of every claim this
+document and doc 21 made about them — not trusted from either. **Baseline:**
+`7464902` (P11's own commit). Full evidence ledger, exact commands, and
+every negative control's before/after hash in
+[23-p12-production-operationalization.md](23-p12-production-operationalization.md);
+this section is the summary that belongs in the running readiness record.
+
+### 1. Distributed admission control — TESTED, real multi-process proof
+
+P11's own two `IntegrationHub` gates (`mission_concurrency`,
+`capability_concurrency`) were plain in-process counters — accurate to
+their own docstring's "does NOT extend across processes" disclosure, but a
+real gap for Model B: two ADOS processes sharing one Postgres database
+would each independently enforce the ceiling, together admitting up to Nx
+the configured limit. Both gates gained an additive, optional Postgres-
+backed global layer (`admission_leases`, `pg_advisory_xact_lock`, the same
+idiom the two already-global `mcp_gateway.py` gates use) — the local
+in-process check still runs first, unchanged, for every one of the ~800
+pre-existing tests (`session_factory=None`). Proven with real, separate OS
+processes (`multiprocessing`, `spawn` context, a real `Barrier` for
+genuinely simultaneous attempts): 6 processes racing a limit of 3 admitted
+**6** before the fix, **exactly 3** after — independently confirmed against
+the database's own row count, not trusted from return values alone. The two
+already-Postgres-backed gates (`approval_queue`, `session_activity`) were
+additionally proven with 2 real OS processes calling the real
+`request_capability` MCP tool function — exactly at their configured limits
+too.
+
+### 2. Docker resource ownership — CONFIRMED, no code changes needed
+
+Re-audited and independently verified against real Docker with real
+concurrent OS processes: the claim/lease/ownership-label mechanism P7-C
+built already satisfied every case this phase named (owner protection,
+legitimate-recovery-only, simultaneous-recovery-exactly-one-claims,
+stale-row protection) — proven, not merely re-asserted, in
+`scripts/p12_docker_ownership_proof.py`.
+
+### 3. Automatic reconciliation — TESTED, DEMONSTRATED live
+
+`capability_reconcile.py`'s two functions (stall-detection,
+outcome-unknown resolution) were manual-only through P11 — a deliberate,
+correct-at-the-time decision (the safety guarantee never depended on
+automation). Both are now also called from the same centralized periodic
+loop session/orphan reconciliation already used — one scheduler, not a
+second one. **Live-demonstrated** against a real running backend process: a
+genuinely stalled row was automatically detected, marked `outcome_unknown`,
+and correctly left there (no ServiceNow evidence available) — zero operator
+action, real infrastructure, real log lines, independently re-verified via
+`psql`.
+
+### 4. NULL-expiry protection — a real, previously-uncalled-out gap, CLOSED
+
+Re-deriving P10's own claim found it incomplete: `mcp_gateway.py::
+_resolve_session` — the function every MCP tool shares, not only the
+approval endpoint P10 actually fixed — never checked for a NULL
+`token_expires_at`, only for expiry in the past. A NULL-expiry fossil
+session with a live `state` could reach **autonomous auto-execution**, no
+human involved at all — worse than the approval-only gap P10 closed. Fixed
+with the same reasoning P10 already established, extended to the earlier
+choke point. Five pre-existing test files needed the same fixture update
+P10 itself required for two files (`token_expires_at=token_expiry(1800.0)`,
+never a weakened guard); two new dedicated tests pin the fix; the
+pre-existing approval-side test was rewritten to construct its scenario
+directly, since the new upstream guard makes the old path to it impossible.
+
+### 5. Rate limiting — TESTED, closes doc 18's own §D finding
+
+"None, on any endpoint, including ones that call a paid LLM per request" is
+no longer true for the one capability that risk was named against.
+`integrations/rate_limiter.py` — a fixed-window limit on `RunPrimeRLMAgent`
+starts, distinct from admission control's concurrency ceiling, server-side
+only, disableable. Proven with a real concurrent race against real
+Postgres (12 tasks, limit 4 → exactly 4 admitted) and hub-level tests
+proving a rejected call never reaches the connector.
+
+### 6. Observability and alerting — two new metrics, one proven live
+
+`ados_admission_leases_active`/`ados_admission_lease_oldest_age_seconds`
+(both `gate`-labeled, no high-cardinality label added); `ados_admission_
+rejections_total` gained a fifth `gate` value. Two new alert rules
+(18 total, `promtool`-validated); `ADOSAdmissionLeaseStuck` proven live,
+full fire→deliver→resolve→deliver, against the same real local Prometheus/
+Alertmanager/webhook chain doc 22 stood up.
+
+### 7. Regression
+
+Fresh, one pass, immediately after all P12 changes: **866 passed, 0
+failed, 19 deselected** (17 `docker` + 2 `external`, both counts unchanged
+from P11), 274.45s. Baseline immediately before any P12 code changed was
+845 passed / 2 failed (both isolated-pass, confirmed non-regressions,
+resource-contention artifacts under full-suite load — the same class P11's
+own report already documented for two different tests) / 19 deselected =
+866 total collected. P12 added 19 new tests; 866 + 19 = 885 = 866 + 19,
+reconciled exactly. All 17 `docker`-marked tests re-run separately and pass
+together (34.72s). Docker/Postgres state independently confirmed clean
+before and after every proof script and every live-container exercise this
+phase ran (zero leaked `ados-prime-*`/`ados-rt-*` resources; zero leftover
+rows in `admission_leases`/`rate_limit_events`/proof-created missions).
+
+### 8. Negative controls
+
+Six, each: guard disabled in real source, targeted real-infrastructure
+evidence gathered and confirmed to fail as expected, guard restored,
+`shasum -a 256` confirmed byte-identical before/after — see doc 23 §12 for
+the full table.
+
+### 9. Updated verdict
+
+**Model A:** unaffected, still READY — every P12 addition is opt-in/
+additive (`session_factory=None`, `limit<=0` preserve P11 behavior exactly),
+confirmed by 22 unchanged-passing pre-existing admission tests plus a fresh
+58-test P9/build-identity/Postgres-security regression.
+
+**Model B:** the specific target this phase was scoped to answer. See
+[23-p12-production-operationalization.md](23-p12-production-operationalization.md)'s
+final section for the complete verdict and the evidence supporting it —
+**READY**, with one named, not hidden, limitation: true horizontal
+scale-out (`--workers 2`+) remains blocked by MOA/ITSM state still being
+per-process, a separate, larger concern this phase did not attempt to
+close. Model B as evidenced here means one long-running process, bounded,
+observable, and recoverable without a human babysitting it — not N
+processes.
+
+**Model C:** remains **NOT READY**, unaffected by this phase by explicit
+instruction — multi-host Docker ownership, tenancy, and distributed rate
+limiting beyond the single-database mechanism built here are still `NOT
+BUILT`.
+
+---
+
+## 19. P13 update: Horizontal Scale-Out / Multi-Process Production Readiness (2026-08-14)
+
+Directly answers what P12 left open: can ADOS safely run `--workers 2+`?
+P12's own limitation note blamed "MOA/ITSM state... still process-local" —
+**re-deriving that claim from the current code (not trusting P12's own
+report) found it stale**: MOA and ITSM were already fully Postgres-backed
+(proven by the pre-existing `test_moa_durability.py`); the Dockerfile's own
+`--workers` comment describing an in-memory dict MOA no longer uses is
+itself stale. The REAL blocker was a different, older, un-migrated
+pipeline. Full evidence ledger in
+[24-p13-horizontal-scale-out.md](24-p13-horizontal-scale-out.md); this
+section is the summary that belongs in the running readiness record.
+**Baseline:** the same uncommitted P12 working tree, HEAD `7464902`.
+
+### 1. The real blocker — `orchestrate/governance.py::ApprovalQueue` (the manufacturing-incident pipeline) — CLOSED
+
+A plain in-memory dict, one per `DecisionOrchestrator`, one per process.
+`POST /incidents/{id}/approve|reject|escalate` on a worker that never ran
+that incident 404'd, even though the incident was durably `AwaitingApproval`
+in Postgres already. Fixed additively, reusing 100% of the existing
+restart-recovery machinery (`resume_pending_approvals`/`resume_after_
+decision`, unmodified in logic): a new on-demand `resolve_pending_approval`
+(orchestrator.py) and a live Postgres read (`AuditTrail.get_from_db`) close
+the visibility gap; a new atomic claim (`AuditTrail.claim_awaiting_
+approval`, a single conditional `UPDATE`) closes the double-execution race
+that visibility alone would have newly introduced (a race that was
+structurally impossible before this fix, since only the originating worker
+could ever see the pending decision). Proven with a **real, 2-real-OS-thread
+concurrent race** against two independent app instances — exactly one `200`
+and one `409`, the underlying capability invoked exactly once, every run
+(confirmed non-flaky across 4 repeats) — not a sequential simulation.
+
+### 2. A second, real gap found while re-checking P12's own admission-control claims — CLOSED
+
+`backend/app/mcp_gateway.py::_execute_capability` (the Prime Agent
+in-mission capability path) called `default_hub()` fresh on every call —
+a brand-new, always-`session_factory=None`, always-zeroed `AdmissionControl`
+every time. Pre-existing since P11, not multi-process-specific (broken even
+at one worker), found only because this phase re-derived whether admission
+control's own claims still held for this specific traffic surface. Fixed
+by wiring a module-level `_active_hub` (mirroring this file's own existing
+`_mcp_current` pattern) to the real `app.state.integration_hub` for the
+lifetime of the real lifespan. Proven functionally: two concurrent
+in-mission capability calls through a real app instance, against a
+deliberately tiny limit set on the real hub, are now actually bounded —
+before this fix, both would have been silently admitted regardless of the
+configured limit. **A real regression this fix itself introduced was
+found by the full regression suite and fixed before this phase's evidence
+was considered final**: the first version unconditionally preferred the
+wired hub, breaking 5 pre-existing tests that rely on the established
+`monkeypatch.setattr("integrations.hub.default_hub", ...)` convention even
+inside a real lifespan. Fixed by only preferring the wired hub when
+`default_hub` is still the exact, unpatched original object — see doc 24
+§4 for the full account.
+
+### 3. Two further real, narrower gaps — found, precisely characterized, deliberately deferred
+
+`orchestrate/moa/dynamic_registry._ENTRIES` / `DynamicCapabilityConnector.
+_dispatch` (a capability activated on one worker is invisible on others
+until restart — a designed self-heal `resolver` hook exists but is never
+wired) and `hot_disable_policy_rule` reading a possibly-stale manifest
+cache (self-heals on a miss, not on present-but-stale data — a real gap in
+an explicit safety circuit breaker). Both affect only the newer
+dynamic-capability-onboarding feature, not the core mission/incident/
+approval/admission-control flows this phase's evidence covers. Named
+precisely, with a concrete smallest-fix lead for each, rather than rushed
+alongside items 1-2.
+
+### 4. Regression
+
+Full suite, fresh, one pass, after all P13 changes: see doc 24 §7 for the
+exact counts and reconciled arithmetic. 10 new tests
+(`test_incident_approval_multiworker.py` 7, incl. a real 2-thread
+concurrent race and an isolated on-demand-resolution proof;
+`test_mcp_gateway_hub_wiring.py` 3). Zero regressions.
+
+### 5. Negative controls
+
+Three, each: guard disabled in real source, targeted evidence (including
+the real concurrent-thread race, re-run against the disabled guard)
+confirmed to fail as expected, guard restored, `shasum -a 256` confirmed
+byte-identical before/after — see doc 24 §6 for the full table.
+
+### 6. Updated verdict
+
+**Model A:** unaffected, still READY — every P13 change is additive and
+falls back to prior behavior exactly outside a real lifespan/for any
+caller that never reaches the new code paths.
+
+**Model B:** unaffected, still READY — Model B was always a single-process
+claim; nothing here changes its own evidence (doc 23).
+
+**Model C (horizontal scale-out):** this was this phase's actual target.
+The specific, concrete blockers that would make `--workers 2+` unsafe for
+the core mission/incident/approval/admission-control flows are closed and
+proven under real concurrent load. **Not a full "Model C: READY" verdict,
+honestly** — two narrower, lower-severity gaps remain (§3 above, doc 24
+§5), and Model C's full distributed-platform requirements (multi-tenancy,
+multi-host Docker ownership, distributed rate limiting beyond the
+single-database mechanism P12 built) remain `NOT BUILT`, unattempted, and
+out of scope, exactly as every prior phase already said.
+
+---
+
+## 20. P14 update: Dynamic Capability Consistency & Hot-Disable Safety (2026-08-14)
+
+Full report:
+[25-p14-capability-registry-consistency.md](25-p14-capability-registry-consistency.md).
+Closes both of the two narrower gaps §19/doc 24 §5 deferred:
+
+1. **`hot_disable_policy_rule` cache staleness** — a hot-disabled
+   capability could keep executing on a worker whose process-local
+   `CapabilityManifestRegistry` cache never learned about a disable issued
+   through a *different* worker's own registry instance, with no bound on
+   how long the staleness could last. Closed by replacing the synchronous,
+   cache-based `PolicyRule` with an authoritative, per-call Postgres read
+   (`CapabilityManifestRegistry.refresh_from_db`) at the two real
+   execution boundaries (`IntegrationHub.invoke()`,
+   `DynamicCapabilityConnector.execute()`) — not a periodic refresh of the
+   same cache, a genuine replacement of "trust what's cached" with "ask
+   Postgres, every time, right before it matters."
+2. **Dynamic capability registry / dispatch-config propagation** — a
+   capability activated on one worker stayed uninvokable on every other
+   worker until that worker restarted. Closed by wiring
+   `DynamicCapabilityConnector`'s own pre-existing, previously-unused
+   `resolver` cache-miss fallback to a new
+   `orchestrate/onboarding/runtime_registry.resolve_dispatch_config()`.
+
+A real regression was found and fixed during this phase's own live proof
+(keeping the old synchronous rule alongside the new authoritative check
+"for defense in depth" turned out to actively reintroduce staleness, and
+inconsistently across paths) — full account in the P14 report §5.
+
+**Updated Model C verdict:** the concrete, named blockers this program has
+found for `--workers 2+` across mission/incident/approval/
+admission-control/dynamic-capability flows are now closed and proven
+under real concurrent, **multi-process** load (real, separate OS
+processes via `multiprocessing`, not simulated within one process — see
+the P14 report §7 for why that distinction matters and how P13's own
+`TestClient`-sharing-`app.state` limitation was avoided this time). Still
+not a full "Model C: READY" verdict — multi-tenancy and multi-host
+container ownership remain entirely unattempted and out of scope, exactly
+as every prior phase already said.
+
+## 21. P15 update: Distributed Concurrency Semantics & Atomicity Review (2026-08-14)
+
+Full report:
+[26-p15-concurrency-atomicity-review.md](26-p15-concurrency-atomicity-review.md).
+P14 named one open question explicitly — "the disable-vs-execution race
+outcome is an empirical observation, not an atomicity guarantee" — and P15
+was chartered to determine exactly what this system guarantees under
+concurrent governance changes, approvals, executions, and crashes, fixing
+anything that doesn't actually hold rather than re-asserting that it does.
+
+Re-deriving every concurrency-relevant transaction boundary from source
+(not from P11–P14's own reports) found two genuine defects, neither an
+authorization bypass, both real:
+
+1. **Late autonomous completion could overwrite reconciliation's decision**
+   — `backend/app/mcp_gateway.py`'s autonomous-tier completion write had no
+   guard against a row the periodic reconciliation pass had already,
+   independently resolved while the same call was still genuinely in
+   flight (not crashed — no lock is held across the external call, by
+   design). `backend/app/routers/runtime_approvals.py`'s approve path
+   already had this exact guard; the autonomous path did not. Fixed by
+   mirroring it.
+2. **Admission-control local-slot leak on a database failure** —
+   `integrations/hub.py::IntegrationHub.invoke()` could permanently leak
+   its in-process concurrency slot if the global (Postgres) admission
+   acquire, or any one of the global release calls in `finally`, raised —
+   a transient DB outage during exactly that window. Not an authorization
+   bypass (a leak only ever makes the gate stricter), but a real,
+   reproducible availability defect. Fixed by wrapping the whole sequence
+   in one guaranteed-release try/finally with independently-guarded
+   release calls.
+
+Both were caught by this phase's own audit of every crash/DB-unavailable
+transition point (nothing here was suspected by any prior report), fixed
+with the smallest change that closes them, covered by new focused
+regression tests, and proven closed live across real, separate OS
+processes — including a genuine `SIGKILL` crash boundary, not merely a
+simulated exception. Four negative controls confirm the guards (2 new, 2
+pre-existing and independently re-derived: the approval row lock and the
+admission advisory lock) are load-bearing. Full report has the complete
+invariant-by-invariant classification, the live proof transcript, and the
+test-count reconciliation.
+
+**No architecture change.** No Redis/Kafka/new distributed mechanism was
+introduced — every fix uses the same Postgres-transactional idioms
+(`FOR UPDATE`, `pg_advisory_xact_lock`, a partial unique index, a
+try/finally) already established by P9–P14.
+
+## 22. P16 update: Multi-Tenancy & Multi-Host Ownership Safety Review (2026-08-14)
+
+Full report:
+[27-multi-tenancy-and-multi-host-safety.md](27-multi-tenancy-and-multi-host-safety.md).
+P15 closed Model C's concurrency/atomicity blockers and left two named,
+unattempted reasons Model C was still not ready: multi-tenancy and
+multi-host Docker ownership. P16 was chartered to determine, honestly,
+how not-ready each one is — not to assume the answer or build either one
+wholesale.
+
+**Headline finding: ADOS has no tenant isolation model of any kind.**
+Confirmed by source review across every table, router, and background
+process (no `tenant_id`/`org_id`/`account_id` column exists anywhere;
+`MissionRow.created_by` is never set to an end-user identity by the one
+real mission-creation path), and then confirmed **live**: two real,
+distinct, authenticated seeded users, against the real app and real
+Postgres, with one able to read, and unilaterally decide, a capability
+request it had zero relationship to — because authorization on this
+surface is role-based only, never ownership-based. This is not a defect
+in any approval or RBAC check; it is the accurate, evidenced state of a
+system that was never built with a tenant concept, exactly as prior
+phases already scoped it.
+
+**One real defect found and fixed, in the separate multi-host
+direction.** `orchestrate/runtime/orphan_sweep.py`'s cleanup sweep had no
+host affinity: a sweeper on one host could claim a session row created on
+a *different* host, find nothing on its own local Docker daemon, and
+durably record that other host's still-running container as `absent` —
+permanently leaking it while the audit trail claimed success. Fixed with
+a nullable `RuntimeSessionRow.owner_host` column and a claim-query filter
+(`orchestrate/runtime/orphan_sweep.py::claim_batch`'s new `node_id`
+parameter) — fully backward-compatible (`node_id=None` preserves every
+pre-P16 caller's exact behavior), no distributed control plane, no
+leader election. Proven under real Postgres, including a genuine
+concurrent-race test; classified TESTED rather than DEMONSTRATED, since
+no second real Docker host was available to independently verify the
+cross-daemon `docker inspect` assumption.
+
+Three negative controls (the new `node_id` filter, the pre-existing
+workspace path-root validation, and the pre-existing auditor read-only
+RBAC guard — the one real protection on the exact surface the live proof
+exploited the absence of an ownership check on) all failed for exactly
+the predicted reason with the guard removed, and were restored
+byte-identical (SHA-256 verified).
+
+**No multi-tenancy was built.** Per the task's own explicit instruction,
+`tenant_id` was not added reflexively — the evidence shows this is a
+genuine architecture decision (which resources are per-tenant vs.
+genuinely shared, how a tenant would authenticate, whether
+admission/rate-limit ceilings need a tenant-scoped layer *alongside*
+their existing intentional global ceiling) for a future, deliberately
+scoped phase, not a patch P16 could safely make in place.
+
+**Updated Model C verdict:** unchanged in substance from P15 — still
+NOT READY — but now evidenced rather than assumed. Multi-tenancy is
+confirmed **NOT BUILT** (not merely unattempted). Multi-host Docker
+ownership had one real, open defect, now **fixed and TESTED** at the
+database/decision layer, with the two-real-hosts gap that would upgrade
+it to DEMONSTRATED named explicitly rather than papered over.
+
+## 23. P17 update: Multi-Tenancy Architecture & Tenant Isolation Implementation (2026-08-15)
+
+Full report:
+[28-multi-tenancy-and-tenant-isolation.md](28-multi-tenancy-and-tenant-isolation.md).
+P16 confirmed live that ADOS had no tenant isolation model at all. P17
+built one and closed the exact defect P16 demonstrated.
+
+**Architecture:** none of the five suggested tenancy libraries fit —
+two are Laravel/Django (wrong framework), one additionally needs the
+Citus Postgres extension (infrastructure this stack doesn't have), one
+is a genuinely SQLAlchemy-native but single-maintainer, 4-star project
+whose session-construction pattern would require restructuring how
+every one of ~40 existing modules opens a database session, and one is
+not a library at all (a demo scaffold). Built a native mechanism
+instead, using SQLAlchemy's own documented recipe for exactly this
+problem (`Session.do_orm_execute` + `with_loader_criteria`): a single
+global filter, fail-closed by default, that makes every existing query
+against a tenant-owned table automatically tenant-scoped with zero
+changes to how any router already writes its queries.
+
+**Real tenant model:** `tenants` / `tenant_memberships` tables, tenant
+membership baked into the login JWT the same stateless way role already
+is, an active-tenant-selection header cross-checked against verified
+membership (never trusted alone), and a `contextvars.ContextVar` proven
+— by a dedicated concurrency spike before any production code was
+written — to never leak between concurrent requests carrying different
+tenants.
+
+**The exact P16 defect, closed and proven live:** two real tenants, two
+real users, real Postgres, real HTTP. A cross-tenant list/get/decide now
+404s (existence never revealed); same-tenant access is unaffected. Both
+the endpoint and the raw ORM query underneath it were independently
+verified. 6/6 negative controls confirm every guard is load-bearing,
+each restored byte-identical.
+
+**A real regression was found and fixed in the process**, in P15's own
+multiprocess proof script: it deliberately bypasses the FastAPI
+dependency layer to isolate a concurrency primitive from auth concerns,
+which meant it also bypassed the new tenant-context resolution — fixed
+by an explicit, documented opt-out, not by weakening the new guard. Both
+P14's and P15's multiprocess proofs — including P15's real `SIGKILL`
+crash boundary and 10-real-process admission race — were re-run after
+the fix and pass cleanly, confirming no regression to P13–P16's own
+concurrency and multi-host guarantees.
+
+**Postgres RLS was fully evaluated, not merely dismissed:** P10's own
+role-separation work already means the real deployed backend's
+`ados_app` role does not own the tenant-owned tables, the exact
+precondition RLS needs to be meaningful. It was not built this phase
+because that same role is shared by tenant-scoped HTTP routes AND the
+cross-tenant background jobs/gateway — making RLS safe would need either
+a role split or a session-GUC-propagation mechanism mirroring the
+`ContextVar`, both real engineering beyond this phase's smallest-correct
+scope. Documented as DESIGNED, NOT BUILT, with the exact policies ready.
+
+**Deliberately not built:** tenant scoping for the separate MOA/incidents
+surface (220 seeded demo records with hundreds of dependent tests — a
+named scope boundary, not an oversight) and a user-facing mission-creation
+endpoint (doesn't exist yet, so there is no real caller tenant to
+attribute a mission to beyond the default).
+
+**Updated Model C verdict:** the dominant blocker P16 named — no tenant
+model — is now **BUILT and DEMONSTRATED** on the exact surface P16
+proved mattered. Model C is still not fully READY: the RLS backstop, a
+real mission-creation entry point, and the MOA surface's own tenant
+story all remain, each named precisely rather than left implicit.
+
+## 24. P18 update: Tenant Production Hardening & Model-C Readiness Review (2026-08-15)
+
+Full report:
+[29-p18-tenant-production-hardening.md](29-p18-tenant-production-hardening.md).
+P17 named "a real mission-creation entry point" as a remaining Model C
+requirement, reasoning correctly that `RunPrimeRLMAgent` has no direct
+Python caller anywhere in the codebase — but that grep-based search
+missed a real, already-reachable one: `POST /capabilities/invoke`, a
+generic, pre-Prime-Agent capability-dispatch endpoint
+(`docs/006-integration-hub.md`) that any authenticated user can already
+reach and that was silently stamping every mission it created with the
+default tenant regardless of caller. P18 found this by re-deriving "can a
+real authenticated user create a mission today" from source rather than
+trusting P16/P17's own conclusion, and closed it: the endpoint now
+resolves the caller's tenant via the same `get_tenant_context` dependency
+`runtime_approvals.py` already uses, and `PrimeRuntimeConnector._run()`
+reads it from the existing `ContextVar` with no new plumbing through
+`CapabilityCall`. Proven end to end over real HTTP with a real second
+tenant; 4 new tests; full suite 911 passed / 0 failed / 19 deselected
+(907 + 4, reconciled exactly).
+
+**Postgres RLS re-evaluated independently, and found genuinely harder
+than P17's own reasoning stated**, not merely re-confirmed as deferred:
+tracing `approve_capability_request`'s three-phase transaction structure
+(a deliberate P9 design — no lock held across the external call) found
+that the session it uses spans multiple transactions, so a session-GUC
+approach that sets the tenant context once at session-open would
+silently stop applying at the first commit, breaking Phase 3's
+`session.refresh(row)` under RLS. Still DESIGNED, NOT BUILT, but for a
+sharper, more concrete reason than "insufficient time to verify" — a
+named, specific prerequisite (a verified per-transaction GUC
+re-assertion mechanism, or a role split) for whichever future phase
+attempts it.
+
+**Everything else audited independently either held up or was
+strengthened with new evidence P17 never gathered:** the MOA/incidents
+boundary reconfirmed via an exhaustive full-repo grep (stronger than
+P17's own scope-boundary reasoning); global admission/rate-limit
+classification reconfirmed unaffected; the multi-host `owner_host`
+mechanism reconfirmed unregressed (still TESTED, not DEMONSTRATED — no
+second real Docker host available, unchanged from P16); metrics/alerts
+reconfirmed to carry no tenant label anywhere; two of P17's five
+tenant-compatibility-fixed live-proof scripts were actually re-executed
+live (real Docker + real Postgres, both PASS) rather than left at
+syntax-verified; and a genuinely new real multi-process tenant-isolation
+proof (`scripts/p18_multiprocess_tenant_isolation_proof.py`) was written
+and run — real separate OS processes racing on a real
+`multiprocessing.Barrier`, 30 genuinely concurrent `asyncio.gather`
+requests alternating two tenants' credentials within one process/event
+loop, and a background-reconciliation call proven to override an
+adversarial ambient tenant context rather than merely "working when
+nothing else set one" — the strongest form of that specific proof
+anywhere in this programme. All three cases PASS.
+
+**Updated Model C verdict:** still **NOT READY**, but every remaining
+requirement is now precisely evidenced (see doc 29 §13's full
+requirement-by-requirement table) rather than assumed. The concrete
+remaining blockers: the RLS backstop (DESIGNED, DEFERRED, sharper reason
+named), dead-host automatic recovery (NOT BUILT — needs a lease/heartbeat
+design), two-real-Docker-host verification (unavailable in this
+environment), and per-tenant admission/reviewer capacity (a deliberate,
+undesigned product decision, not a technical gap). Model A and Model B:
+**unaffected, both still READY** — every P18 change is additive and
+preserves every pre-existing single-tenant/single-process code path
+exactly.

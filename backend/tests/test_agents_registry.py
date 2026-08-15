@@ -32,6 +32,37 @@ def test_list_includes_the_builtins(client, auth_headers):
     assert len(ids) == len(BUILTIN_AGENTS)
 
 
+async def test_listing_the_catalog_does_not_import_anything(client, auth_headers):
+    """GET is a catalog read; importing from agency-agents-repo is
+    POST /agents-registry/sync and nothing else.
+
+    The test above already fails if a GET imports, but only because the
+    fixture happens to leave `custom_agents` empty — it would pass again the
+    moment anything seeded a row. This asserts the property directly: the row
+    count is unchanged across a read.
+
+    Reintroducing the auto-ingest is tempting whenever a fresh environment
+    looks empty. It ran `ALTER TABLE` from a GET, turned any transient
+    database error into a write via a bare `except Exception`, and let two
+    concurrent readers both start importing 255 records. The empty table it
+    was added to paper over was really migration `c3d4e5f6a7b8` never
+    applying — two Alembic heads, so `alembic upgrade head` failed outright.
+    """
+    from sqlalchemy import func, select
+
+    from db.engine import async_session_factory
+    from db.models.custom_agent import CustomAgentRow
+
+    async def count() -> int:
+        async with async_session_factory() as session:
+            return (await session.execute(select(func.count(CustomAgentRow.id)))).scalar_one()
+
+    before = await count()
+    resp = client.get("/agents-registry", headers=auth_headers)
+    assert resp.status_code == 200
+    assert await count() == before, "GET /agents-registry wrote to the database"
+
+
 def test_created_agent_is_persisted_and_listed(client, auth_headers):
     create_resp = client.post("/agents-registry", json=_agent_payload(), headers=auth_headers)
     assert create_resp.status_code == 201

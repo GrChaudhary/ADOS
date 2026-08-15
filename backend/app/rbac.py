@@ -16,13 +16,15 @@ incidents.py actually authorizes against.
 
 import time
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 
 import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
+
+from db.models.tenant import DEFAULT_TENANT_ID
 
 from .config import settings
 
@@ -54,6 +56,26 @@ class User(BaseModel):
     approval_limit_usd: float = Field(alias="approvalLimitUsd")
     active: bool = True
 
+    # P17 — which tenants (db/models/tenant.py) this user belongs to, baked
+    # in at login the same way role/approval_limit_usd already are: this
+    # system's sessions are stateless JWTs by design (see this module's own
+    # docstring), so a membership change, like a role change, takes effect
+    # on next login, not mid-session. Populated for real by user_store.
+    # verify_login (the one path that mints a real login's token), which
+    # always overwrites this default.
+    #
+    # Defaults to the well-known default tenant, not an empty list — the
+    # same reasoning as MissionRow.tenant_id's own default
+    # (db/models/mission.py): this codebase's own tests construct `User`
+    # directly (bypassing verify_login) in dozens of places that have
+    # nothing to do with tenancy, and treating "unspecified" as "no tenant"
+    # would silently 403 every one of them rather than the honest default
+    # every pre-P17 caller already implicitly had. A test that specifically
+    # needs to prove "no membership" passes tenant_ids=[] explicitly.
+    tenant_ids: List[str] = Field(
+        default_factory=lambda: [str(DEFAULT_TENANT_ID)], alias="tenantIds"
+    )
+
 
 def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -75,6 +97,7 @@ def create_access_token(user: User) -> str:
         "role": user.role.value,
         "approvalLimitUsd": user.approval_limit_usd,
         "active": user.active,
+        "tenantIds": user.tenant_ids,
         "iat": now,
         "exp": now + _TOKEN_TTL_SECONDS,
     }
@@ -97,6 +120,13 @@ def decode_access_token(token: str) -> User:
         role=Role(payload["role"]),
         approval_limit_usd=payload["approvalLimitUsd"],
         active=payload.get("active", True),
+        # .get(..., []): a token minted before this claim existed decodes
+        # to "no tenant memberships" rather than failing outright — the
+        # same graceful-expiry-not-crash posture already used for `active`
+        # above. Such a token simply can't reach any tenant-scoped
+        # resource (db/tenancy.py fails closed on an empty set) until its
+        # holder logs in again.
+        tenant_ids=payload.get("tenantIds", []),
     )
 
 

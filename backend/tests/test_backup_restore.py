@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from db.models.tenant import DEFAULT_TENANT_ID
+
 pytestmark = pytest.mark.docker
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -71,9 +73,9 @@ def test_a_real_dump_restores_into_an_independent_database_with_matching_rows(
     marker = f"backup-restore-proof-{uuid.uuid4()}"
     _psql(
         SOURCE_DB,
-        "INSERT INTO missions (mission_id, title, objective, domain, allowed_capabilities, "
+        "INSERT INTO missions (mission_id, tenant_id, title, objective, domain, allowed_capabilities, "
         "status, created_by, created_at, updated_at) VALUES "
-        f"(gen_random_uuid(), '{marker}', 'o', 'it', '[]'::json, 'running', 'test', now(), now())",
+        f"(gen_random_uuid(), '{DEFAULT_TENANT_ID}', '{marker}', 'o', 'it', '[]'::json, 'running', 'test', now(), now())",
     )
     before_count = _psql(SOURCE_DB, f"SELECT count(*) FROM missions WHERE title = '{marker}'")
     assert before_count == "1"
@@ -135,9 +137,9 @@ def test_restore_replaces_prior_content_rather_than_merging_with_it(scratch_data
     marker_a = f"restore-replace-a-{uuid.uuid4()}"
     _psql(
         SOURCE_DB,
-        "INSERT INTO missions (mission_id, title, objective, domain, allowed_capabilities, "
+        "INSERT INTO missions (mission_id, tenant_id, title, objective, domain, allowed_capabilities, "
         "status, created_by, created_at, updated_at) VALUES "
-        f"(gen_random_uuid(), '{marker_a}', 'o', 'it', '[]'::json, 'running', 'test', now(), now())",
+        f"(gen_random_uuid(), '{DEFAULT_TENANT_ID}', '{marker_a}', 'o', 'it', '[]'::json, 'running', 'test', now(), now())",
     )
     subprocess.run(
         ["bash", str(REPO_ROOT / "scripts" / "backup_postgres.sh"), SOURCE_DB],
@@ -155,9 +157,9 @@ def test_restore_replaces_prior_content_rather_than_merging_with_it(scratch_data
     marker_b = f"restore-replace-b-{uuid.uuid4()}"
     _psql(
         SOURCE_DB,
-        "INSERT INTO missions (mission_id, title, objective, domain, allowed_capabilities, "
+        "INSERT INTO missions (mission_id, tenant_id, title, objective, domain, allowed_capabilities, "
         "status, created_by, created_at, updated_at) VALUES "
-        f"(gen_random_uuid(), '{marker_b}', 'o', 'it', '[]'::json, 'running', 'test', now(), now())",
+        f"(gen_random_uuid(), '{DEFAULT_TENANT_ID}', '{marker_b}', 'o', 'it', '[]'::json, 'running', 'test', now(), now())",
     )
     subprocess.run(
         ["bash", str(REPO_ROOT / "scripts" / "backup_postgres.sh"), SOURCE_DB],

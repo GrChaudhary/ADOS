@@ -51,6 +51,7 @@ from orchestrate.runtime.capability_execution import (
     STATUS_OUTCOME_UNKNOWN,
     canonical_idempotency_key,
 )
+from orchestrate.runtime.prime import token_expiry
 
 
 @pytest.fixture(autouse=True)
@@ -88,6 +89,7 @@ async def _session(capability="NotifyITHelpdesk"):
         token = "tok-" + uuid.uuid4().hex
         sess = RuntimeSessionRow(
             mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            token_expires_at=token_expiry(1800.0),
         )
         db.add(sess)
         await db.commit()

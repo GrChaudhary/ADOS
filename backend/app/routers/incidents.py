@@ -17,6 +17,7 @@ from contracts import IncidentRecord, PolicyTier
 from knowledge.local_llm_client import local_llm_client
 from orchestrate import PriorityInputs
 from orchestrate.governance import PendingApproval
+from orchestrate.orchestrator import DecisionAlreadyInProgress
 
 from ..auth import get_current_user
 from ..rbac import Role, User
@@ -74,17 +75,43 @@ async def get_incident(incident_id: str, request: Request):
     if record is not None:
         return record
 
+    # P13: audit_trail.get() above is this PROCESS's own in-memory list —
+    # populated at ITS OWN startup (hydrate_from_db) plus whatever it has
+    # itself appended since. A terminal incident finalized by a different
+    # worker is invisible here until this process restarts. A live Postgres
+    # read closes that gap without changing the fast path for the common
+    # same-process case above.
+    #
+    # Deliberately excludes AwaitingApproval: that shape's own row is
+    # missing the synthetic causalChain/alternatives/awaitingApproval
+    # fields the block below builds from `pending`/`events` — returning it
+    # raw here would silently swap the response shape a still-deciding
+    # incident's callers (this router's own tests, the frontend) depend on.
+    # `resolve_pending_approval` below covers AwaitingApproval instead.
+    record = await orchestrator.audit_trail.get_from_db(incident_id)
+    if record is not None and record.final_state != "AwaitingApproval":
+        return record
+
     task: Optional[asyncio.Task] = request.app.state.incident_tasks.get(incident_id)
-    pending = orchestrator.approvals.get(incident_id)
+    # P13: resolve_pending_approval, not a bare orchestrator.approvals.get()
+    # — falls back to the same live Postgres read + reconstruction
+    # _get_pending_or_404 uses, so an AwaitingApproval incident started on
+    # a different worker is correctly reported here too, not just when
+    # deciding it.
+    pending = await orchestrator.resolve_pending_approval(incident_id)
     events = await request.app.state.event_bus.recent(correlation_id=incident_id, limit=50)
 
-    # A genuine backend-restart recovery case (orchestrate/orchestrator.py's
-    # _snapshot_pending) would already have been caught by the
-    # audit_trail.get() check above: audit_trail.hydrate_from_db()
-    # (backend/app/main.py's lifespan) loads every persisted incident —
-    # including AwaitingApproval snapshots — into that in-memory list at
-    # startup. So reaching here with task/pending/events all empty means
-    # this incident_id genuinely doesn't exist anywhere.
+    # `record`/`pending` above already cover every case Postgres can answer
+    # (any final_state, including a restart-recoverable AwaitingApproval —
+    # see their own docstrings). Reaching here with task/pending/events all
+    # empty means this incident_id genuinely doesn't exist anywhere, or
+    # exists only as an in-flight, not-yet-snapshotted run_incident() on a
+    # different worker — a real, narrower, and separately-documented gap
+    # (see docs/prime-agent-integration/24-p13-horizontal-scale-out.md's
+    # "known limitations": with the default in-memory event bus, `events`
+    # is also worker-local, and a diagnosing/generating-candidates incident
+    # has not yet reached the point where _snapshot_pending gives Postgres
+    # anything to answer with).
     if task is None and pending is None and len(events) == 0:
         raise HTTPException(status_code=404, detail="unknown incident")
 
@@ -198,8 +225,13 @@ async def list_pending_approvals(request: Request):
     ]
 
 
-def _get_pending_or_404(orchestrator, incident_id: str) -> PendingApproval:
-    pending = orchestrator.approvals.get(incident_id)
+async def _get_pending_or_404(orchestrator, incident_id: str) -> PendingApproval:
+    # P13: resolve_pending_approval checks the fast in-process path first,
+    # then falls back to a live Postgres read + reconstruction for an
+    # incident this process never ran itself (see its own docstring) — the
+    # cross-worker fix for what used to be a bare, always-empty-on-another-
+    # worker orchestrator.approvals.get(incident_id).
+    pending = await orchestrator.resolve_pending_approval(incident_id)
     if pending is None:
         raise HTTPException(status_code=404, detail="no pending approval for this incident")
     return pending
@@ -232,19 +264,30 @@ class ApproveRequest(BaseModel):
 
 async def _decide(request: Request, incident_id: str, action: str, current_user: User, body: Optional[ApproveRequest] = None) -> dict:
     orchestrator = request.app.state.orchestrator
-    pending = _get_pending_or_404(orchestrator, incident_id)
+    pending = await _get_pending_or_404(orchestrator, incident_id)
     _authorize_decision(current_user, pending)
     if action == "approve" and body and body.selected_option_id:
         pending.selected_option_id = body.selected_option_id
     getattr(orchestrator.approvals, action)(incident_id, f"{current_user.display_name} ({current_user.role.value})")
     if pending.resume_context is not None:
         # No live run_incident() coroutine is awaiting pending.wait() for
-        # this one (it was reconstituted from a Cloudant snapshot at
-        # startup — orchestrator.py's resume_pending_approvals, for an
-        # incident whose original process restarted mid-decision).
+        # this one — it was reconstituted either from a snapshot at startup
+        # (orchestrator.py's resume_pending_approvals, a restart mid-
+        # decision) or on demand, possibly on a different process than the
+        # one running the incident (resolve_pending_approval — P13).
         # Nothing will act on .resolve() above on its own, so carry out
         # the decision here instead of just recording it.
-        await orchestrator.resume_after_decision(pending)
+        try:
+            await orchestrator.resume_after_decision(pending)
+        except DecisionAlreadyInProgress:
+            # P13: another process already claimed and is acting on this
+            # exact decision (a genuine race, only possible now that a
+            # reconstructed PendingApproval can be visible from more than
+            # one process) — 409, not a silent false-success.
+            raise HTTPException(
+                status_code=409,
+                detail="this decision is already being processed, possibly by another worker",
+            )
     return {"incidentId": incident_id, "decision": pending.decision}
 
 

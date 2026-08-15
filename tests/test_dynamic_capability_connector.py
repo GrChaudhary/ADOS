@@ -7,18 +7,23 @@ carried in CapabilityCall.input.
 
 Two real gaps this suite exists to pin down, not just the happy path:
   - the connector must independently gate on manifest.status is ACTIVE —
-    hot_disable_policy_rule alone only blocks HOT_DISABLED, so a capability
-    still sitting in PROPOSED/SANDBOX_TESTED (not yet vetted) would
-    otherwise be invocable via POST /capabilities/invoke by any
-    authenticated user.
-  - hot_disable_policy_rule itself had to be fixed to resolve dynamic calls
-    by input["capability_id"], not call.capability.value (which is always
-    the fixed sentinel string for every dynamic call) — the regression test
-    below distinguishes "the policy rule blocked this" from "the connector's
-    own active-check happened to also produce FAILED" by asserting on the
-    rule's specific hyphenated "hot-disabled" wording, which the connector's
-    own message (embedding CapabilityStatus.HOT_DISABLED.value =
-    "hot_disabled", underscored) never contains.
+    IntegrationHub.invoke()'s own hot-disable check (integrations/hub.py,
+    P14) only blocks HOT_DISABLED, so a capability still sitting in
+    PROPOSED/SANDBOX_TESTED (not yet vetted) would otherwise be invocable
+    via POST /capabilities/invoke by any authenticated user.
+  - that hub-level check resolves dynamic calls by input["capability_id"],
+    not call.capability.value (which is always the fixed sentinel string
+    for every dynamic call) — the regression test below distinguishes "the
+    hub-level check blocked this" from "the connector's own active-check
+    happened to also produce FAILED" by asserting on the hub-level check's
+    specific hyphenated "hot-disabled" wording, which the connector's own
+    message (embedding CapabilityStatus.HOT_DISABLED.value =
+    "hot_disabled", underscored) never contains. (Until P14, this
+    hub-level check was a synchronous, cache-based PolicyRule named
+    hot_disable_policy_rule; it is now an authoritative Postgres read
+    inside invoke() itself — see integrations/hub.py's own __init__
+    comment for why the synchronous version was removed, not just
+    supplemented.)
 """
 
 import pytest
@@ -97,13 +102,15 @@ async def test_not_yet_active_capability_is_rejected(status):
 
 
 @pytest.mark.asyncio
-async def test_hot_disabled_dynamic_capability_blocked_by_policy_rule_not_just_connector():
-    """Regression test for the hot_disable_policy_rule fix. Distinguishes
-    the policy-engine-level block (message: "is hot-disabled") from the
-    connector's own generic active-check (message embeds the status value
-    "hot_disabled", underscored) — only the fixed rule produces the former,
-    since resolving by call.capability.value alone would always look up the
-    literal string "DynamicCapability", never this manifest's real id."""
+async def test_hot_disabled_dynamic_capability_blocked_by_hub_check_not_just_connector():
+    """Regression test for resolving dynamic calls by the real
+    capability_id. Distinguishes the hub-level block (message: "is
+    hot-disabled") from the connector's own generic active-check (message
+    embeds the status value "hot_disabled", underscored) — only the
+    hub-level check (integrations/hub.py::invoke(), P14) produces the
+    former, since resolving by call.capability.value alone would always
+    look up the literal string "DynamicCapability", never this manifest's
+    real id."""
     hub = IntegrationHub()
     hub.registry.register(hub.dynamic_capability_connector)
     await _propose_and_advance(hub, "zendesk.delete_ticket", to_status="hot_disabled")

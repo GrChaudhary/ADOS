@@ -91,6 +91,38 @@ class Settings(BaseSettings):
     max_pending_approvals: int = 50
     max_capability_requests_per_session: int = 200
 
+    # P12 — the two concurrency gates above are now globally enforced across
+    # processes via admission_leases (integrations/admission_control.py), and
+    # this is a genuinely different mechanism: a rate limit on how often
+    # RunPrimeRLMAgent can be *started*, independent of concurrency. See
+    # integrations/rate_limiter.py's module docstring for the full
+    # purpose/default/enforcement/metric/alert writeup this phase's own
+    # instructions require. max<=0 disables it.
+    mission_start_rate_limit_max: int = 20
+    mission_start_rate_limit_window_seconds: int = 300
+
+    # P12 — the centralized periodic loop's reclaim pass (orchestrate/runtime/
+    # admission_lease_reclaim.py). Lease max age must stay comfortably above
+    # the longest real hub.invoke() call this deployment allows (a Prime
+    # Agent mission's own max_wall_clock_seconds is the long pole) or a
+    # still-genuinely-running call's lease could be reclaimed out from under
+    # it — 1800s matches the same generous-headroom reasoning
+    # session_reconcile.py's token grace period already uses. Event
+    # retention is pure storage hygiene, not correctness (the rate check
+    # always filters by its own window regardless of how much history sits
+    # in the table).
+    admission_lease_max_age_seconds: float = 1800.0
+    rate_limit_event_retention_seconds: float = 3600.0
+
+    # Dead-host reclamation (orchestrate/runtime/node_heartbeat.py) — the one
+    # genuine Model-C engineering blocker named by the Model-C Decision Gate
+    # (docs/prime-agent-integration/31-model-c-decision-gate.md, Phase 2).
+    # Conservative on purpose: comfortably above several missed
+    # orphan_reconcile_interval_seconds ticks so a host that is merely slow
+    # or transiently partitioned from Postgres is never declared dead — see
+    # node_heartbeat.py's own docstring for the full safety argument.
+    node_heartbeat_dead_after_seconds: float = 900.0
+
     # Real persistence (db/) — dev-only default matching docker-compose.yml's
     # postgres service defaults, same convention as jwt_secret's dev-only
     # fallback below: safe for a fresh clone to import without `.env` set,
@@ -142,6 +174,16 @@ class Settings(BaseSettings):
     # IBM Watson Text to Speech
     tts_api_key: str = ""
     tts_url: str = ""
+
+    # P16 — identifies which physical/virtual host this ADOS process is
+    # running on. Only consumer today: orchestrate/runtime/orphan_sweep.py
+    # stamps it onto RuntimeSessionRow.owner_host at session creation and
+    # filters claim_batch by it, so a sweeper never concludes a resource
+    # that actually lives on a DIFFERENT host's Docker daemon is "absent"
+    # just because it is invisible from here. Empty string means "resolve
+    # socket.gethostname() at the call site" — a single-host deployment
+    # (Model A/B, today's only deployed shape) never needs to set this.
+    node_id: str = ""
 
     # Phase 5B: the Next.js dev server (frontend-next/) runs on a different
     # origin than this API, unlike frontend/'s same-origin static mount —

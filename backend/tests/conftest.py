@@ -5,7 +5,34 @@ from sqlalchemy import text
 from backend.app.main import app
 from backend.app.rbac import Role, User, create_access_token
 from db.engine import async_session_factory
+from db.tenancy import use_all_tenants
 from knowledge.local_llm_client import local_llm_client
+
+
+@pytest.fixture(autouse=True)
+def _default_all_tenants_scope():
+    """P17 — db/tenancy.py fails closed by default (no tenant context ==
+    zero rows of any tenant-scoped table), which is exactly right for a
+    real request but wrong for the ~900 pre-existing tests in this suite
+    that construct/read MissionRow, RuntimeSessionRow, and
+    CapabilityRequestRow directly to test something else entirely
+    (concurrency, idempotency, reconciliation, ...) and have never had any
+    reason to think about tenant scoping.
+
+    This autouse fixture gives every test that same "operate across all
+    tenants" posture db/tenancy.py already grants background jobs and
+    scripts/mcp_gateway.py, by default -- the same posture a test's own
+    setup/teardown SQL already effectively has (TRUNCATE, direct row
+    construction). It does NOT weaken tenant-isolation testing: a real
+    HTTP request through backend/app/tenancy.py::get_tenant_context calls
+    use_tenant(...), which -- via contextvars' normal nesting -- correctly
+    SHADOWS this outer ALL_TENANTS for the duration of that one request,
+    then reverts back on exit. Every P17 test that specifically proves
+    cross-tenant isolation (backend/tests/test_tenant_isolation.py) relies
+    on precisely that nesting, not on this fixture being absent.
+    """
+    with use_all_tenants():
+        yield
 
 
 @pytest.fixture

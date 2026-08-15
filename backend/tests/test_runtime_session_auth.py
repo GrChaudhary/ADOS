@@ -48,8 +48,17 @@ from db.engine import async_session_factory
 from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
 from integrations.connectors.servicenow import ServiceNowConnector
 from integrations.hub import default_hub
+from orchestrate.runtime.prime import token_expiry
 
 ROUTINE = {"summary": "Root cause: connection pool exhaustion"}
+
+# Distinct from `None`: `_session`'s own `expires_at=None` default used to
+# mean "don't bother setting it" (harmless before P12 — nothing checked
+# NULL). Now that mcp_gateway.py refuses a NULL-expiry session outright
+# (P12), a bare `_session()` call needs a real default so every pre-existing
+# "valid token" test in this file keeps meaning what it says; a caller that
+# explicitly wants the NULL/fossil shape still passes `expires_at=None`.
+_DEFAULT_EXPIRY = object()
 
 
 @pytest.fixture(autouse=True)
@@ -105,11 +114,13 @@ def _as_runtime(_present):
 async def _session(
     *,
     state="running",
-    expires_at=None,
+    expires_at=_DEFAULT_EXPIRY,
     capability=Capability.NOTIFY_IT_HELPDESK,
     title="session auth",
 ):
     """A mission granting one capability, and a live token naming its session."""
+    if expires_at is _DEFAULT_EXPIRY:
+        expires_at = token_expiry(1800.0)
     async with async_session_factory() as db:
         mission = MissionRow(
             title=title, objective="o", domain="it",
@@ -219,6 +230,24 @@ async def test_a_token_still_inside_its_expiry_is_accepted(_as_runtime, _service
     assert (await request_capability.fn(
         Capability.NOTIFY_IT_HELPDESK.value, dict(ROUTINE)
     ))["status"] == "executed"
+
+
+async def test_a_null_expiry_session_is_dead_even_while_state_is_live(_as_runtime, _servicenow):
+    """P12 — a NULL token_expires_at used to fall through this check
+    entirely (`is not None and expired`, so `None` short-circuited to
+    "not expired"). Every session the real creation path writes has set
+    this unconditionally since P6-D (see P10's own NULL-expiry account),
+    so NULL is proof this row is not a live mission's session, independent
+    of what `state` says — refused here for the same reason `state="running"`
+    alone is not treated as sufficient live-ness above."""
+    _, _, token = await _session(expires_at=None)
+    _as_runtime(token)
+
+    answer = await request_capability.fn(Capability.NOTIFY_IT_HELPDESK.value, dict(ROUTINE))
+
+    assert answer["status"] == "denied"
+    assert "expiry" in answer["reason"]
+    assert _servicenow == []
 
 
 @pytest.mark.parametrize("state", ["created", "completed", "failed", "cancelled", "torn_down"])

@@ -50,6 +50,7 @@ from backend.app.routers import runtime_approvals
 from backend.app.routers.runtime_approvals import approve_capability_request
 from db.engine import async_session_factory, engine
 from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
+from db.tenancy import use_all_tenants
 from integrations.connectors.servicenow import ServiceNowConnector
 from orchestrate.runtime.build_identity import REPO_ROOT, StaleGatewayError, verify_build_matches, compute_build_revision
 from orchestrate.runtime.capability_execution import STATUS_EXECUTED, STATUS_EXECUTING, STATUS_OUTCOME_UNKNOWN
@@ -140,8 +141,11 @@ async def _park(token: str) -> str:
 
 
 async def _row(request_id: str) -> CapabilityRequestRow:
-    async with async_session_factory() as db:
-        return await db.get(CapabilityRequestRow, uuid.UUID(request_id))
+    # P17 -- this driver process never resolves a tenant context; see
+    # scripts/p15_multiprocess_concurrency_proof.py's identical comment.
+    with use_all_tenants():
+        async with async_session_factory() as db:
+            return await db.get(CapabilityRequestRow, uuid.UUID(request_id))
 
 
 class _FakeRequest:
@@ -247,10 +251,11 @@ async def main() -> Dict[str, Any]:
 
     _rule("INDEPENDENT VERIFICATION — fresh queries, not this script's own narrative")
 
-    async with async_session_factory() as db:
-        fresh_row = (
-            await db.execute(select(CapabilityRequestRow).where(CapabilityRequestRow.request_id == uuid.UUID(request_id)))
-        ).scalar_one()
+    with use_all_tenants():
+        async with async_session_factory() as db:
+            fresh_row = (
+                await db.execute(select(CapabilityRequestRow).where(CapabilityRequestRow.request_id == uuid.UUID(request_id)))
+            ).scalar_one()
     _mark("POSTGRES (fresh session)", f"status={fresh_row.status} reconciled_match={fresh_row.result.get('reconciled_match')}")
     if fresh_row.status != STATUS_EXECUTED:
         raise RunFailed("independent Postgres read does not show 'executed'")

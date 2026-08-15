@@ -14,11 +14,13 @@ management, which none of the 4 covered.
 """
 
 import secrets
+import uuid
 from typing import Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from db.models.tenant import TenantMembershipRow
 from db.models.users import UserRow
 
 from .config import settings
@@ -90,7 +92,20 @@ async def verify_login(session: AsyncSession, username: str, password: str) -> O
         return None
     if not verify_password(password, row.password_hash):
         return None
-    return _row_to_user(row)
+    user = _row_to_user(row)
+    # P17 — the one place tenant_ids gets populated: this is the only path
+    # that mints a JWT (create_access_token), and db/tenancy.py's whole
+    # design depends on that token carrying an honest membership set. Not
+    # tenant-scoped itself (TenantMembershipRow is deliberately outside
+    # TENANT_SCOPED_MODELS) -- resolving "which tenants am I in" can't
+    # itself require already knowing the answer.
+    memberships = (
+        await session.execute(
+            select(TenantMembershipRow.tenant_id).where(TenantMembershipRow.user_id == row.user_id)
+        )
+    ).scalars().all()
+    user.tenant_ids = [str(t) for t in memberships]
+    return user
 
 
 async def list_users(session: AsyncSession) -> List[User]:
@@ -110,16 +125,28 @@ async def bootstrap_users(session: AsyncSession) -> Optional[Dict[str, str]]:
     a bcrypt hash, so recreating the Postgres volume silently invalidates the
     password everyone was using — the lockout this parameter exists to
     prevent. See config.py's seed_password.
+
+    P17 — also enrolls every freshly-seeded account in the default tenant
+    (db/tenancy.py's DEFAULT_TENANT_ID). The migration that first created
+    `tenants`/`tenant_memberships` did this once, for the users that
+    existed at that moment; this makes it an ongoing property of seeding
+    itself, not a one-time historical snapshot — necessary because
+    `users` gets truncated and re-seeded with fresh user_ids in this
+    project's own test suite (backend/tests/conftest.py's
+    _clean_users_table), which would otherwise orphan every real /auth/
+    login flow from ever reaching a tenant-scoped endpoint again.
     """
     existing = (await session.execute(select(UserRow.user_id).limit(1))).first()
     if existing is not None:
         return None
 
+    from db.models.tenant import DEFAULT_TENANT_ID, TenantMembershipRow
+
     generated: Dict[str, str] = {}
     for account in SEED_ACCOUNTS:
         password = settings.seed_password or secrets.token_urlsafe(9)
         generated[account["username"]] = password
-        await create_user(
+        user = await create_user(
             session,
             username=account["username"],
             password=password,
@@ -127,4 +154,8 @@ async def bootstrap_users(session: AsyncSession) -> Optional[Dict[str, str]]:
             role=account["role"],
             approval_limit_usd=account["approval_limit_usd"],
         )
+        session.add(TenantMembershipRow(tenant_id=DEFAULT_TENANT_ID, user_id=uuid.UUID(user.user_id)))
+    # Not committed here -- every existing caller (main.py's lifespan) already
+    # commits the session right after this call returns, same as create_user's
+    # own flush-not-commit convention above.
     return generated

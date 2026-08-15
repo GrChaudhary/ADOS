@@ -17,13 +17,14 @@ lookup, not a can_handle() broadcast, so one connector pre-registered under
 this single sentinel key — dispatching internally on the free-text id — is
 the shape that lookup already expects.
 
-Governance note: hot_disable_policy_rule (capability_manifest.py) only
-blocks HOT_DISABLED. A capability still sitting in PROPOSED/SANDBOX_TESTED
-(not yet vetted, sandbox not run, admin hasn't activated it) would sail
-straight through that rule, since it only checks for one specific status —
-and any authenticated user can reach POST /capabilities/invoke. This
-connector independently gates on manifest.status is ACTIVE so "not yet
-activated" fails closed here too, not just "explicitly disabled".
+Governance note: IntegrationHub.invoke()'s own authoritative check
+(integrations/hub.py, P14) only blocks HOT_DISABLED. A capability still
+sitting in PROPOSED/SANDBOX_TESTED (not yet vetted, sandbox not run, admin
+hasn't activated it) would sail straight through that check, since it only
+checks for one specific status — and any authenticated user can reach
+POST /capabilities/invoke. This connector independently gates on
+manifest.status is ACTIVE so "not yet activated" fails closed here too,
+not just "explicitly disabled".
 
 Execution itself is pluggable per track (executors registered by track
 name, e.g. "mcp_native" / "openapi") rather than hardcoded here, so
@@ -77,6 +78,14 @@ class DynamicCapabilityConnector(Connector):
     def register_executor(self, track: str, executor: ExecutorFn) -> None:
         self._executors[track] = executor
 
+    def set_resolver(self, resolver: ResolverFn) -> None:
+        """P14 — lets the wiring layer (backend/app/main.py, which is
+        allowed to import orchestrate/onboarding/ — this module itself
+        cannot, see its own docstring on import direction) attach the
+        cache-miss fallback after construction rather than only at
+        __init__ time."""
+        self._resolver = resolver
+
     async def execute(self, call: CapabilityCall) -> CapabilityResponse:
         capability_id = call.input.get("capability_id")
         if not capability_id:
@@ -87,13 +96,28 @@ class DynamicCapabilityConnector(Connector):
                 error="dynamic capability call missing required input.capability_id",
             )
 
-        manifest = self._manifests.manifest_for(capability_id)
+        # P14 — always an authoritative Postgres read (when persisted),
+        # never a trust-the-cache-if-present lookup. manifest_for()'s old
+        # self-heal only triggered on a cache MISS (None); a capability
+        # this process already cached as ACTIVE stayed ACTIVE here forever
+        # once hot-disabled through a DIFFERENT worker's registry instance
+        # — the real multi-process safety gap this closes. See
+        # CapabilityManifestRegistry.refresh_from_db()'s own docstring.
+        from backend.app.metrics import capability_registry_authoritative_lookups_total
+
+        try:
+            manifest = await self._manifests.refresh_from_db(capability_id)
+        except Exception as e:  # noqa: BLE001 — DB unavailable must refuse, never trust a stale cache
+            capability_registry_authoritative_lookups_total.labels(result="lookup_failed").inc()
+            return CapabilityResponse(
+                request_id=call.request_id,
+                status=CallStatus.FAILED,
+                connector=self.name,
+                error=f"capability registry authoritative lookup failed ({type(e).__name__}: {e}) — "
+                "refusing to execute without a fresh authorization decision",
+            )
         if manifest is None:
-            # Repairs the in-memory cache after a restart, same as
-            # list_manifests()'s own documented behavior.
-            await self._manifests.list_manifests()
-            manifest = self._manifests.manifest_for(capability_id)
-        if manifest is None:
+            capability_registry_authoritative_lookups_total.labels(result="not_found").inc()
             return CapabilityResponse(
                 request_id=call.request_id,
                 status=CallStatus.FAILED,
@@ -101,6 +125,7 @@ class DynamicCapabilityConnector(Connector):
                 error=f"no capability manifest registered for {capability_id}",
             )
         if manifest.status is not CapabilityStatus.ACTIVE:
+            capability_registry_authoritative_lookups_total.labels(result="not_active").inc()
             return CapabilityResponse(
                 request_id=call.request_id,
                 status=CallStatus.FAILED,
@@ -108,6 +133,7 @@ class DynamicCapabilityConnector(Connector):
                 error=f"capability {capability_id} is not active (status={manifest.status.value}) "
                 "— sandbox testing and admin activation must complete before it can be invoked",
             )
+        capability_registry_authoritative_lookups_total.labels(result="allowed").inc()
 
         config = self._dispatch.get(capability_id)
         if config is None and self._resolver is not None:

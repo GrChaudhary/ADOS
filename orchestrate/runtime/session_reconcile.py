@@ -57,6 +57,7 @@ from typing import List, Optional
 from sqlalchemy import select
 
 from db.models.mission import RuntimeSessionRow
+from db.tenancy import all_tenants_session
 
 from .base import TERMINAL_STATES
 
@@ -93,7 +94,10 @@ async def reconcile_abandoned_sessions(
     now = now or datetime.now(timezone.utc)
     reconciled: List[ReconciledSession] = []
 
-    async with session_factory() as db:
+    # P17 — background reconciliation, not a user request: scans every
+    # tenant's abandoned sessions by design. See
+    # db/tenancy.py::use_all_tenants's own docstring.
+    async with all_tenants_session(session_factory) as db:
         rows = (
             await db.execute(
                 select(RuntimeSessionRow)

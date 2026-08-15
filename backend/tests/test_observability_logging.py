@@ -36,6 +36,7 @@ from integrations.connectors.servicenow import ServiceNowConnector
 from integrations.hub import default_hub
 from orchestrate.runtime import build_identity
 from orchestrate.runtime.capability_reconcile import mark_stalled_executions_unknown, reconcile_outcome_unknown
+from orchestrate.runtime.prime import token_expiry
 
 EXPENSIVE = {"_estimated_cost_usd": 300_000.0}
 SECRET_PASSWORD = "S3cr3t-ServiceNow-Password-p10"
@@ -59,6 +60,7 @@ async def _mission_and_session(capability="NotifyITHelpdesk", allowed=None):
         token = "tok-" + uuid.uuid4().hex
         sess = RuntimeSessionRow(
             mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            token_expires_at=token_expiry(1800.0),
         )
         db.add(sess)
         await db.commit()

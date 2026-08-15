@@ -11,6 +11,7 @@ from orchestrate.onboarding import runtime_registry as onboarding_runtime_regist
 
 from ..auth import get_current_user
 from ..rbac import Role, User, require_role
+from ..tenancy import get_tenant_context
 
 router = APIRouter(
     prefix="/capabilities", tags=["capabilities"], dependencies=[Depends(get_current_user)]
@@ -18,7 +19,28 @@ router = APIRouter(
 
 
 @router.post("/invoke", response_model=CapabilityResponse)
-async def invoke_capability(call: CapabilityCall, request: Request):
+async def invoke_capability(
+    call: CapabilityCall,
+    request: Request,
+    # P18 — this pre-Prime-Agent, generic endpoint (docs/006-integration-hub.md)
+    # is the one real, reachable, user-facing path to `RunPrimeRLMAgent`:
+    # any authenticated user can POST a call naming that capability here,
+    # and PrimeRuntimeConnector._run() (integrations/connectors/
+    # prime_runtime.py) creates a real MissionRow. P16/P17's own "no
+    # user-facing mission-creation endpoint" conclusion was reached by
+    # grepping for a caller of RunPrimeRLMAgent specifically, which missed
+    # this generic, capability-agnostic invocation surface. Resolving the
+    # caller's tenant here (the same dependency runtime_approvals.py's
+    # router already uses) makes it visible to _run() via the same
+    # contextvars.ContextVar db/tenancy.py already propagates through an
+    # ordinary awaited call chain — no new plumbing through CapabilityCall
+    # itself. Every existing seeded/test user has exactly one membership
+    # (the default tenant) unless a test deliberately overrides it, so this
+    # adds no new failure mode for any of this endpoint's other, unrelated
+    # callers (NotifyOperator, etc. — capabilities with nothing to do with
+    # tenancy, for which resolving a tenant context is a harmless no-op).
+    _tenant=Depends(get_tenant_context),
+) -> CapabilityResponse:
     """Runs Capability Registry -> Connector Policy Engine -> Connector,
     per docs/006-integration-hub.md. Governance clearance (policy tier,
     approver) must already be set on `call.governance` by the caller —
@@ -139,10 +161,12 @@ async def disable_capability_manifest(
     capability_id: str, request: Request, current_user: User = Depends(get_current_user)
 ):
     """§8.7's capability-level circuit breaker: hot-disables an ACTIVE
-    capability. The hot_disable_policy_rule already wired into
-    IntegrationHub then blocks every invocation of it at the policy layer
-    until an explicit resume — this endpoint is the missing trigger, the
-    enforcement side existed already."""
+    capability. IntegrationHub.invoke()'s own authoritative check (P14)
+    then blocks every invocation of it — a fresh Postgres read on every
+    call, not a cache, so this takes effect on every worker immediately,
+    not just the one that handled this request — until an explicit
+    resume; this endpoint is the missing trigger, the enforcement side
+    existed already."""
     await _find_manifest_or_404(request, capability_id)
     registry = request.app.state.integration_hub.manifests
     reason = f"hot-disabled via admin API by {current_user.display_name} ({current_user.role.value})"

@@ -25,6 +25,7 @@ from db.engine import async_session_factory
 from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
 from integrations.connectors.servicenow import ServiceNowConnector
 from integrations.hub import default_hub
+from orchestrate.runtime.prime import token_expiry
 
 EXPENSIVE = {"_estimated_cost_usd": 300_000.0}  # forces EXECUTIVE_APPROVAL (parks) — see orchestrate/governance.py
 
@@ -65,7 +66,10 @@ async def _mission_and_session(capability="NotifyITHelpdesk", allowed=None):
         db.add(mission)
         await db.flush()
         token = "tok-" + uuid.uuid4().hex
-        sess = RuntimeSessionRow(mission_id=mission.mission_id, state="running", token_hash=hash_token(token))
+        sess = RuntimeSessionRow(
+            mission_id=mission.mission_id, state="running", token_hash=hash_token(token),
+            token_expires_at=token_expiry(1800.0),
+        )
         db.add(sess)
         await db.commit()
         return mission.mission_id, sess.session_id, token

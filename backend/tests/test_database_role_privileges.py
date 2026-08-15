@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 from backend.app.config import settings
+from db.models.tenant import DEFAULT_TENANT_ID
 
 _APP_DATABASE_URL = "postgresql+asyncpg://ados_app:ados_app@localhost:5432/ados_test"
 
@@ -118,19 +119,19 @@ async def test_ados_app_can_still_select_insert_update_the_audit_tables(app_engi
     async with app_engine.connect() as conn:
         await conn.execute(
             text(
-                "INSERT INTO missions (mission_id, title, objective, domain, "
+                "INSERT INTO missions (mission_id, tenant_id, title, objective, domain, "
                 "allowed_capabilities, status, created_by, created_at, updated_at) "
-                "VALUES (:id, 't', 'o', 'it', '[]'::json, 'running', 'test', now(), now())"
+                "VALUES (:id, :tid, 't', 'o', 'it', '[]'::json, 'running', 'test', now(), now())"
             ),
-            {"id": mission_id},
+            {"id": mission_id, "tid": DEFAULT_TENANT_ID},
         )
         await conn.execute(
             text(
-                "INSERT INTO runtime_sessions (session_id, mission_id, runtime, state, "
+                "INSERT INTO runtime_sessions (session_id, mission_id, tenant_id, runtime, state, "
                 "events, tool_execution_count, capability_request_count, created_at, updated_at) "
-                "VALUES (:sid, :mid, 'prime-agent', 'running', '[]'::json, 0, 0, now(), now())"
+                "VALUES (:sid, :mid, :tid, 'prime-agent', 'running', '[]'::json, 0, 0, now(), now())"
             ),
-            {"sid": session_id, "mid": mission_id},
+            {"sid": session_id, "mid": mission_id, "tid": DEFAULT_TENANT_ID},
         )
         await conn.execute(
             text("UPDATE runtime_sessions SET state = 'failed' WHERE session_id = :sid"),

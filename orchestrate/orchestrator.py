@@ -63,6 +63,65 @@ from .priority import PriorityInputs, compute_priority_score
 from .state_machine import IncidentStateMachine
 
 
+class DecisionAlreadyInProgress(Exception):
+    """P13 — raised by resume_after_decision when another process already
+    claimed (AuditTrail.claim_awaiting_approval) and is acting on this
+    incident's decision. Distinct from a plain None return, which
+    resume_after_decision also uses for "nothing to do here" (an
+    escalation, or a call made on a non-resumable PendingApproval) — this
+    exception means a decision genuinely was in flight elsewhere, and the
+    caller (backend/app/routers/incidents.py) should tell the human that,
+    not silently report success for an action that did not happen here."""
+
+
+def _reconstitute_pending_approval(record: IncidentRecord) -> Optional[PendingApproval]:
+    """The reconstruction logic `resume_pending_approvals` (batch, at
+    startup) and `resolve_pending_approval` (single, on-demand — P13)
+    both need: turn one AwaitingApproval IncidentRecord into a
+    PendingApproval carrying `resume_context`, or None if the record
+    isn't in the shape resume_after_decision knows how to act on. Never
+    mutates `record`; never touches ApprovalQueue itself — callers decide
+    whether/how to enqueue the result."""
+    if record.final_state != "AwaitingApproval":
+        return None
+    if not record.capability_invoked or not record.execution_steps or not record.target_line_id:
+        # Snapshot predates execution_steps/target_line_id being saved, or
+        # never reached a clean AwaitingApproval snapshot. Nothing safe to
+        # resume — stays orphaned rather than guessing at what to dispatch.
+        return None
+
+    top_option = next(
+        (o for o in record.alternatives if o.get("recommendation") == "TOP_PICK"),
+        record.alternatives[0] if record.alternatives else {},
+    )
+    primary_condition_id = record.causal_chain[0].condition_id if record.causal_chain else None
+
+    return PendingApproval(
+        incident_id=record.incident_id,
+        capability=record.capability_invoked,
+        policy_tier=record.policy_tier,
+        confidence=record.confidence,
+        summary=(
+            f"{top_option.get('name', 'Recommended option')} "
+            f"(${record.estimated_cost_usd}, {record.estimated_downtime_min}min) "
+            f"— recovered after a backend restart"
+        ),
+        estimated_cost_usd=record.estimated_cost_usd or 0.0,
+        resume_context={
+            "plant_id": record.plant_id,
+            "line_id": record.line_id,
+            "detected_at": record.detected_at,
+            "causal_chain": record.causal_chain,
+            "confidence": record.confidence,
+            "alternatives": record.alternatives,
+            "chosen_opt": top_option,
+            "execution_steps": record.execution_steps,
+            "target_line_id": record.target_line_id,
+            "primary_condition_id": primary_condition_id,
+        },
+    )
+
+
 class DecisionOrchestrator:
     def __init__(
         self,
@@ -111,51 +170,42 @@ class DecisionOrchestrator:
         were reconstituted."""
         count = 0
         for record in self.audit_trail.all():
-            if record.final_state != "AwaitingApproval":
-                continue
             if self.approvals.get(record.incident_id) is not None:
                 continue
-            if not record.capability_invoked or not record.execution_steps or not record.target_line_id:
-                # Snapshot predates execution_steps/target_line_id being
-                # saved, or never reached a clean AwaitingApproval snapshot.
-                # Nothing safe to resume — stays orphaned rather than
-                # guessing at what to dispatch.
+            pending = _reconstitute_pending_approval(record)
+            if pending is None:
                 continue
-
-            top_option = next(
-                (o for o in record.alternatives if o.get("recommendation") == "TOP_PICK"),
-                record.alternatives[0] if record.alternatives else {},
-            )
-            primary_condition_id = record.causal_chain[0].condition_id if record.causal_chain else None
-
-            self.approvals.enqueue(
-                PendingApproval(
-                    incident_id=record.incident_id,
-                    capability=record.capability_invoked,
-                    policy_tier=record.policy_tier,
-                    confidence=record.confidence,
-                    summary=(
-                        f"{top_option.get('name', 'Recommended option')} "
-                        f"(${record.estimated_cost_usd}, {record.estimated_downtime_min}min) "
-                        f"— recovered after a backend restart"
-                    ),
-                    estimated_cost_usd=record.estimated_cost_usd or 0.0,
-                    resume_context={
-                        "plant_id": record.plant_id,
-                        "line_id": record.line_id,
-                        "detected_at": record.detected_at,
-                        "causal_chain": record.causal_chain,
-                        "confidence": record.confidence,
-                        "alternatives": record.alternatives,
-                        "chosen_opt": top_option,
-                        "execution_steps": record.execution_steps,
-                        "target_line_id": record.target_line_id,
-                        "primary_condition_id": primary_condition_id,
-                    },
-                )
-            )
+            self.approvals.enqueue(pending)
             count += 1
         return count
+
+    async def resolve_pending_approval(self, incident_id: str) -> Optional[PendingApproval]:
+        """P13 — the on-demand, single-incident sibling of
+        `resume_pending_approvals`, for a worker process that never ran
+        this incident and did not have it at its own startup either
+        (`resume_pending_approvals` only ever sees what THIS process's
+        `audit_trail.hydrate_from_db()` loaded at boot — a second worker
+        already running when a *new* incident parks has nothing that would
+        ever populate it). Called from every read of `self.approvals`
+        that a human's decision depends on
+        (`backend/app/routers/incidents.py`) instead of a bare
+        `self.approvals.get(...)`, so `/approve`/`/reject`/`/escalate`
+        (and `GET /incidents/{id}`) work correctly regardless of which
+        process actually ran the incident.
+
+        Checks the fast, in-process path first — this is a live Postgres
+        read otherwise, so it should never replace `self.approvals.get()`
+        as the primary path, only back it up."""
+        pending = self.approvals.get(incident_id)
+        if pending is not None:
+            return pending
+        record = await self.audit_trail.get_from_db(incident_id)
+        if record is None:
+            return None
+        pending = _reconstitute_pending_approval(record)
+        if pending is None:
+            return None
+        return self.approvals.enqueue(pending)
 
     async def resume_after_decision(self, pending: PendingApproval) -> Optional[IncidentRecord]:
         """Carries out a decision made on a restart-reconstituted
@@ -168,7 +218,20 @@ class DecisionOrchestrator:
         IncidentStateMachine — that object doesn't survive a restart either.
         Deliberately does not re-run diagnosis/candidate-generation stages:
         dispatches exactly what was already proposed (see IncidentRecord's
-        execution_steps/target_line_id docstring)."""
+        execution_steps/target_line_id docstring).
+
+        P13: a reconstructed PendingApproval (see DecisionOrchestrator.
+        resolve_pending_approval) can now be visible to and actionable from
+        MULTIPLE processes for the same incident at once — something that
+        was structurally impossible before, since only the one originating
+        process ever had it. `AuditTrail.claim_awaiting_approval` closes
+        that race with a single atomic Postgres UPDATE: raises
+        DecisionAlreadyInProgress, rather than silently proceeding, if this
+        call lost the race. Not applied to "escalated" — that branch has no
+        external side effect (it only creates a second, still-pending
+        in-memory PendingApproval for a human to decide later), so a race
+        there produces at worst a harmless duplicate, not a double
+        execution."""
         ctx = pending.resume_context
         if ctx is None or pending.decision is None:
             return None
@@ -189,6 +252,9 @@ class DecisionOrchestrator:
                 )
             )
             return None
+
+        if not await self.audit_trail.claim_awaiting_approval(pending.incident_id):
+            raise DecisionAlreadyInProgress(pending.incident_id)
 
         base_kwargs = dict(
             incident_id=pending.incident_id,

@@ -1,0 +1,31 @@
+# P11 follow-up. Canonical, repo-owned Alertmanager config for local
+# development, so another developer can reproduce this setup exactly.
+#
+# Receiver is a local-only webhook (infrastructure/prometheus/
+# webhook_receiver.py), per the explicit instruction: no real email/Slack/
+# PagerDuty/etc. destination is configured without separate approval. This
+# proves the full delivery chain (Prometheus -> Alertmanager -> receiver)
+# without sending anything anywhere outside this machine.
+#
+# To use: point a locally-running Alertmanager at this file
+# (`alertmanager --config.file=infrastructure/prometheus/alertmanager.yml`),
+# or copy it over an existing local config and POST /-/reload. Do NOT add a
+# real notification receiver here without explicit approval — see
+# docs/prime-agent-integration/22-metrics-alerting-operationalization.md's
+# "configuring a real receiver" section for how an operator would do that
+# later.
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: local-webhook
+  group_by: ["alertname"]
+  group_wait: 10s
+  group_interval: 30s
+  repeat_interval: 1h
+
+receivers:
+  - name: local-webhook
+    webhook_configs:
+      - url: "http://127.0.0.1:9095/alertmanager-webhook"
+        send_resolved: true

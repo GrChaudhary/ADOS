@@ -30,3 +30,9 @@ from backend.app.config import settings
 engine: AsyncEngine = create_async_engine(settings.database_url, poolclass=NullPool)
 
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+# P17 — importing this here (rather than trusting some later call site to
+# do it first) registers db/tenancy.py's do_orm_execute tenant filter
+# before any session from the factory above can run a query. Every module
+# that reaches the database already imports this one.
+from db import tenancy as _tenancy  # noqa: E402,F401

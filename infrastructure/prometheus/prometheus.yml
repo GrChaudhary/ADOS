@@ -1,0 +1,40 @@
+# P11 follow-up — operationalizes the metrics/alerting contract documented in
+# docs/prime-agent-integration/19-metrics-and-alerting.md and
+# docs/prime-agent-integration/22-metrics-alerting-operationalization.md.
+#
+# Runs as a local macOS process (`prometheus --config.file=infrastructure/
+# prometheus/prometheus.yml`), NOT inside docker-compose. ADOS's backend
+# publishes port 8000 to the host whether it is started bare
+# (scripts/run-backend.sh) or via `docker compose up backend` — either way it
+# is reachable at localhost:8000 from this machine. Alertmanager is already a
+# local Homebrew-installed process on this same host. Running Prometheus the
+# same way (local, not containerized) avoids standing up two competing
+# topologies for one scrape target. See doc 22 for the full architecture
+# decision and its alternatives.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - alert_rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["localhost:9093"]
+
+scrape_configs:
+  # Prometheus's own self-scrape — standard practice, and how
+  # `up{job="prometheus"}` becomes available for comparison against
+  # `up{job="ados"}` in the ADOSTargetDown alert.
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # The ADOS backend's export surface (backend/app/routers/metrics.py).
+  # Unauthenticated, matching /healthz — no bearer_token/basic_auth needed
+  # here, and nothing secret is scraped (see doc 19's label-safety section).
+  - job_name: "ados"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:8000"]

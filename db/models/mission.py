@@ -27,6 +27,7 @@ from sqlalchemy import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..base import Base
+from .tenant import DEFAULT_TENANT_ID
 
 
 def _utcnow() -> datetime:
@@ -39,6 +40,23 @@ class MissionRow(Base):
     __tablename__ = "missions"
 
     mission_id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+
+    # P17 — the real security boundary db/tenancy.py enforces on every ORM
+    # READ/UPDATE/DELETE against this table (never on INSERT — see
+    # db/tenancy.py's own do_orm_execute filter). Defaults to the
+    # well-known default tenant rather than refusing an unset value:
+    # SQLAlchemy sends an explicit NULL for an unset non-Optional Mapped
+    # column (verified against this exact model, not assumed), so "no
+    # Python default" would mean every one of this codebase's existing
+    # direct-construction test helpers breaks on a column those tests have
+    # no interest in — the wrong cost for the wrong protection, since the
+    # actual security boundary is the READ-side filter, not the INSERT
+    # default. Every real production creation path (integrations/
+    # connectors/prime_runtime.py, backend/app/mcp_gateway.py) sets this
+    # explicitly regardless. See
+    # docs/prime-agent-integration/28-multi-tenancy-and-tenant-isolation.md.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(default=DEFAULT_TENANT_ID)
+
     title: Mapped[str]
     objective: Mapped[str]
     domain: Mapped[str] = mapped_column(default="it")
@@ -80,6 +98,13 @@ class RuntimeSessionRow(Base):
     session_id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     mission_id: Mapped[uuid.UUID]
 
+    # P17 — denormalized from the owning mission at creation time (never
+    # re-derived by a join), same reasoning as owner_host below: a query
+    # against this table must be tenant-filterable on its own column, not
+    # dependent on every caller remembering to join missions first. Default
+    # rationale: see MissionRow.tenant_id above.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(default=DEFAULT_TENANT_ID)
+
     runtime: Mapped[str] = mapped_column(default="prime-agent")
 
     # created | starting | running | waiting_approval | completed | failed
@@ -98,6 +123,19 @@ class RuntimeSessionRow(Base):
     runtime_session_id: Mapped[Optional[str]] = mapped_column(default=None)
     container_name: Mapped[Optional[str]] = mapped_column(default=None)
     workspace_path: Mapped[Optional[str]] = mapped_column(default=None)
+
+    # P16 — which ADOS process host created this session's real Docker/
+    # workspace resources (Settings.node_id, normally the machine hostname).
+    # NULL for every row written before this column existed, and treated by
+    # orphan_sweep.py as "claimable by any sweeper" — the same posture a
+    # single-host deployment already has, since there both would be the same
+    # host anyway. Its only consumer is orphan_sweep.claim_batch's node_id
+    # filter: a container/network/workspace can only ever be verified against
+    # the local Docker daemon and local filesystem a sweeper actually has, so
+    # a sweeper on a host that did not create this session must never
+    # conclude its resources are "absent" just because they are invisible
+    # from here. See docs/prime-agent-integration/27-multi-tenancy-and-multi-host-safety.md.
+    owner_host: Mapped[Optional[str]] = mapped_column(default=None)
 
     # Normalized runtime events (runtime.tool.started, runtime.turn.completed,
     # …) kept as the mission's evidence trail.
@@ -125,6 +163,14 @@ class CapabilityRequestRow(Base):
     request_id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID]
     mission_id: Mapped[uuid.UUID]
+
+    # P17 — denormalized from the owning session/mission at parking time.
+    # This is the exact column the P16-demonstrated defect needed and did
+    # not have: db/tenancy.py's global ORM filter uses this to make
+    # list_capability_requests/get/approve/reject tenant-scoped without
+    # requiring any of those call sites to remember a WHERE clause. Default
+    # rationale: see MissionRow.tenant_id above.
+    tenant_id: Mapped[uuid.UUID] = mapped_column(default=DEFAULT_TENANT_ID)
 
     capability: Mapped[str]
     arguments: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)

@@ -60,7 +60,10 @@ capability_execution_duration_seconds = Histogram(
 admission_rejections_total = Counter(
     "ados_admission_rejections_total",
     "Requests refused by admission control before any external side effect.",
-    ["gate"],  # capability_concurrency | mission_concurrency | approval_queue | session_activity
+    # capability_concurrency | mission_concurrency | approval_queue |
+    # session_activity | mission_start_rate (P12 -- a fixed-window rate
+    # limit, not a concurrency ceiling; see integrations/rate_limiter.py)
+    ["gate"],
 )
 
 outcome_unknown_total = Counter(
@@ -85,7 +88,7 @@ orphan_discovered_total = Counter(
 orphan_cleanup_total = Counter(
     "ados_orphan_cleanup_total",
     "Orphan sweep outcomes, by result.",
-    ["result"],  # cleaned | absent | failed | refused
+    ["result"],  # cleaned | absent | failed | refused | unverifiable
 )
 
 authentication_failures_total = Counter(
@@ -98,7 +101,10 @@ authorization_denials_total = Counter(
     "Requests refused by an authorization check, by which one.",
     [
         "reason"
-    ],  # role_readonly | tier_role_mismatch | over_approval_limit | inactive_account | not_in_grant | policy_violation
+    ],  # role_readonly | tier_role_mismatch | over_approval_limit | inactive_account | not_in_grant |
+    # policy_violation | already_decided (P15 -- a capability_requests row
+    # already resolved when a second decision attempt raced it; see
+    # backend/app/routers/runtime_approvals.py::_load_pending_or_404)
 )
 
 build_identity_drift_refusals_total = Counter(
@@ -111,6 +117,28 @@ token_expiry_refusals_total = Counter(
     "ados_token_expiry_refusals_total",
     "Refusals caused by a runtime session token that has expired or was "
     "never given a recorded expiry.",
+)
+
+# P14 — the two execution-boundary authoritative capability-manifest checks
+# (integrations/hub.py::invoke(), integrations/connectors/dynamic.py::
+# execute()). Both call CapabilityManifestRegistry.refresh_from_db(), a
+# fresh Postgres read immediately before a capability may run, replacing
+# a process-local in-memory cache that a DIFFERENT worker's hot_disable/
+# activate/resume call would otherwise leave silently stale forever.
+capability_registry_authoritative_lookups_total = Counter(
+    "ados_capability_registry_authoritative_lookups_total",
+    "Fresh, non-cached capability_manifests reads performed immediately "
+    "before a capability may run, by result.",
+    ["result"],  # allowed | hot_disabled | not_active | not_found | lookup_failed
+)
+
+capability_registry_stale_cache_detected_total = Counter(
+    "ados_capability_registry_stale_cache_detected_total",
+    "A capability's authoritative Postgres status disagreed with this "
+    "process's own previously cached copy — direct evidence that a "
+    "hot_disable/resume/deprecate/activate issued through a DIFFERENT "
+    "worker's registry instance was just detected and picked up here, "
+    "live, with no restart.",
 )
 
 # --- Scrape-time gauges -------------------------------------------------
@@ -144,4 +172,24 @@ outcome_unknown_oldest_age_seconds = Gauge(
     "ados_outcome_unknown_oldest_age_seconds",
     "Age of the oldest still-unresolved outcome_unknown row, in seconds. "
     "0 when none are open.",
+)
+
+# P12 — same "live COUNT/MIN query per scrape" pattern as the two gauge
+# pairs above, for admission_leases (db/models/admission_lease.py). A
+# non-zero, aging count is the operator-relevant signal: leases are held for
+# at most one hub.invoke() call under normal operation, so anything still
+# open past a normal call's duration is either genuine sustained load (see
+# ADOSAdmissionSaturation) or a crashed process's leak waiting on the next
+# periodic reclaim pass (see ADOSAdmissionLeaseStuck, both alert_rules.yml).
+admission_leases_active = Gauge(
+    "ados_admission_leases_active",
+    "Currently-held admission_leases rows (Postgres-backed global admission "
+    "control slots in use right now).",
+    ["gate"],  # capability_concurrency | mission_concurrency
+)
+
+admission_lease_oldest_age_seconds = Gauge(
+    "ados_admission_lease_oldest_age_seconds",
+    "Age of the oldest currently-held admission lease, in seconds. 0 when none are held.",
+    ["gate"],
 )

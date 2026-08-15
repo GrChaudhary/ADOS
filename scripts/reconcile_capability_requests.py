@@ -13,10 +13,13 @@ first, or because a connector returned `CallStatus.UNKNOWN` directly):
      `executed` and creates nothing new; no match leaves it exactly where it
      was.
 
-Deliberately NOT wired into a scheduler, matching `scripts/sweep_orphans.py`'s
-own precedent: the correctness guarantee (a row can never be silently
-re-executed) does not depend on this script ever running. Run it by hand, or
-from cron/CI if an operator chooses to — that choice is out of scope here.
+P12: both passes are now ALSO run automatically, from the same centralized
+periodic loop `backend/app/main.py::_reconcile_and_sweep_orphans_periodically`
+already runs session/orphan cleanup from. This script remains here for an
+operator who wants either pass run on demand — right after a known incident,
+without waiting for the next tick — rather than as the only way either ever
+runs. The correctness guarantee (a row can never be silently re-executed)
+still does not depend on this script, or the periodic loop, ever running.
 
 Usage:
     python scripts/reconcile_capability_requests.py

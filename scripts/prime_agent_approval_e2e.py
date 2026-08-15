@@ -61,6 +61,7 @@ from sqlalchemy import select
 from backend.app.mcp_gateway import hash_token
 from contracts import PolicyTier
 from db.engine import async_session_factory, engine
+from db.tenancy import all_tenants_session
 from db.models.mission import CapabilityRequestRow, MissionRow, RuntimeSessionRow
 from integrations.connectors.servicenow import ServiceNowConnector
 from orchestrate.runtime.acceptance import evaluate_mission
@@ -105,7 +106,9 @@ async def _login(client: httpx.AsyncClient, username: str, password: str) -> str
 
 async def _pending_row(mission_id: uuid.UUID) -> Optional[CapabilityRequestRow]:
     """Read-only observation of ADOS's own state. This script never writes."""
-    async with async_session_factory() as db:
+    # P17 -- this driver script never resolves a tenant context; see
+    # scripts/p15_multiprocess_concurrency_proof.py's identical reasoning.
+    async with all_tenants_session(async_session_factory) as db:
         return (
             await db.execute(
                 select(CapabilityRequestRow).where(
@@ -184,7 +187,9 @@ async def _approver(mission_id: uuid.UUID, marker: str, runtime_token: str) -> D
         _mark("NOT-EXECUTED", "no ServiceNow record, no result on the row, while pending")
 
         # 3. The agent is still waiting.
-        async with async_session_factory() as db:
+        # P17 -- this driver script never resolves a tenant context; see
+        # scripts/p15_multiprocess_concurrency_proof.py's identical reasoning.
+        async with all_tenants_session(async_session_factory) as db:
             session_row = await db.get(RuntimeSessionRow, row.session_id)
         result["session_state_while_pending"] = session_row.state
         _mark("AGENT-WAITING", f"runtime session state = {session_row.state!r}")
@@ -316,7 +321,9 @@ async def main() -> int:
     marker = f"{MARKER} approval mission={mission_id}"
     print(f"[0] marker     {marker}")
 
-    async with async_session_factory() as db:
+    # P17 -- this driver script never resolves a tenant context; see
+    # scripts/p15_multiprocess_concurrency_proof.py's identical reasoning.
+    async with all_tenants_session(async_session_factory) as db:
         mission = MissionRow(
             mission_id=mission_id,
             title=f"{MARKER} live approval round trip",
@@ -395,7 +402,9 @@ async def main() -> int:
     try:
         await runtime.start(spec, token)
         print(f"[3] container  {runtime.container_name} on {runtime.egress.internal_network}")
-        async with async_session_factory() as db:
+        # P17 -- this driver script never resolves a tenant context; see
+        # scripts/p15_multiprocess_concurrency_proof.py's identical reasoning.
+        async with all_tenants_session(async_session_factory) as db:
             row = await db.get(RuntimeSessionRow, session_id)
             row.state, row.container_name = "running", runtime.container_name
             row.workspace_path = str(runtime.workspace)
@@ -408,7 +417,9 @@ async def main() -> int:
         approval = await approver_task
         _mark("RUN-END", f"state={outcome.state.value} tools={outcome.tool_execution_count}")
 
-        async with async_session_factory() as db:
+        # P17 -- this driver script never resolves a tenant context; see
+        # scripts/p15_multiprocess_concurrency_proof.py's identical reasoning.
+        async with all_tenants_session(async_session_factory) as db:
             requests = (
                 await db.execute(
                     select(CapabilityRequestRow)
@@ -442,7 +453,9 @@ async def main() -> int:
 
         _rule("STATE TRANSITIONS — read from ADOS's own rows")
         request_id = approval["request_id"]
-        async with async_session_factory() as db:
+        # P17 -- this driver script never resolves a tenant context; see
+        # scripts/p15_multiprocess_concurrency_proof.py's identical reasoning.
+        async with all_tenants_session(async_session_factory) as db:
             row = await db.get(CapabilityRequestRow, uuid.UUID(request_id))
         print(f"request_id      : {row.request_id}")
         print(f"capability      : {row.capability}")

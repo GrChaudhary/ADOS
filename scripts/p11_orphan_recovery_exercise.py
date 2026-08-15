@@ -59,6 +59,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.app.mcp_gateway import hash_token
 from db.engine import async_session_factory, engine
+from db.tenancy import use_all_tenants
 from db.models.mission import MissionRow, RuntimeSessionRow
 from orchestrate.runtime.base import AgentSessionSpec
 from orchestrate.runtime.egress import _SAFE_SUFFIX
@@ -114,12 +115,13 @@ async def main() -> int:
     runtime = PrimeAgentRuntime(mcp_url="http://host.docker.internal:8077/mcp/")
     await runtime.start(spec, token)  # REAL docker run, REAL egress boundary
 
-    async with async_session_factory() as db:
-        row = await db.get(RuntimeSessionRow, session_id)
-        row.state = "running"
-        row.container_name = runtime.container_name
-        row.workspace_path = str(runtime.workspace)
-        await db.commit()
+    with use_all_tenants():
+        async with async_session_factory() as db:
+            row = await db.get(RuntimeSessionRow, session_id)
+            row.state = "running"
+            row.container_name = runtime.container_name
+            row.workspace_path = str(runtime.workspace)
+            await db.commit()
 
     suffix = _SAFE_SUFFIX.sub("", str(session_id))[:24]
     expected_container = runtime.container_name
@@ -148,10 +150,11 @@ async def main() -> int:
         await engine.dispose()
         return 1
 
-    async with async_session_factory() as db:
-        row = await db.get(RuntimeSessionRow, session_id)
-        detected_state = row.state
-        detected_reason = row.failure_reason
+    with use_all_tenants():
+        async with async_session_factory() as db:
+            row = await db.get(RuntimeSessionRow, session_id)
+            detected_state = row.state
+            detected_reason = row.failure_reason
     print(f"      session state after detection: {detected_state}")
     print(f"      failure_reason: {detected_reason}")
     assert detected_state == "failed"
@@ -209,9 +212,10 @@ async def main() -> int:
             print(f"      FAIL: network {name} still present after sweep")
             ok = False
 
-    async with async_session_factory() as db:
-        row = await db.get(RuntimeSessionRow, session_id)
-        events = row.events or []
+    with use_all_tenants():
+        async with async_session_factory() as db:
+            row = await db.get(RuntimeSessionRow, session_id)
+            events = row.events or []
     resolved_events = [e for e in events if e.get("type", "").startswith("orphan_sweep.") and e.get("type") != "orphan_sweep.claimed"]
     print(f"      session's own durable event log: {len(resolved_events)} resolution event(s)")
     for e in resolved_events:

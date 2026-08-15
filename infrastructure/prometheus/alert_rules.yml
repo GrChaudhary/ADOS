@@ -1,0 +1,264 @@
+# Prometheus alert rules for ADOS — one rule per row of the alerting
+# contract table in docs/prime-agent-integration/19-metrics-and-alerting.md.
+# Every expression references only metric names that exist in
+# backend/app/metrics.py (verified against that file, not invented). Two
+# rules carry an explicit "approximate"/"aggregate-only" caveat in their
+# annotations rather than silently overstating what the metric can prove —
+# see docs/prime-agent-integration/22-metrics-alerting-operationalization.md
+# for why those two can't be exact without adding a label doc 19 deliberately
+# excludes.
+#
+# `for:` durations are the shipped/recommended values for a real deployment.
+# The end-to-end proof run in doc 22 used a copy of this file with
+# ADOSAuthFailureRateHigh's `for:` temporarily shortened to observe firing
+# within a normal testing session — the checked-in value below is the
+# production-sane one.
+groups:
+  - name: ados_missions
+    rules:
+      - alert: ADOSMissionPossiblyStuck
+        expr: (increase(ados_missions_started_total[30m]) - increase(ados_missions_completed_total[30m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ADOS may have a stuck Prime Agent mission"
+          description: >-
+            Approximate signal only: started-minus-completed missions over the
+            last 30m is {{ $value }}. There is no mission_id-to-duration
+            metric (deliberately no such label — see doc 19's label-safety
+            section), so this cannot distinguish one genuinely stuck mission
+            from ordinary in-flight latency under load. Cross-check `docker
+            ps` and `runtime_sessions.state` before treating this as an
+            incident. See operator runbook §4.
+
+  - name: ados_approvals
+    rules:
+      - alert: ADOSApprovalQueueDepthHigh
+        expr: ados_approval_queue_depth > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ADOS approval queue depth is elevated"
+          description: >-
+            {{ $value }} requests are pending_approval, sustained for 5m.
+            Approvals are backing up faster than a human is clearing them.
+            See operator runbook §5.
+
+      - alert: ADOSApprovalQueueOldestAgeHigh
+        expr: ados_approval_queue_oldest_age_seconds > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A pending approval has waited over an hour"
+          description: >-
+            Oldest pending_approval row is {{ $value }}s old. See operator
+            runbook §5.
+
+  - name: ados_outcome_unknown
+    rules:
+      - alert: ADOSOutcomeUnknownIncreasing
+        expr: increase(ados_outcome_unknown_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A capability execution's real-world outcome is unknown"
+          description: >-
+            {{ $value }} new outcome_unknown transitions in the last hour —
+            the anomaly the exactly-once design (P9) exists to surface, never
+            auto-retried. Run scripts/reconcile_capability_requests.py. See
+            operator runbook §6.
+
+      - alert: ADOSOutcomeUnknownBacklogSustained
+        expr: ados_outcome_unknown_open > 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "outcome_unknown backlog is not being resolved"
+          description: >-
+            {{ $value }} rows have sat at outcome_unknown for over an hour.
+            Either nobody has run reconciliation, or the external system
+            genuinely has no matching record — this needs a human decision.
+            See operator runbook §6.
+
+      - alert: ADOSReconciliationFailing
+        expr: increase(ados_reconciliation_runs_total{result="failure"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A reconciliation pass raised instead of completing"
+          description: >-
+            {{ $value }} failed reconciliation pass(es) in the last hour —
+            most likely a transient Postgres error. Check application logs.
+            See operator runbook §7.
+
+  - name: ados_orphans
+    rules:
+      - alert: ADOSOrphanCleanupFailing
+        expr: increase(ados_orphan_discovered_total[1h]) > 0 and increase(ados_orphan_cleanup_total{result="failed"}[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Docker/workspace resources are leaking and the sweep can't clean them"
+          description: >-
+            Orphans were discovered and at least one cleanup attempt failed
+            in the last hour. Check `docker ps`/`docker network ls` by hand.
+            See operator runbook §8.
+
+  - name: ados_security
+    rules:
+      - alert: ADOSAuthFailureRateHigh
+        expr: increase(ados_authentication_failures_total[5m]) > 20
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated failed-login rate against /auth/login"
+          description: >-
+            {{ $value }} failed logins in the last 5m — possible
+            credential-guessing activity. See operator runbook §14 and doc 19.
+
+      - alert: ADOSPolicyViolationDenials
+        expr: increase(ados_authorization_denials_total{reason="policy_violation"}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A capability was refused for lacking a registered connector"
+          description: >-
+            {{ $value }} policy_violation denial(s) in 15m. Check
+            integrations/hub.py registration and GET /capabilities/manifests
+            for hot-disabled entries.
+
+      - alert: ADOSBuildIdentityDrift
+        expr: increase(ados_build_identity_drift_refusals_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The running ADOS process is serving code older than its own source tree"
+          description: >-
+            {{ $value }} drift refusal(s) in 5m — every one already prevented
+            a mission/capability call from running under stale code, but the
+            process itself needs a restart. See operator runbook §2.
+
+      - alert: ADOSTokenExpiryRefusalBurst
+        expr: increase(ados_token_expiry_refusals_total[5m]) > 5
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unusually many expired/malformed session refusals"
+          description: >-
+            {{ $value }} token-expiry refusals in 5m. P12: this now also
+            counts NULL-expiry ("fossil") sessions refused at every MCP tool
+            call, not only the approval endpoint — see doc 18 §16.6/P12.
+            Check whether this correlates with a specific mission batch or a
+            client bug. See operator runbook §9.
+
+  - name: ados_admission_control
+    rules:
+      - alert: ADOSMissionConcurrencyLimitHit
+        expr: increase(ados_admission_rejections_total{gate="mission_concurrency"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The Prime Agent mission concurrency ceiling is being hit"
+          description: >-
+            Sustained for 5m — real demand for missions may exceed the
+            configured envelope (Settings.max_concurrent_prime_missions).
+            P12: this ceiling is now enforced globally across every ADOS
+            process sharing this Postgres database, not just this one — see
+            operator runbook §13.
+
+      - alert: ADOSCapabilityConcurrencyLimitHit
+        expr: increase(ados_admission_rejections_total{gate="capability_concurrency"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The general capability-execution concurrency ceiling is saturated"
+          description: >-
+            Sustained for 5m (Settings.max_concurrent_capability_executions).
+            P12: enforced globally across processes — see operator runbook §13.
+
+      - alert: ADOSMissionStartRateLimited
+        expr: increase(ados_admission_rejections_total{gate="mission_start_rate"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prime Agent missions are being started faster than the rate limit allows"
+          description: >-
+            P12 — distinct from the concurrency ceiling above: this fires
+            even if missions complete quickly, because it bounds how often
+            one can be STARTED (Settings.mission_start_rate_limit_max per
+            mission_start_rate_limit_window_seconds), closing the "no
+            ADOS-side throttling on a paid-LLM-triggering capability" gap
+            doc 18 named. Sustained for 5m — check for a caller in a restart
+            loop, not a single burst. See operator runbook §13.
+
+      - alert: ADOSAdmissionLeaseStuck
+        expr: ados_admission_lease_oldest_age_seconds > 1200
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "An admission-control slot has been held far longer than a normal call takes"
+          description: >-
+            P12 — the oldest {{ $labels.gate }} lease is {{ $value }}s old,
+            sustained for 5m. Every real hub.invoke() call releases its
+            lease in a `finally` block; a lease this old means either a
+            genuinely very long-running call or, more likely, the process
+            that acquired it crashed before releasing. The centralized
+            periodic reclaim pass (backend/app/main.py) will remove it
+            automatically once it exceeds admission_lease_max_age_seconds
+            (default 1800s) — this alert is the early warning before that
+            self-heals. See operator runbook §13.
+
+      - alert: ADOSApprovalQueueAdmissionRejections
+        expr: increase(ados_admission_rejections_total{gate="approval_queue"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "New Tier 1/2 requests are being refused — approval backlog is at capacity"
+          description: >-
+            {{ $value }} approval_queue admission rejection(s) in 5m
+            (Settings.max_pending_approvals). Compounds with
+            ADOSApprovalQueueDepthHigh — clear the backlog, don't just raise
+            the limit. See operator runbook §13.
+
+      - alert: ADOSSessionActivityAdmissionRejections
+        expr: increase(ados_admission_rejections_total{gate="session_activity"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "A session hit its per-session capability-request ceiling"
+          description: >-
+            Aggregate signal only — ados_admission_rejections_total
+            deliberately carries no session_id label (cardinality/safety, see
+            doc 19). This cannot say which session by itself; identify it via
+            a capability_requests query per operator runbook §13.
+
+  - name: ados_availability
+    rules:
+      - alert: ADOSTargetDown
+        expr: up{job="ados"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus cannot scrape the ADOS /metrics endpoint"
+          description: >-
+            No successful scrape of the `ados` job for over 1m — the process
+            may be down or unreachable. Check GET /healthz. See operator
+            runbook §3.

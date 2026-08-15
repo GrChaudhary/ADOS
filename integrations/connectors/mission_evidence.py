@@ -46,6 +46,7 @@ class MissionEvidenceConnector(Connector):
         # by contracts-level code and must not drag the database layer in with it.
         from db.engine import async_session_factory
         from db.models.mission import MissionRow
+        from db.tenancy import all_tenants_session
 
         try:
             mission_id = uuid.UUID(str(call.incident_id))
@@ -57,7 +58,14 @@ class MissionEvidenceConnector(Connector):
                 error=f"not a mission id: {call.incident_id!r}",
             )
 
-        async with async_session_factory() as db:
+        # P17 — reached via the runtime's session-token boundary (see
+        # module docstring: "scoped server-side to the mission the calling
+        # session belongs to"), never a user JWT/tenant context. That
+        # scoping (call.incident_id set server-side by the gateway from the
+        # resolved session, never runtime-supplied) is already narrower
+        # than tenant membership, so a single targeted get-by-id here is
+        # safe under db/tenancy.py's ALL_TENANTS escape hatch.
+        async with all_tenants_session(async_session_factory) as db:
             mission = await db.get(MissionRow, mission_id)
 
         if mission is None:

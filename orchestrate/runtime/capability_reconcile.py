@@ -33,16 +33,26 @@ NEGATIVE (not-found) reconciliation result is deliberately not built here —
 a human decides that, by raising a fresh, distinct capability request, not by
 reviving an ambiguous one.
 
-NOT WIRED INTO A SCHEDULER
------------------------------
-Deliberately, matching P7-C's own `scripts/sweep_orphans.py` precedent: the
-correctness fix (a row can no longer be silently re-executed) does not depend
-on either function here ever running automatically. Making that convenient is
-an operational scheduling question, explicitly out of P9's scope unless
-required to close the P8 finding — it is not, since the guard holds the
-moment a row reaches `executing`/`outcome_unknown`, independent of whether
-anything ever resolves the ambiguity afterward. `scripts/reconcile_capability_
-requests.py` runs both by hand, mirroring `scripts/sweep_orphans.py` exactly.
+SCHEDULING
+----------
+P9 deliberately left both functions manual-only (`scripts/reconcile_
+capability_requests.py`, mirroring `scripts/sweep_orphans.py`'s own
+precedent): the correctness fix (a row can no longer be silently
+re-executed) never depended on either function running automatically — the
+guard holds the moment a row reaches `executing`/`outcome_unknown`,
+independent of whether anything ever resolves the ambiguity afterward.
+
+P12 found that safety and Model B readiness are different bars: a
+long-running service's audit trail should not depend on an operator
+remembering to run a script. Both functions are now ALSO called
+automatically, from the same centralized periodic loop
+`backend/app/main.py::_reconcile_and_sweep_orphans_periodically` already
+runs session/orphan cleanup from (one scheduler, not a second independent
+loop). Nothing about the safety argument above changed to make this safe —
+it was already true; P12 only added a second caller. `scripts/reconcile_
+capability_requests.py` remains available for an operator who wants to run
+either on demand, e.g. right after a known incident, without waiting for the
+next tick.
 """
 from __future__ import annotations
 
@@ -56,6 +66,7 @@ from sqlalchemy import select
 
 from contracts import Capability
 from db.models.mission import CapabilityRequestRow
+from db.tenancy import all_tenants_session
 from integrations.connectors.servicenow import ServiceNowConnector, _CAPABILITY_TABLE
 
 from .capability_execution import (
@@ -131,7 +142,12 @@ async def _mark_stalled_executions_unknown_impl(
     now = now or datetime.now(timezone.utc)
     stalled: List[StalledExecution] = []
 
-    async with session_factory() as db:
+    # P17 — this is a background reconciliation pass, not a user request; it
+    # must scan every tenant's stalled/unknown rows by design. See
+    # db/tenancy.py::use_all_tenants's own docstring for why that's safe:
+    # this only ever transitions a status column or resolves against
+    # externally-verified evidence, never returns tenant data to a caller.
+    async with all_tenants_session(session_factory) as db:
         rows = (
             await db.execute(
                 select(CapabilityRequestRow)
@@ -245,7 +261,12 @@ async def _reconcile_outcome_unknown_impl(
         attempts.append({"at": now_iso, "found": found, "detail": detail})
         row.result = {**(row.result or {}), "reconciliation_attempts": attempts}
 
-    async with session_factory() as db:
+    # P17 — this is a background reconciliation pass, not a user request; it
+    # must scan every tenant's stalled/unknown rows by design. See
+    # db/tenancy.py::use_all_tenants's own docstring for why that's safe:
+    # this only ever transitions a status column or resolves against
+    # externally-verified evidence, never returns tenant data to a caller.
+    async with all_tenants_session(session_factory) as db:
         rows = (
             await db.execute(
                 select(CapabilityRequestRow)
